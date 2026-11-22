@@ -1,6 +1,7 @@
 import {
   type GiftEligibleService,
   type GiftOffer,
+  type GiftOfferDesk,
   type GiftOfferUpdate,
   giftOfferThemeSchema,
   giftOfferWriteSchema,
@@ -22,7 +23,7 @@ import { centsInput, inputCents } from "./money";
 
 export function GiftOffersView() {
   const { t } = useI18n();
-  const [editing, setEditing] = useState<GiftOffer | "new" | null>(null);
+  const [editing, setEditing] = useState<{ desk: GiftOfferDesk; offer?: GiftOffer } | null>(null);
   const offers = useQuery({
     queryKey: ["gift-cards", "offers"],
     queryFn: () => api().giftCards.offers(),
@@ -32,13 +33,21 @@ export function GiftOffersView() {
       <div className="flex items-center justify-between gap-4">
         <h3 className="text-heading">{t("gift.storefront.templates")}</h3>
         {!editing && (
-          <Button onClick={() => setEditing("new")}>{t("gift.storefront.newTemplate")}</Button>
+          <Button
+            disabled={!offers.data}
+            onClick={() => {
+              if (offers.data) setEditing({ desk: offers.data });
+            }}
+          >
+            {t("gift.storefront.newTemplate")}
+          </Button>
         )}
       </div>
       {editing ? (
         <GiftOfferEditor
-          key={editing === "new" ? "new" : editing.id}
-          offer={editing === "new" ? undefined : editing}
+          key={editing.offer?.id ?? "new"}
+          offer={editing.offer}
+          reviewedDesk={editing.desk}
           onClose={() => setEditing(null)}
         />
       ) : offers.isPending ? (
@@ -58,7 +67,7 @@ export function GiftOffersView() {
                   {t(offer.published ? "gift.storefront.published" : "gift.storefront.draft")}
                 </p>
               </div>
-              <Button variant="secondary" onClick={() => setEditing(offer)}>
+              <Button variant="secondary" onClick={() => setEditing({ desk: offers.data, offer })}>
                 {t("gift.storefront.edit")}
               </Button>
             </li>
@@ -69,7 +78,15 @@ export function GiftOffersView() {
   );
 }
 
-function GiftOfferEditor({ offer, onClose }: { offer?: GiftOffer; onClose: () => void }) {
+function GiftOfferEditor({
+  offer,
+  reviewedDesk,
+  onClose,
+}: {
+  offer?: GiftOffer;
+  reviewedDesk: GiftOfferDesk;
+  onClose: () => void;
+}) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const online = useOnline();
@@ -83,16 +100,11 @@ function GiftOfferEditor({ offer, onClose }: { offer?: GiftOffer; onClose: () =>
   const [theme, setTheme] = useState<GiftOffer["theme"]>(offer?.theme ?? "rose");
   const [published, setPublished] = useState(offer?.published ?? false);
   const [selected, setSelected] = useState<GiftEligibleService[] | null>(null);
-  const catalog = useQuery({
-    queryKey: ["gift-cards", "eligible-services"],
-    queryFn: ({ signal }) => api().giftCards.eligibleServices(signal),
-    enabled: Boolean(offer?.eligibleServiceIds.length),
-  });
   const services =
     selected ??
     (offer?.eligibleServiceIds ?? []).map(
       (id) =>
-        catalog.data?.services.find((service) => service.id === id) ?? {
+        reviewedDesk.catalogue.find((service) => service.id === id) ?? {
           id,
           name: t("gift.inactiveService"),
         },
@@ -119,6 +131,8 @@ function GiftOfferEditor({ offer, onClose }: { offer?: GiftOffer; onClose: () =>
     published,
     theme,
     version: offer?.version ?? 0,
+    generation: reviewedDesk.generation,
+    catalogueRevision: reviewedDesk.catalogueRevision,
   });
   const preview: PublicGiftOffer | undefined = terms.success
     ? {
@@ -192,7 +206,12 @@ function GiftOfferEditor({ offer, onClose }: { offer?: GiftOffer; onClose: () =>
           value={description}
           onChange={(event) => setDescription(event.target.value)}
         />
-        <GiftServicePicker disabled={save.isPending} selected={services} onChange={setSelected} />
+        <GiftServicePicker
+          reviewedCatalogue={reviewedDesk.catalogue}
+          disabled={save.isPending}
+          selected={services}
+          onChange={setSelected}
+        />
         <label className="flex min-h-11 cursor-pointer items-center gap-3 sm:col-span-2">
           <input
             type="checkbox"

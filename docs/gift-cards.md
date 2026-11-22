@@ -10,7 +10,7 @@ Gift codes travel in authenticated POST bodies and no-store responses. The datab
 
 ## Publishing gift offers
 
-In Web or Desktop, open **Sales & register → Gift cards → Gift templates**. Choose a name, design, gift value and sale price. To limit use to specific treatments, select them in the editor. An optional validity period begins when the gift is paid. The preview reflects the terms that the buyer will see. Keep unfinished offers as drafts and use the publication control when the offer is ready.
+Open **Sales & register → Gift cards → Gift templates** on Web or **Cash register → Gift cards → Gift templates** on Desktop. Choose a name, design, gift value and sale price. To limit use to specific treatments, select them in the editor. An optional validity period begins when the gift is paid. The preview reflects the terms that the buyer will see. Keep unfinished offers as drafts and use the publication control when the offer is ready.
 
 An offer appears on the public profile while online payment is available and its reviewed treatments are still valid. If the catalogue changes, open the relevant template and save the reviewed terms again. Buyers sign in, confirm the offer, and open the receipt for payment. Orders already created retain their original price, terms and design after changes or withdrawal.
 

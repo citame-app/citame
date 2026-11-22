@@ -4679,13 +4679,16 @@ fn native_reviews_gift_templates_through_the_proxy() {
     let device = proxy_device();
     let generation = browser.store.verified_reviewed_generation().unwrap();
     let id = uuid::Uuid::now_v7();
+    let original_desk = device.transport.gift_offers().unwrap();
+    assert_eq!(generation, original_desk.generation);
     let reviewed = GiftOfferReview {
         generation,
+        catalogue_revision: original_desk.catalogue_revision,
         proposal: GiftOffer {
             id,
             version: 0,
             terms: GiftOfferTerms {
-                name: "Synthetic native gift template".into(),
+                name: "\u{feff}Synthetic native gift template".into(),
                 description: "Reviewed preview".into(),
                 theme: GiftOfferTheme::Sage,
                 amount_cents: 3000,
@@ -4754,6 +4757,7 @@ fn native_reviews_gift_templates_through_the_proxy() {
             .transport
             .gift_offers()
             .unwrap()
+            .offers
             .iter()
             .any(|offer| offer.id == id && !offer.terms.published && offer.version == 3)
     );

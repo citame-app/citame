@@ -60,8 +60,21 @@ pub struct GiftOfferTerms {
 }
 
 impl GiftOfferTerms {
+    pub fn canonical(mut self) -> Self {
+        // ECMAScript String.trim is used by the Zod contract.
+        fn whitespace(character: char) -> bool {
+            matches!(character, '\u{9}'..='\u{d}' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
+                | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+        }
+        self.name = self.name.trim_matches(whitespace).to_owned();
+        self.description = self.description.trim_matches(whitespace).to_owned();
+        self.eligible_service_ids.sort_unstable();
+        self.eligible_service_ids.dedup();
+        self
+    }
+
     pub fn valid(&self) -> bool {
-        !self.name.trim().is_empty()
+        !self.name.is_empty()
             && self.name.encode_utf16().count() <= 120
             && self.description.encode_utf16().count() <= 500
             && (1..=999_999_999).contains(&self.amount_cents)
@@ -73,7 +86,7 @@ impl GiftOfferTerms {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GiftOffer {
     pub id: Uuid,
@@ -82,10 +95,27 @@ pub struct GiftOffer {
     pub terms: GiftOfferTerms,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct GiftOfferReview {
     pub proposal: GiftOffer,
     pub generation: String,
+    pub catalogue_revision: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GiftOfferDesk {
+    pub offers: Vec<GiftOffer>,
+    pub generation: String,
+    pub catalogue_revision: String,
+    pub catalogue: Vec<GiftService>,
+}
+
+pub fn offer_save_is_terminal(result: Result<(), &TransportError>) -> bool {
+    matches!(
+        result,
+        Ok(()) | Err(TransportError::BadRequest(_) | TransportError::ReplicaGenerationChanged)
+    )
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -440,34 +470,33 @@ impl HttpTransport {
         self.gift_get(&format!("{PATH}?{}", query.finish()))
     }
 
-    pub fn gift_offers(&self) -> Result<Vec<GiftOffer>, TransportError> {
-        #[derive(Deserialize)]
-        struct Catalog {
-            offers: Vec<GiftOffer>,
-        }
-        Ok(self.gift_get::<Catalog>(&format!("{PATH}/offers"))?.offers)
+    pub fn gift_offers(&self) -> Result<GiftOfferDesk, TransportError> {
+        self.gift_get(&format!("{PATH}/offers"))
     }
 
     pub fn save_gift_offer(&self, reviewed: &GiftOfferReview) -> Result<GiftOffer, TransportError> {
         let offer = &reviewed.proposal;
-        if !offer.terms.valid() || reviewed.generation.is_empty() {
+        let terms = offer.terms.clone().canonical();
+        if !terms.valid() || reviewed.generation.is_empty() || offer.version >= i32::MAX as u32 {
             return Err(TransportError::BadRequest(
                 "Invalid gift offer review".into(),
             ));
         }
-        let mut fields = serde_json::to_value(&offer.terms)
+        let mut fields = serde_json::to_value(&terms)
             .map_err(|error| TransportError::BadRequest(error.to_string()))?;
         fields["version"] = offer.version.into();
+        fields["generation"] = reviewed.generation.clone().into();
+        fields["catalogueRevision"] = reviewed.catalogue_revision.clone().into();
         let response = self.send_put_json_with_headers(
             &format!("{PATH}/offers/{}", offer.id),
             &fields,
             &[("x-citame-generation", &reviewed.generation)],
         )?;
-        let saved: GiftOffer = read_response_with(response, review_transport_error)?;
+        let saved: GiftOffer = read_response_with(response, gift_offer_save_error)?;
         if saved.id != offer.id
             || saved.version == 0
             || !(offer.version..=offer.version.saturating_add(1)).contains(&saved.version)
-            || saved.terms != offer.terms
+            || saved.terms != terms
         {
             return Err(TransportError::Server(
                 "Unexpected gift offer acknowledgement".into(),
@@ -593,6 +622,24 @@ impl HttpTransport {
             false,
         )
     }
+}
+
+fn gift_offer_save_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {
+    let error = review_transport_error(status, retry_after, body);
+    if matches!(error, TransportError::BadRequest(_)) {
+        let response = serde_json::from_str::<serde_json::Value>(body).ok();
+        let code = response
+            .as_ref()
+            .and_then(|body| body.pointer("/error/code"))
+            .and_then(serde_json::Value::as_str);
+        if !matches!(
+            (status, code),
+            (400, Some("validation_error")) | (409, Some("version_conflict"))
+        ) {
+            return TransportError::Server(format!("Unconfirmed Cloud response (HTTP {status})"));
+        }
+    }
+    error
 }
 
 fn gift_purchase_error(status: u16, retry_after: Option<&str>, body: &str) -> TransportError {

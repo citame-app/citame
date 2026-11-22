@@ -4,9 +4,9 @@ use sob_core::billing::{AppointmentCheckout, normalize_gift_card_code};
 use sob_core::http::{
     HttpTransport,
     gift_cards::{
-        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftOffer, GiftOfferReview,
-        GiftPage, GiftPurchase, GiftPurchaseResult, GiftReveal, GiftService, GiftStatus,
-        MAX_GIFT_SERVICES,
+        GiftBalance, GiftCard, GiftMovementKind, GiftMovements, GiftOffer, GiftOfferDesk,
+        GiftOfferReview, GiftPage, GiftPurchase, GiftPurchaseResult, GiftReveal, GiftService,
+        GiftStatus, MAX_GIFT_SERVICES,
     },
 };
 use sob_core::{receipt_print::ReceiptPreview, sync::TransportError};
@@ -119,7 +119,7 @@ enum Loaded {
     Issued(Box<GiftPurchaseResult>),
     Balance(GiftBalance),
     EligibleServices(Vec<GiftService>),
-    OfferList(Vec<GiftOffer>, Vec<GiftService>),
+    OfferList(GiftOfferDesk),
     SavedOffer(GiftOffer),
     Revealed(GiftReveal),
     Print(ReceiptPreview),
@@ -143,9 +143,7 @@ impl Request {
                 Loaded::Detail(http.gift_card(id)?, http.gift_card_movements(id, page)?)
             }
             Self::Issue(purchase) => Loaded::Issued(Box::new(http.purchase_gift_card(&purchase)?)),
-            Self::OfferList => {
-                Loaded::OfferList(http.gift_offers()?, http.gift_eligible_services()?)
-            }
+            Self::OfferList => Loaded::OfferList(http.gift_offers()?),
             Self::SaveOffer(reviewed) => Loaded::SavedOffer(http.save_gift_offer(&reviewed)?),
             Self::EligibleServices => Loaded::EligibleServices(http.gift_eligible_services()?),
             Self::Check(code) => Loaded::Balance(http.check_gift_card(&code)?),
@@ -345,9 +343,14 @@ impl Root {
         if desk.request.is_some() {
             return;
         }
-        if desk.view == View::Offers && desk.offers.close_editor() {
-            if !desk.offers.editing() {
-                desk.error = None;
+        if desk.view == View::Offers
+            && let Some(has_saved_review) = desk.offers.close_editor()
+        {
+            desk.error = None;
+            if has_saved_review {
+                desk.view = View::List;
+                self.load_gift_list(1, cx);
+            } else {
                 self.request_gift(Request::OfferList, cx);
             }
             cx.notify();
@@ -525,7 +528,13 @@ impl Root {
         let issue = pending.is_some();
         let edit = matches!(&request, Request::Edit { .. });
         let print = matches!(&request, Request::Print { .. });
-        let save_offer = matches!(&request, Request::SaveOffer(_));
+        let pending_offer = match &request {
+            Request::SaveOffer(reviewed) => cache_actor
+                .clone()
+                .map(|actor| (actor, reviewed.as_ref().clone())),
+            _ => None,
+        };
+        let save_offer = pending_offer.is_some();
         if edit || matches!(&request, Request::Checkout(_)) {
             desk.hide_code();
         }
@@ -563,6 +572,12 @@ impl Root {
                             .unwrap_or(false)
                     },
                 );
+                let settled_offer = pending_offer.as_ref().is_none_or(|(actor, reviewed)| {
+                    root.svc
+                        .store
+                        .settle_gift_offer(actor, reviewed, reply.as_ref().map(|_| ()))
+                        .is_ok()
+                });
                 let Some(desk) = root.gift_cards_desk().filter(|desk| {
                     desk.request
                         .as_ref()
@@ -571,6 +586,12 @@ impl Root {
                     return;
                 };
                 desk.request = None;
+                if !settled_offer {
+                    desk.error = Some(Key::GiftStorageUnavailable);
+                    cx.notify();
+                    return;
+                }
+
                 if let Some(cached_request) = cached_request {
                     if !online {
                         root.show_saved_gift(cached_request, true, cx);
@@ -643,10 +664,9 @@ impl Root {
                             cx,
                         ));
                     }
-                    Ok(Loaded::OfferList(rows, catalogue)) => {
+                    Ok(Loaded::OfferList(offers)) => {
                         desk.observed = observation;
-                        desk.offers.rows = Some(rows);
-                        desk.offers.catalogue = catalogue;
+                        desk.offers.load(offers);
                     }
                     Ok(Loaded::SavedOffer(saved)) => {
                         desk.offers.accept(saved);

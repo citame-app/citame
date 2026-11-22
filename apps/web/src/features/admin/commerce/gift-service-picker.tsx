@@ -9,10 +9,12 @@ import { api } from "~/lib/api/instance";
 
 export function GiftServicePicker({
   selected,
+  reviewedCatalogue,
   disabled,
   onChange,
 }: {
   selected: GiftEligibleService[];
+  reviewedCatalogue?: GiftEligibleService[];
   disabled: boolean;
   onChange: (services: GiftEligibleService[]) => void;
 }) {
@@ -23,11 +25,12 @@ export function GiftServicePicker({
   const catalog = useQuery({
     queryKey: ["gift-cards", "eligible-services"],
     queryFn: ({ signal }) => api().giftCards.eligibleServices(signal),
-    enabled: open,
+    enabled: open && reviewedCatalogue === undefined,
     staleTime: 30_000,
   });
   const selectedIds = new Set(selected.map(({ id }) => id));
-  const available = catalog.data?.services ?? [];
+  const available = reviewedCatalogue ?? catalog.data?.services ?? [];
+  const ready = reviewedCatalogue !== undefined || catalog.isSuccess;
   const availableIds = new Set(available.map(({ id }) => id));
   const searchText = search.trim().toLocaleLowerCase(locale);
   const matches = available.filter(
@@ -58,11 +61,11 @@ export function GiftServicePicker({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
-            {catalog.isPending && <Skeleton className="h-28" />}
-            {catalog.isError && (
+            {reviewedCatalogue === undefined && catalog.isPending && <Skeleton className="h-28" />}
+            {reviewedCatalogue === undefined && catalog.isError && (
               <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} />
             )}
-            {catalog.isSuccess && choices.length === 0 && (
+            {ready && choices.length === 0 && (
               <p className="text-sm text-muted">{t("gift.noServices")}</p>
             )}
             {choices.length > 0 && (
@@ -86,7 +89,7 @@ export function GiftServicePicker({
                           }
                         />
                         {service.name}
-                        {catalog.isSuccess && !availableIds.has(service.id) && (
+                        {ready && !availableIds.has(service.id) && (
                           <span className="text-sm text-muted">{t("gift.inactiveService")}</span>
                         )}
                       </label>

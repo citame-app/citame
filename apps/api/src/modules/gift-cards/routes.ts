@@ -85,17 +85,25 @@ export function giftCardRoutes(deps: AppDeps) {
       );
       return c.json({ card: result.card, checkout: { ...result.checkout, ...bankTenders } }, 201);
     })
-    .get("/offers", async (c) => c.json(await giftOffers(deps.db, c.get("principal"))))
-    .put("/offers/:id", async (c) =>
-      c.json(
+    .get("/offers", async (c) =>
+      c.json(await giftOffers(deps.db, c.get("principal"), deps.config.syncReplicaGeneration)),
+    )
+    .put("/offers/:id", async (c) => {
+      const input = parseOrThrow(giftOfferWriteSchema, await readJson(c));
+      if (input.generation !== deps.config.syncReplicaGeneration)
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review gift templates on the restored server",
+        );
+      return c.json(
         await saveGiftOffer(
           deps.db,
           parseOrThrow(idSchema, c.req.param("id")).toLowerCase(),
-          parseOrThrow(giftOfferWriteSchema, await readJson(c)),
+          input,
           c.get("principal"),
         ),
-      ),
-    )
+      );
+    })
     .post("/check", async (c) =>
       c.json(
         await checkGift(

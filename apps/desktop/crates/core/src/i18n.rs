@@ -1629,6 +1629,8 @@ keys! {
     GiftOfferPublish => ("Show on the public profile", "Mostrar en el perfil público"),
     GiftOfferUnavailableTreatment => ("Unavailable treatment", "Tratamiento no disponible"),
     GiftOfferSave => ("Save template", "Guardar plantilla"),
+    GiftOfferUnconfirmed => ("The template may have been saved.", "Puede que la plantilla se haya guardado."),
+    GiftOfferRetry => ("Retry saving the template", "Reintentar el guardado de la plantilla"),
     GiftOfferInvalid => ("Enter a name, positive amounts and a valid duration.", "Indica un nombre, importes positivos y una vigencia válida."),
     GiftPendingOrders => ("Pending online orders", "Pedidos online pendientes"),
     GiftAllCards => ("All gift cards", "Todas las tarjetas regalo"),

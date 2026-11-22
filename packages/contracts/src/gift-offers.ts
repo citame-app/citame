@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { idempotencyKeySchema, moneyCentsSchema } from "./commerce";
-import { idSchema } from "./common";
+import { idSchema, syncGenerationSchema } from "./common";
 import { eligibleGiftServiceSchema, giftOfferThemeSchema, maximumGiftServices } from "./gift-cards";
 
 export const giftOfferTermsSchema = z
@@ -14,6 +14,7 @@ export const giftOfferTermsSchema = z
     eligibleServiceIds: z.array(idSchema).max(maximumGiftServices).default([]),
   })
   .strict();
+const catalogueRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const versionSchema = z.number().int().positive().max(2_147_483_647);
 export const giftOfferUpdateSchema = giftOfferTermsSchema.extend({
   version: versionSchema,
@@ -21,9 +22,16 @@ export const giftOfferUpdateSchema = giftOfferTermsSchema.extend({
 });
 export const giftOfferWriteSchema = giftOfferUpdateSchema.extend({
   version: z.number().int().min(0).max(2_147_483_646),
+  generation: syncGenerationSchema,
+  catalogueRevision: catalogueRevisionSchema,
 });
 export const giftOfferSchema = giftOfferUpdateSchema.extend({ id: idSchema });
-export const giftOfferAdminListSchema = z.object({ offers: z.array(giftOfferSchema) });
+export const giftOfferAdminListSchema = z.object({
+  offers: z.array(giftOfferSchema),
+  generation: syncGenerationSchema,
+  catalogueRevision: catalogueRevisionSchema,
+  catalogue: z.array(eligibleGiftServiceSchema),
+});
 
 const publicGiftOfferSchema = giftOfferSchema
   .omit({ published: true, eligibleServiceIds: true })
@@ -39,6 +47,7 @@ export const giftOfferOrderSchema = z
   })
   .strict();
 
+export type GiftOfferDesk = z.infer<typeof giftOfferAdminListSchema>;
 export type GiftOffer = z.infer<typeof giftOfferSchema>;
 export type GiftOfferOrder = z.infer<typeof giftOfferOrderSchema>;
 export type GiftOfferTerms = z.infer<typeof giftOfferTermsSchema>;

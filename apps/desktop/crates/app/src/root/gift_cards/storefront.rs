@@ -1,16 +1,23 @@
 use super::*;
-use sob_core::http::gift_cards::{GiftOffer, GiftOfferReview, GiftOfferTerms, GiftOfferTheme};
+use sob_core::http::gift_cards::{
+    GiftOffer, GiftOfferDesk, GiftOfferReview, GiftOfferTerms, GiftOfferTheme,
+    offer_save_is_terminal,
+};
 
 #[derive(Default)]
 pub(super) struct Offers {
     pub(super) rows: Option<Vec<GiftOffer>>,
-    pub(super) catalogue: Vec<GiftService>,
+    catalogue: Vec<GiftService>,
+    generation: String,
+    catalogue_revision: String,
     editor: Option<Editor>,
 }
 
 struct Editor {
     id: Uuid,
     version: u32,
+    generation: String,
+    catalogue_revision: String,
     name: Entity<TextField>,
     description: Entity<TextField>,
     value: Entity<TextField>,
@@ -25,7 +32,12 @@ struct Editor {
 }
 
 impl Editor {
-    fn new(offer: Option<&GiftOffer>, cx: &mut Context<Root>) -> Self {
+    fn new(
+        offer: Option<&GiftOffer>,
+        generation: String,
+        catalogue_revision: String,
+        cx: &mut Context<Root>,
+    ) -> Self {
         fn amount(cents: u32) -> String {
             format!("{}.{:02}", cents / 100, cents % 100)
         }
@@ -61,6 +73,8 @@ impl Editor {
         Self {
             id: offer.map_or_else(Uuid::now_v7, |offer| offer.id),
             version: offer.map_or(0, |offer| offer.version),
+            generation,
+            catalogue_revision,
             name,
             description,
             value,
@@ -78,8 +92,8 @@ impl Editor {
     fn proposal(&self, cx: &App) -> Option<GiftOffer> {
         let days = self.days.read(cx).text().trim();
         let terms = GiftOfferTerms {
-            name: self.name.read(cx).text().trim().to_owned(),
-            description: self.description.read(cx).text().trim().to_owned(),
+            name: self.name.read(cx).text().to_owned(),
+            description: self.description.read(cx).text().to_owned(),
             amount_cents: sob_core::billing::parse_reviewed_amount(self.value.read(cx).text())?,
             price_cents: sob_core::billing::parse_reviewed_amount(self.price.read(cx).text())?,
             validity_days: if days.is_empty() {
@@ -90,7 +104,8 @@ impl Editor {
             eligible_service_ids: self.selected.clone(),
             published: self.published,
             theme: self.theme,
-        };
+        }
+        .canonical();
         terms.valid().then_some(GiftOffer {
             id: self.id,
             version: self.version,
@@ -104,14 +119,15 @@ impl Offers {
         self.editor.is_some()
     }
 
-    pub(super) fn close_editor(&mut self) -> bool {
-        let Some(editor) = &self.editor else {
-            return false;
-        };
-        if editor.retry.is_none() {
-            self.editor = None;
-        }
-        true
+    pub(super) fn close_editor(&mut self) -> Option<bool> {
+        self.editor.take().map(|editor| editor.retry.is_some())
+    }
+
+    pub(super) fn load(&mut self, desk: GiftOfferDesk) {
+        self.rows = Some(desk.offers);
+        self.catalogue = desk.catalogue;
+        self.generation = desk.generation;
+        self.catalogue_revision = desk.catalogue_revision;
     }
 
     pub(super) fn accept(&mut self, saved: GiftOffer) {
@@ -130,10 +146,7 @@ impl Offers {
 
     pub(super) fn save_failed(&mut self, error: &TransportError) {
         if let Some(editor) = &mut self.editor
-            && matches!(
-                error,
-                TransportError::BadRequest(_) | TransportError::ReplicaGenerationChanged
-            )
+            && offer_save_is_terminal(Err(error))
         {
             editor.retry = None;
         }
@@ -149,9 +162,32 @@ impl Root {
         if !self.can_edit_gift_offers() {
             return;
         }
+        let pending = self
+            .svc
+            .current_session()
+            .map(|session| self.svc.store.pending_gift_offer(&session.user_id))
+            .transpose();
         if let Some(desk) = self.gift_cards_desk() {
             desk.view = View::Offers;
             desk.offers = Offers::default();
+            match pending {
+                Ok(Some(Some(review))) => {
+                    let mut editor = Editor::new(
+                        Some(&review.proposal),
+                        review.generation.clone(),
+                        review.catalogue_revision.clone(),
+                        cx,
+                    );
+                    editor.retry = Some(review);
+                    desk.offers.editor = Some(editor);
+                }
+                Err(_) => {
+                    desk.error = Some(Key::GiftStorageUnavailable);
+                    cx.notify();
+                    return;
+                }
+                _ => {}
+            }
             self.request_gift(Request::OfferList, cx);
         }
     }
@@ -173,7 +209,12 @@ impl Root {
         if id.is_some() && current.is_none() {
             return;
         }
-        desk.offers.editor = Some(Editor::new(current, cx));
+        desk.offers.editor = Some(Editor::new(
+            current,
+            desk.offers.generation.clone(),
+            desk.offers.catalogue_revision.clone(),
+            cx,
+        ));
         desk.error = None;
         cx.notify();
     }
@@ -183,6 +224,9 @@ impl Root {
             return;
         }
         let generation = self.svc.store.verified_reviewed_generation().ok();
+        let Some(actor) = self.svc.current_session().map(|session| session.user_id) else {
+            return;
+        };
         let Some(desk) = self
             .gift_cards_desk()
             .filter(|desk| desk.view == View::Offers && desk.request.is_none())
@@ -197,14 +241,12 @@ impl Root {
             cx.notify();
             return;
         };
+        if editor.generation != generation {
+            desk.error = Some(Key::GiftReviewRestored);
+            cx.notify();
+            return;
+        }
         let review = if let Some(retry) = &editor.retry {
-            if retry.generation != generation {
-                desk.offers
-                    .save_failed(&TransportError::ReplicaGenerationChanged);
-                desk.error = Some(Key::GiftReviewRestored);
-                cx.notify();
-                return;
-            }
             retry.clone()
         } else {
             let Some(proposal) = editor.proposal(cx) else {
@@ -215,10 +257,64 @@ impl Root {
             GiftOfferReview {
                 proposal,
                 generation,
+                catalogue_revision: editor.catalogue_revision.clone(),
             }
         };
-        editor.retry = Some(review.clone());
+        if !self
+            .svc
+            .store
+            .reserve_gift_offer(&actor, &review)
+            .unwrap_or(false)
+        {
+            if let Some(desk) = self.gift_cards_desk() {
+                desk.error = Some(Key::GiftStorageUnavailable);
+                cx.notify();
+            }
+            return;
+        }
+        if let Some(editor) = self
+            .gift_cards_desk()
+            .and_then(|desk| desk.offers.editor.as_mut())
+        {
+            editor.retry = Some(review.clone());
+        }
         self.request_gift(Request::SaveOffer(Box::new(review)), cx);
+    }
+
+    fn discard_restored_offer(&mut self, cx: &mut Context<Self>) {
+        let Some(actor) = self.svc.current_session().map(|session| session.user_id) else {
+            return;
+        };
+        let Some(review) = self
+            .gift_cards_desk()
+            .and_then(|desk| desk.offers.editor.as_ref()?.retry.clone())
+        else {
+            return;
+        };
+        if !self
+            .svc
+            .store
+            .verified_reviewed_generation()
+            .is_ok_and(|current| current != review.generation)
+        {
+            return;
+        }
+        if self
+            .svc
+            .store
+            .settle_gift_offer(
+                &actor,
+                &review,
+                Err(&TransportError::ReplicaGenerationChanged),
+            )
+            .is_ok()
+        {
+            if let Some(desk) = self.gift_cards_desk() {
+                desk.offers.editor = None;
+                desk.error = None;
+            }
+            self.request_gift(Request::OfferList, cx);
+        }
     }
 
     pub(super) fn render_gift_offers(
@@ -304,15 +400,32 @@ impl Root {
                 Key::GiftOfferEdit
             }));
         if let Some(review) = &editor.retry {
+            let restored = self
+                .svc
+                .store
+                .verified_reviewed_generation()
+                .is_ok_and(|current| current != review.generation);
             return body
                 .child(review.proposal.terms.name.clone())
-                .child(self.t(Key::GiftIssueUnconfirmed))
+                .child(self.t(if restored {
+                    Key::GiftReviewRestored
+                } else {
+                    Key::GiftOfferUnconfirmed
+                }))
                 .when(enabled, |body| {
                     body.child(self.gift_button(
                         "retry-offer",
-                        Key::GiftRetry,
+                        if restored {
+                            Key::GiftDiscardRestored
+                        } else {
+                            Key::GiftOfferRetry
+                        },
                         Kind::Primary,
-                        Root::save_gift_offer,
+                        if restored {
+                            Root::discard_restored_offer
+                        } else {
+                            Root::save_gift_offer
+                        },
                         cx,
                     ))
                 });
@@ -389,7 +502,28 @@ impl Root {
                             "{} · {}",
                             self.t(Key::GiftPurchasePrice),
                             self.amount_label(i64::from(terms.price_cents), "EUR")
-                        )),
+                        ))
+                        .when_some(terms.validity_days, |card, days| {
+                            card.child(format!(
+                                "{} · {days}",
+                                self.t(Key::GiftValidityAfterPayment)
+                            ))
+                        })
+                        .when(!terms.eligible_service_ids.is_empty(), |card| {
+                            let names = terms
+                                .eligible_service_ids
+                                .iter()
+                                .filter_map(|id| {
+                                    desk.offers
+                                        .catalogue
+                                        .iter()
+                                        .find(|service| &service.id == id)
+                                        .map(|service| service.name.as_str())
+                                })
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            card.child(format!("{} · {names}", self.t(Key::GiftEligibleServices)))
+                        }),
                 )
             })
             .child(self.gift_button(
@@ -485,7 +619,7 @@ mod tests {
         let (_directory, window) = crate::root::tests::open(cx);
         window
             .update(cx, |_, _, cx| {
-                let mut editor = Editor::new(None, cx);
+                let mut editor = Editor::new(None, "verified".into(), "a".repeat(64), cx);
                 editor
                     .name
                     .update(cx, |field, cx| field.set_text("  Facial  ", cx));
@@ -508,6 +642,7 @@ mod tests {
                 editor.retry = Some(GiftOfferReview {
                     proposal,
                     generation: "verified".into(),
+                    catalogue_revision: "a".repeat(64),
                 });
 
                 let mut offers = Offers {
@@ -515,10 +650,9 @@ mod tests {
                     ..Default::default()
                 };
                 offers.save_failed(&TransportError::Offline("fixture".into()));
-                assert!(offers.close_editor());
                 assert!(offers.editing());
                 offers.save_failed(&TransportError::ReplicaGenerationChanged);
-                assert!(offers.close_editor());
+                assert_eq!(offers.close_editor(), Some(false));
                 assert!(!offers.editing());
             })
             .unwrap();

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { GiftOffer, GiftOfferUpdate, PublicGiftOffer } from "@sob/contracts";
+import type { GiftOffer, GiftOfferDesk, GiftOfferUpdate, PublicGiftOffer } from "@sob/contracts";
 import { type Database, giftOffer, service } from "@sob/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
@@ -62,6 +62,14 @@ function catalogueTerms(ids: string[], catalog: OfferCatalogue) {
   };
 }
 
+function reviewCatalogue(catalog: OfferCatalogue) {
+  return createHash("sha256")
+    .update(
+      JSON.stringify([...catalog.values()].sort((left, right) => left.id.localeCompare(right.id))),
+    )
+    .digest("hex");
+}
+
 export async function verifyOfferCatalogue(db: Pick<Database, "select">, offer: OfferRow) {
   if (!offer.eligibleServiceIds.length) return;
   const terms = catalogueTerms(offer.eligibleServiceIds, await offerCatalogue(db));
@@ -87,10 +95,28 @@ function offerView(row: OfferRow): GiftOffer {
   };
 }
 
-export async function giftOffers(db: Database, principal: Principal) {
+export async function giftOffers(
+  db: Database,
+  principal: Principal,
+  generation: string,
+): Promise<GiftOfferDesk> {
   requirePermission(principal, "editCatalog");
-  const rows = await db.select().from(giftOffer).orderBy(asc(giftOffer.name), asc(giftOffer.id));
-  return { offers: rows.map(offerView) };
+  return db.transaction(
+    async (tx) => {
+      const rows = await tx
+        .select()
+        .from(giftOffer)
+        .orderBy(asc(giftOffer.name), asc(giftOffer.id));
+      const catalog = await offerCatalogue(tx);
+      return {
+        generation,
+        offers: rows.map(offerView),
+        catalogueRevision: reviewCatalogue(catalog),
+        catalogue: [...catalog.values()].map(({ id, name }) => ({ id, name })),
+      };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
 }
 
 export async function publicGiftOffers(db: Database, paymentsEnabled: boolean) {
@@ -126,7 +152,7 @@ export async function saveGiftOffer(
   principal: Principal,
 ) {
   requirePermission(principal, "editCatalog");
-  const { version, ...rawTerms } = input;
+  const { version, generation: _, catalogueRevision, ...rawTerms } = input;
   const terms = {
     ...rawTerms,
     eligibleServiceIds: normalizedGiftServices(rawTerms.eligibleServiceIds),
@@ -149,7 +175,13 @@ export async function saveGiftOffer(
     let catalogueReview = "";
     if (terms.published && terms.eligibleServiceIds.length) {
       await reviewGiftServices(tx, terms.eligibleServiceIds);
-      const catalog = catalogueTerms(terms.eligibleServiceIds, await offerCatalogue(tx));
+      const currentCatalog = await offerCatalogue(tx);
+      if (reviewCatalogue(currentCatalog) !== catalogueRevision)
+        throw new DomainError(
+          "version_conflict",
+          "Gift offer treatments changed; review the latest catalogue",
+        );
+      const catalog = catalogueTerms(terms.eligibleServiceIds, currentCatalog);
       if (!catalog)
         throw new DomainError("validation_error", "Choose active services for the gift card");
       catalogueReview = catalog.revision;

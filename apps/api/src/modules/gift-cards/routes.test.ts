@@ -4,6 +4,7 @@ import {
   giftCardMovementListSchema,
   giftCardPurchaseResponseSchema,
   giftCardSchema,
+  giftOfferAdminListSchema,
   giftOfferSchema,
   giftReplicaPageSchema,
   publicGiftOfferListSchema,
@@ -176,11 +177,19 @@ beforeEach(async () => {
   dispatches = 0;
 });
 
+async function offerReview() {
+  const { generation, catalogueRevision } = giftOfferAdminListSchema.parse(
+    await (await call(owner, "/admin/gift-cards/offers")).json(),
+  );
+  return { generation, catalogueRevision };
+}
+
 test("a published offer freezes its checkout, enters the pending desk and activates at settlement", async () => {
   await t.db.execute(sql`update service set currency = 'EUR' where id = ${fixtures.haircutId}`);
   const offerId = key();
   const route = `/admin/gift-cards/offers/${offerId}`;
   const template = {
+    ...(await offerReview()),
     name: "Skin care gift",
     description: "A gift for the treatment you selected.",
     theme: "sage",
@@ -278,6 +287,7 @@ test("a reactivated treatment requires an explicit offer review before it can be
   const id = key();
   const route = `/admin/gift-cards/offers/${id}`;
   const terms = {
+    ...(await offerReview()),
     name: "Reviewed treatment",
     amountCents: 1500,
     priceCents: 1000,
@@ -299,7 +309,17 @@ test("a reactivated treatment requires an explicit offer review before it can be
   expect(await browse()).toEqual([]);
   const request = { offerId: id, idempotencyKey: key(), version: 1 };
   expect((await call(client, "/me/gift-cards/storefront", "POST", request)).status).toBe(409);
-  expect((await call(owner, route, "PUT", { ...terms, version: 1 })).status).toBe(200);
+  expect((await call(owner, route, "PUT", { ...terms, version: 1 })).status).toBe(409);
+  const fresh = await offerReview();
+  const restored = await call(owner, route, "PUT", {
+    ...terms,
+    ...fresh,
+    version: 1,
+    generation: "stale-generation",
+  });
+  expect(restored.status).toBe(409);
+  expect(await restored.json()).toMatchObject({ error: { code: "sync_generation_changed" } });
+  expect((await call(owner, route, "PUT", { ...terms, ...fresh, version: 1 })).status).toBe(200);
   expect(await browse()).toMatchObject([{ id, version: 2 }]);
   expect(
     (await call(client, "/me/gift-cards/storefront", "POST", { ...request, version: 2 })).status,
