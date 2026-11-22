@@ -3,6 +3,49 @@ use serde_json::{Value, json};
 use super::*;
 
 #[test]
+fn a_staff_portrait_draft_survives_reopening_and_a_later_draft_cannot_be_cleared_by_its_old_id() {
+    use image::{Rgb, RgbImage, codecs::jpeg::JpegEncoder};
+    use uuid::Uuid;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    let mut jpeg = Vec::new();
+    JpegEncoder::new(&mut jpeg)
+        .encode_image(&RgbImage::from_pixel(8, 8, Rgb([52, 74, 81])))
+        .unwrap();
+    let staff = Uuid::now_v7();
+    let first = Uuid::now_v7();
+    {
+        let store = Store::open(&path).unwrap();
+        assert!(
+            store
+                .reserve_staff_portrait_draft(first, staff, &jpeg)
+                .unwrap()
+        );
+    }
+
+    let store = Store::open(&path).unwrap();
+    let restored = store.staff_portrait_draft().unwrap().unwrap();
+    assert_eq!(restored.id, first);
+    assert_eq!(restored.staff_id, staff);
+    assert_eq!(restored.jpeg, jpeg);
+    let other = Uuid::now_v7();
+    assert!(
+        !store
+            .reserve_staff_portrait_draft(other, staff, &jpeg)
+            .unwrap()
+    );
+    assert!(store.clear_staff_portrait_draft(first).unwrap());
+    assert!(
+        store
+            .reserve_staff_portrait_draft(other, staff, &jpeg)
+            .unwrap()
+    );
+    assert!(!store.clear_staff_portrait_draft(first).unwrap());
+    assert_eq!(store.staff_portrait_draft().unwrap().unwrap().id, other);
+}
+
+#[test]
 fn reviewed_commission_payout_survives_restart_and_clears_only_the_acknowledged_request() {
     use crate::reports::commissions::CommissionPayoutReview;
 

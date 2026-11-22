@@ -19,6 +19,9 @@ use crate::model::*;
 use crate::reports::commissions::SavedCommissionPayout;
 use crate::sync::{CATALOG_COLORS_CACHED, CatalogColors};
 
+mod staff_portrait_draft;
+pub use staff_portrait_draft::StaffPortraitDraft;
+
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
 }
