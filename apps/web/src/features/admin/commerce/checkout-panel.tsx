@@ -28,17 +28,19 @@ export function CheckoutPanel({
   id,
   mode,
   role,
+  bankPaymentId,
 }: {
   id: string;
   mode: CommerceMode;
   role: UserRole;
+  bankPaymentId?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
   const sale = useQuery({
     queryKey: ["commerce", mode, "checkout", id],
-    queryFn: () => api().commerce.get(id, mode),
+    queryFn: ({ signal }) => api().commerce.get(id, mode, signal),
     refetchInterval: (query) =>
       query.state.data?.payments.some((p) => p.status === "pending") ||
       query.state.data?.refunds.some((r) => r.status === "dispatched")
@@ -56,7 +58,10 @@ export function CheckoutPanel({
   const [giftCode, setGiftCode] = useState("");
   const [giftCodeError, setGiftCodeError] = useState(false);
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
-  const [form, setForm] = useState<HostedPaymentForm | null>(null);
+  const [bankForm, setBankForm] = useState<{
+    paymentId: string;
+    value: HostedPaymentForm;
+  } | null>(null);
   const [error, setError] = useState(false);
   const [amountError, setAmountError] = useState(false);
   const options = [
@@ -97,7 +102,7 @@ export function CheckoutPanel({
       ),
     onSuccess: (result) => {
       setError(false);
-      setForm(result.form);
+      setBankForm(result.form ? { paymentId: result.payment.id, value: result.form } : null);
       if (result.payment.status !== "pending") {
         setAmount(null);
         setGiftCode("");
@@ -107,10 +112,15 @@ export function CheckoutPanel({
     },
     onError: () => setError(true),
   });
+  const resume = useMutation({
+    mutationFn: (paymentId: string) => api().commerce.continueBankPayment(id, paymentId, mode),
+    onSuccess: (value, paymentId) => setBankForm({ paymentId, value }),
+    onError: () => void invalidateCommerce(queries),
+  });
   const voidSale = useMutation({
     mutationFn: () => api().commerce.void(id, mode),
     onSuccess: () => {
-      setForm(null);
+      setBankForm(null);
       void invalidateCommerce(queries);
     },
   });
@@ -131,6 +141,17 @@ export function CheckoutPanel({
     );
   const canReturn = capabilities.data?.permissions?.writeInventory ?? role === "owner";
   const pending = order.payments.some((p) => p.status === "pending");
+  const pendingBank = order.payments.find(
+    (p) =>
+      p.status === "pending" &&
+      (!bankPaymentId || p.id === bankPaymentId) &&
+      p.amountCents <= payableCents &&
+      p.order &&
+      !p.merchantInitiated &&
+      ((p.method === "redsys_card" && capabilities.data?.card) ||
+        (p.method === "redsys_bizum" && capabilities.data?.bizum)),
+  );
+  const form = bankForm?.paymentId === pendingBank?.id ? bankForm?.value : undefined;
   const refundedFor = (id: string) =>
     order.refunds
       .filter((r) => r.paymentId === id && r.status === "succeeded")
@@ -276,6 +297,21 @@ export function CheckoutPanel({
       {pending && order.balanceCents > 0 && <p role="status">{t("commerce.pending")}</p>}
       {!pending && order.balanceCents > 0 && order.payments.some((p) => p.status === "failed") && (
         <p role="status">{t("commerce.declined")}</p>
+      )}
+      {bankPaymentId && pending && !pendingBank && (
+        <p role="status">{t("commerce.originalBankUnavailable")}</p>
+      )}
+      {pendingBank && !form && order.status === "open" && !review && (
+        <div className="space-y-2">
+          <Button
+            type="button"
+            disabled={resume.isPending || !online}
+            onClick={() => resume.mutate(pendingBank.id)}
+          >
+            {t("commerce.resumeBank")}
+          </Button>
+          {resume.isError && <p role="alert">{t("commerce.resumeBankError")}</p>}
+        </div>
       )}
       {form && order.status === "open" && !review ? (
         <form method="post" action={form.action} className="space-y-3">

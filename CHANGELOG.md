@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop prepares Redsys card and Bizum payments for the reviewed amount. The linked browser opens the exact receipt and can continue the same pending bank order after reloading. Citame updates the receipt when the bank confirms payment.
+
 - Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.
 
 - Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.

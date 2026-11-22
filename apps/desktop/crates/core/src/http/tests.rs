@@ -962,6 +962,78 @@ fn price_review_reads_the_version_and_sends_exact_prices_to_the_guarded_endpoint
 }
 
 #[test]
+fn checkout_retries_the_same_bank_reservation_and_leaves_it_unpaid() {
+    use serde_json::json;
+    use uuid::Uuid;
+
+    let id = Uuid::now_v7();
+    let payment = Uuid::now_v7();
+    let mut receipt = json!({
+        "id": id, "currency": "EUR", "status": "open", "totalCents": 2500,
+        "discountCents": 0, "paidCents": 0, "balanceCents": 2500, "payments": [],
+        "bankTenders": { "card": true, "bizum": true, "generation": "reviewed" },
+    });
+    let open: AppointmentCheckout = serde_json::from_value(receipt.clone()).unwrap();
+    let tender = ReceiptTender::RedsysBizum;
+    assert!(PaymentAttempt::for_bank(tender, 2500, &open, "restored").is_none());
+    let attempt = PaymentAttempt::for_bank(tender, 2500, &open, "reviewed").unwrap();
+
+    let started = json!({
+        "id": payment, "method": "redsys_bizum", "amountCents": 2500,
+        "status": "pending", "order": "1234abcd5678",
+    });
+    receipt["payments"] = json!([started.clone()]);
+    let mut settled = started.clone();
+    settled["status"] = json!("failed");
+    let replacement = Uuid::now_v7();
+    let mut refreshed = receipt.clone();
+    refreshed["payments"] = json!([settled.clone(), {
+        "id": replacement, "method": "redsys_card", "amountCents": 1200,
+        "status": "pending", "order": "4321dcba8765",
+    }]);
+    let (base, seen) = serve(vec![
+        http("408 Request Timeout", &[], ""),
+        http(
+            "201 Created",
+            &[],
+            &json!({ "payment": started }).to_string(),
+        ),
+        http("200 OK", &[], &receipt.to_string()),
+        http(
+            "201 Created",
+            &[],
+            &json!({ "payment": settled }).to_string(),
+        ),
+        http("200 OK", &[], &refreshed.to_string()),
+    ]);
+    let transport = signed_in(&base);
+    assert!(matches!(
+        transport.record_checkout_payment(&open, &attempt),
+        Err(TransportError::Offline(_))
+    ));
+    let (updated, handoff) = transport
+        .record_checkout_payment_with_handoff(&open, &attempt)
+        .unwrap();
+    assert_eq!(updated.paid_cents, 0);
+    assert_eq!(handoff, Some(payment));
+    let (reopened, handoff) = transport
+        .record_checkout_payment_with_handoff(&open, &attempt)
+        .unwrap();
+    assert_eq!(reopened.hosted_bank_payment_id(), Some(replacement));
+    assert_eq!(handoff, None);
+    let requests = seen.lock().unwrap();
+    assert_eq!(
+        requests[0].split_once("\r\n\r\n").unwrap().1,
+        requests[1].split_once("\r\n\r\n").unwrap().1
+    );
+    assert!(
+        requests[0]
+            .to_ascii_lowercase()
+            .contains("x-citame-generation: reviewed")
+    );
+}
+
+#[test]
 fn checkout_retries_the_exact_cash_registration_when_a_response_is_lost() {
     use serde_json::{Value, json};
 

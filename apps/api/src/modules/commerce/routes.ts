@@ -26,7 +26,7 @@ import type { AppEnv, Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { errorBody, parseOrThrow, readJson } from "../../http";
 import { recurringSettings } from "../../payments/recurring-settings";
-import { InvalidBankNotificationError, RedsysGateway } from "../../payments/redsys";
+import { InvalidBankNotificationError } from "../../payments/redsys";
 import { checkoutRewardRoutes } from "../rewards/routes";
 import {
   compatibleBillingReasons,
@@ -38,6 +38,7 @@ import {
   previewImportedPartialPayment,
   reviewImportedAppointmentPrice,
 } from "./appointment-billing";
+import { checkoutBankTenders, gatewayFor } from "./hosted-tenders";
 import { finalizeCheckoutPrices } from "./prices";
 import {
   adjustCash,
@@ -54,6 +55,7 @@ import {
   reconcilePayment,
   reconcileRefund,
   requireOperator,
+  resumeHostedPayment,
   startPayment,
   voidCheckout,
 } from "./service";
@@ -64,9 +66,23 @@ const operator = createMiddleware<AppEnv>(async (c, next) => {
   await next();
 });
 const checkoutId = (value: string) => parseOrThrow(idSchema, value);
-function gatewayFor(deps: AppDeps) {
-  if (deps.paymentGateway !== undefined) return deps.paymentGateway;
-  return deps.config.payments.redsys ? new RedsysGateway(deps.config.payments.redsys) : null;
+
+function hostedContinuation(deps: AppDeps, gateway: ReturnType<typeof gatewayFor>) {
+  return new Hono<AppEnv>().post("/:id/payments/:paymentId/continue", async (c) =>
+    c.json(
+      await resumeHostedPayment(
+        deps.db,
+        checkoutId(c.req.param("id")),
+        checkoutId(c.req.param("paymentId")),
+        c.get("principal"),
+        gateway,
+        deps.config.payments.bizumEnabled,
+        deps.now?.() ?? new Date(),
+      ),
+      200,
+      { "Cache-Control": "private, no-store" },
+    ),
+  );
 }
 
 export function commerceAdminRoutes(deps: AppDeps) {
@@ -77,6 +93,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
       ...receipt,
       canRefund: permissions.refunds,
       canDispatchBankRefunds: permissions.refunds && gateway !== null,
+      ...checkoutBankTenders(deps, gateway),
       ...(permissions.refunds ? { refundReviewGeneration: deps.config.syncReplicaGeneration } : {}),
       ...(permissions.writeInventory && receipt.fulfilledAt
         ? { stockReturnGeneration: deps.config.syncReplicaGeneration }
@@ -86,6 +103,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", operator)
     .route("/checkouts", checkoutRewardRoutes(deps))
+    .route("/checkouts", hostedContinuation(deps, gateway))
     .get("/unpaid", async (c) => {
       const query = parseOrThrow(calendarQuerySchema, c.req.query());
       const result = await unpaidAppointments(deps.db, query, c.get("principal"));
@@ -221,23 +239,35 @@ export function commerceAdminRoutes(deps: AppDeps) {
     .post("/checkouts/:id/void", async (c) =>
       c.json(await voidCheckout(deps.db, checkoutId(c.req.param("id")), c.get("principal"))),
     )
-    .put("/checkouts/:id/prices", async (c) =>
-      c.json(
-        await finalizeCheckoutPrices(
-          deps.db,
-          checkoutId(c.req.param("id")),
-          parseOrThrow(checkoutPricesSchema, await readJson(c)),
-          c.get("principal"),
-          deps.now?.() ?? new Date(),
-        ),
-      ),
-    )
-    .post("/checkouts/:id/payments", async (c) =>
-      c.json(
+    .put("/checkouts/:id/prices", async (c) => {
+      const principal = c.get("principal");
+      const receipt = await finalizeCheckoutPrices(
+        deps.db,
+        checkoutId(c.req.param("id")),
+        parseOrThrow(checkoutPricesSchema, await readJson(c)),
+        principal,
+        deps.now?.() ?? new Date(),
+      );
+      return c.json(withActions(receipt, principal));
+    })
+    .post("/checkouts/:id/payments", async (c) => {
+      const input = parseOrThrow(startPaymentSchema, await readJson(c));
+      const generation = c.req.header("x-citame-generation");
+      if (
+        (c.get("desktopRequest") || generation !== undefined) &&
+        (input.method === "redsys_card" || input.method === "redsys_bizum") &&
+        generation !== deps.config.syncReplicaGeneration
+      )
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review the receipt on the restored server",
+        );
+
+      return c.json(
         await startPayment(
           deps.db,
           checkoutId(c.req.param("id")),
-          parseOrThrow(startPaymentSchema, await readJson(c)),
+          input,
           c.get("principal"),
           gateway,
           deps.config.payments.bizumEnabled,
@@ -245,8 +275,9 @@ export function commerceAdminRoutes(deps: AppDeps) {
           deps.now?.() ?? new Date(),
         ),
         201,
-      ),
-    )
+        { "Cache-Control": "private, no-store" },
+      );
+    })
     .post("/payments/:id/refunds", async (c) => {
       return c.json(
         await manualRefund(
@@ -327,6 +358,7 @@ export function commerceClientRoutes(deps: AppDeps) {
   const gateway = gatewayFor(deps);
   return new Hono<AppEnv>()
     .route("/checkouts", checkoutRewardRoutes(deps))
+    .route("/checkouts", hostedContinuation(deps, gateway))
     .get("/commerce/capabilities", (c) =>
       c.json({
         permissions: permissionsFor(c.get("principal").role, c.get("principal").accessPreset),

@@ -18,12 +18,20 @@ export const Route = createFileRoute("/admin/commerce")({
   ): InventoryNavigation & {
     view: CommerceViewName;
     checkout?: string;
+    bankPayment?: string;
     rewardClient?: string;
   } => ({
     view: COMMERCE_VIEWS.includes(search.view as CommerceViewName)
       ? (search.view as CommerceViewName)
       : "sale",
-    ...(idSchema.safeParse(search.checkout).success ? { checkout: String(search.checkout) } : {}),
+    ...(idSchema.safeParse(search.checkout).success
+      ? {
+          checkout: String(search.checkout),
+          ...(idSchema.safeParse(search.bankPayment).success
+            ? { bankPayment: String(search.bankPayment) }
+            : {}),
+        }
+      : {}),
     ...(search.view === "rewards" && idSchema.safeParse(search.rewardClient).success
       ? { rewardClient: String(search.rewardClient) }
       : {}),
@@ -47,6 +55,7 @@ function SalesPage() {
         accessPreset={session.accessPreset}
         view={search.view}
         checkoutId={search.checkout}
+        bankPaymentId={search.bankPayment}
         rewardClientId={search.rewardClient}
         inventoryNavigation={search}
         onInventoryNavigation={(next, replace) =>
@@ -54,7 +63,10 @@ function SalesPage() {
         }
         onViewChange={(view) => void navigate({ search: { view }, replace: false })}
         onCheckoutChange={(id) =>
-          void navigate({ search: { ...search, checkout: id ?? undefined }, replace: !id })
+          void navigate({
+            search: { ...search, checkout: id ?? undefined, bankPayment: undefined },
+            replace: !id,
+          })
         }
       />
     </div>

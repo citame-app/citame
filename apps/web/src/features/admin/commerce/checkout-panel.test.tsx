@@ -46,6 +46,15 @@ const sale = () => ({
   createdAt: "2026-03-09T12:00:00.000Z",
 });
 const reply = (data: unknown) => Response.json(data);
+const bankForm = {
+  action: "https://sis-t.redsys.es:25443/sis/realizarPago",
+  fields: {
+    Ds_MerchantParameters: "encoded",
+    Ds_Signature: "signed",
+    Ds_SignatureVersion: "HMAC_SHA512_V2",
+  },
+};
+
 beforeEach(() => {
   pricePending = false;
   serviceAmount = 2500;
@@ -90,31 +99,33 @@ beforeEach(() => {
         bizum: online,
         currency: "EUR",
       });
+    if (path.endsWith("/continue") && method === "POST") {
+      return reply(bankForm);
+    }
     if (path.endsWith("/payments") && method === "POST") {
       if (body.method === "cash" || body.method === "gift_card") {
         paid = true;
         return reply({
-          payment: { id, status: "succeeded", method: body.method, amountCents: 2500, order: null },
+          payment: {
+            id,
+            status: "succeeded",
+            method: body.method,
+            amountCents: 2500,
+            order: null,
+          },
           form: null,
         });
       }
-      return reply({
-        payment: {
-          id,
-          status: "pending",
-          method: "redsys_card",
-          amountCents: 2500,
-          order: "1234567890",
-        },
-        form: {
-          action: "https://sis-t.redsys.es:25443/sis/realizarPago",
-          fields: {
-            Ds_MerchantParameters: "encoded",
-            Ds_Signature: "signed",
-            Ds_SignatureVersion: "HMAC_SHA512_V2",
-          },
-        },
-      });
+      const payment = {
+        id,
+        status: "pending",
+        method: "redsys_card",
+        amountCents: 2500,
+        order: "1234567890",
+        createdAt: "2026-03-09T12:00:00.000Z",
+      };
+      payments = [payment];
+      return reply({ payment, form: bankForm });
     }
     if (path.endsWith(`/checkouts/${id}`)) return reply(sale());
     return reply({});
@@ -227,6 +238,45 @@ test("a hosted payment shows the bank form without claiming the order is paid", 
   expect(screen.queryByText("Paid", { selector: "p" })).toBeNull();
   expect(screen.queryByRole("option", { name: "Cash" })).toBeNull();
 });
+test("a pending bank order can be continued after reopening the receipt", async () => {
+  online = true;
+  payments = [
+    {
+      id,
+      status: "pending",
+      method: "redsys_bizum",
+      amountCents: 2500,
+      order: "1234567890",
+      createdAt: "2026-03-09T12:00:00.000Z",
+    },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Open pending bank payment" }));
+  await screen.findByRole("button", { name: "Pay securely with Redsys" });
+  expect(requests.filter((request) => request.method === "POST").map(({ path }) => path)).toEqual([
+    `/api/admin/commerce/checkouts/${id}/payments/${id}/continue`,
+  ]);
+});
+
+test("a receipt opened for a particular order cannot continue a replacement", async () => {
+  online = true;
+  const replaced = "0198f5a0-7b1c-7000-8000-000000000101";
+  payments = [
+    {
+      id,
+      status: "pending",
+      method: "redsys_bizum",
+      amountCents: 2500,
+      order: "1234567890",
+      createdAt: "2026-03-09T12:00:00.000Z",
+    },
+  ];
+  renderApp(<CheckoutPanel id={id} mode="admin" role="owner" bankPaymentId={replaced} />);
+  await screen.findByText("The selected bank order cannot be opened. Check the receipt history.");
+  expect(screen.queryByRole("button", { name: "Open pending bank payment" })).toBeNull();
+  expect(requests.some((request) => request.method === "POST")).toBe(false);
+});
+
 test("Spanish users get a clear unavailable state when online payments have not been configured", async () => {
   renderApp(<CheckoutPanel id={id} mode="client" role="client" />, { locale: "es-AR" });
   await screen.findByText("Haircut");

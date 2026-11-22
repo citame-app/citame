@@ -8,6 +8,7 @@ import {
   checkoutListSchema,
   checkoutRefundSchema,
   checkoutSchema,
+  hostedPaymentFormSchema,
   type ImportedPriceReview,
   type ImportedSettlement,
   type ImportedUnpaidReview,
@@ -64,14 +65,20 @@ export function commerceEndpoints(client: ApiClient) {
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
     finalizePrices: (id: string, input: CheckoutPrices) =>
       client.put(`/admin/commerce/checkouts/${id}/prices`, input, checkoutSchema),
-    get: (id: string, mode: CommerceMode) =>
-      client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema),
+    get: (id: string, mode: CommerceMode, signal?: AbortSignal) =>
+      client.get(`${base(mode)}/checkouts/${id}`, checkoutSchema, { signal }),
     byOrder: (order: string) =>
       client.get(`/me/payments/by-order/${encodeURIComponent(order)}`, checkoutSchema),
     void: (id: string, mode: CommerceMode) =>
       client.post(`${base(mode)}/checkouts/${id}/void`, {}, checkoutSchema),
     pay: (id: string, input: StartPaymentInput, mode: CommerceMode) =>
       client.post(`${base(mode)}/checkouts/${id}/payments`, input, startedPaymentSchema),
+    continueBankPayment: (checkoutId: string, paymentId: string, mode: CommerceMode) =>
+      client.post(
+        `${base(mode)}/checkouts/${checkoutId}/payments/${paymentId}/continue`,
+        {},
+        hostedPaymentFormSchema,
+      ),
     cash: () =>
       client.get(
         "/admin/commerce/cash-sessions/current",
