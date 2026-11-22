@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { Campaign, CampaignCreate, CampaignTestEmail } from "@sob/contracts";
+import { onlineManager } from "@tanstack/react-query";
 import { fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../test/render";
@@ -227,4 +228,88 @@ test("an owner can retry a test email without creating another request", async (
   fireEvent.click(screen.getByRole("button", { name: "Review recipients" }));
   expect(await screen.findByText("0 eligible recipients now")).toBeVisible();
   expect(screen.queryByRole("button", { name: label })).toBeNull();
+});
+
+test("campaign comparison keeps selections across pages and shows separate delivery counts", async () => {
+  const campaigns = ["First", "Second"].map((name, index) => ({
+    id: `0198f5a0-7b1c-7000-8000-00000000031${index}`,
+    name,
+    channel: "email",
+    subject: "Hi",
+    emailBody: "Hello",
+    smsBody: "",
+    audience: { tags: [], inactiveDays: null, noFutureAppointments: false },
+    trigger: "manual",
+    delayMinutes: 0,
+    birthdayLeadDays: 0,
+    status: "active",
+    version: 1,
+    counts: {
+      pending: index + 1,
+      processing: 0,
+      sent: index + 12,
+      skipped: 0,
+      failed: 0,
+      unknown: 0,
+      cancelled: 0,
+    },
+    scheduledFor: null,
+    activatedAt: null,
+    createdAt: "2026-11-22T08:00:00.000Z",
+    updatedAt: "2026-11-22T08:00:00.000Z",
+  }));
+  const requests: string[] = [];
+  globalThis.fetch = mock(async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/comparison")) {
+      requests.push(url.searchParams.get("ids") ?? "");
+      return Response.json({
+        campaigns: campaigns.map(({ id, name, channel, status, counts }) => ({
+          id,
+          name,
+          channel,
+          status,
+          counts,
+        })),
+      });
+    }
+    const page = Number(url.searchParams.get("page") ?? 1);
+    return Response.json({
+      campaigns: [campaigns[page - 1]],
+      pagination: { total: 21, page, pageSize: 20 },
+    });
+  }) as unknown as typeof fetch;
+  renderApp(<CampaignsView viewerId="owner" isOwner />);
+  const compare = screen.getByRole("button", { name: "Compare campaigns" });
+  expect(compare).toBeDisabled();
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Select First for comparison" }));
+  fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+  fireEvent.click(await screen.findByRole("checkbox", { name: "Select Second for comparison" }));
+  fireEvent.click(compare);
+  const table = await screen.findByRole("table", { name: "Campaign metrics" });
+  expect(table.querySelector('thead th[scope="col"]:nth-child(2)')).toHaveTextContent("First");
+  expect(table.querySelector('thead th[scope="col"]:nth-child(3)')).toHaveTextContent("Second");
+  expect(table).toHaveTextContent("Accepted by provider");
+  expect(screen.getByRole("cell", { name: "12" })).toBeVisible();
+  expect(screen.getByRole("cell", { name: "13" })).toBeVisible();
+  const expectedIds = campaigns.map(({ id }) => id).join(",");
+  expect(requests).toEqual([expectedIds]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  if (!campaigns[0]) throw new Error("Expected the first campaign");
+  campaigns[0].counts.sent = 14;
+  fireEvent.click(screen.getByRole("button", { name: "Compare campaigns" }));
+  expect(await screen.findByRole("cell", { name: "14" })).toBeVisible();
+  expect(requests).toEqual([expectedIds, expectedIds]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  onlineManager.setOnline(false);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Compare campaigns" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(requests).toEqual([expectedIds, expectedIds]);
+  } finally {
+    onlineManager.setOnline(true);
+  }
 });

@@ -222,6 +222,20 @@ pub struct Counts {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CampaignComparison {
+    pub campaigns: Vec<ComparedCampaign>,
+}
+
+#[derive(Deserialize)]
+pub struct ComparedCampaign {
+    pub name: String,
+    pub channel: Channel,
+    pub status: Status,
+    pub counts: Counts,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CampaignPage {
     pub campaigns: Vec<Campaign>,
     pub pagination: Pagination,
@@ -411,6 +425,26 @@ impl HttpTransport {
         }
         read_response(
             self.get(&self.agent, &format!("{PATH}?{}", params.finish()), None)?,
+            false,
+        )
+    }
+
+    pub fn marketing_campaign_comparison(
+        &self,
+        ids: &[String],
+    ) -> Result<CampaignComparison, TransportError> {
+        let ids = ids
+            .iter()
+            .map(|id| parse_id(id).map(|id| id.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut params = form_urlencoded::Serializer::new(String::new());
+        params.append_pair("ids", &ids.join(","));
+        read_response(
+            self.get(
+                &self.agent,
+                &format!("{PATH}/comparison?{}", params.finish()),
+                None,
+            )?,
             false,
         )
     }

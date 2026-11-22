@@ -1,5 +1,6 @@
 import {
   campaignCancelSchema,
+  campaignComparisonQuerySchema,
   campaignCreateSchema,
   campaignQuerySchema,
   campaignQueueSchema,
@@ -24,6 +25,7 @@ import { consentFor, setMarketingConsent, unsubscribeMarketing } from "./consent
 import {
   campaignDeliveries,
   cancelCampaign,
+  compareCampaigns,
   createCampaign,
   getCampaign,
   listCampaigns,
@@ -87,6 +89,10 @@ export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
         201,
       ),
     )
+    .get("/campaigns/comparison", async (c) => {
+      const { ids } = parseOrThrow(campaignComparisonQuerySchema, c.req.query());
+      return c.json(await compareCampaigns(deps.db, ids, c.get("principal")));
+    })
     .get("/campaigns/:id", async (c) =>
       c.json(await getCampaign(deps.db, id(c.req.param("id")), c.get("principal"))),
     )

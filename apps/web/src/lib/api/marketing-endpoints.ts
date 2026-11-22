@@ -5,6 +5,7 @@ import {
   type CampaignTestEmail,
   type CampaignUpdate,
   campaignCapabilitySchema,
+  campaignComparisonSchema,
   campaignDeliveriesSchema,
   campaignListSchema,
   campaignPreviewSchema,
@@ -21,6 +22,8 @@ export function marketingEndpoints(client: ApiClient) {
   return {
     capabilities: () => client.get("/admin/marketing/capabilities", campaignCapabilitySchema),
     list: (query: Partial<CampaignQuery> = {}) => client.get(base, campaignListSchema, { query }),
+    compare: (ids: string[]) =>
+      client.get(`${base}/comparison`, campaignComparisonSchema, { query: { ids: ids.join(",") } }),
     get: (id: string) => client.get(`${base}/${id}`, campaignSchema),
     create: (input: CampaignCreate) => client.post(base, input, campaignSchema),
     update: (id: string, input: CampaignUpdate) =>

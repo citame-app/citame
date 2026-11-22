@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
+
 - Web and Desktop can issue gift cards for selected treatments and show the terms on vouchers and when checking balances. Checkout verifies the eligible amount even for mixed payments.
 
 - Web and Desktop can issue gift cards at a sale price distinct from their initial balance. The receipt records the reviewed price and purchase refunds revoke the proportional gift value.

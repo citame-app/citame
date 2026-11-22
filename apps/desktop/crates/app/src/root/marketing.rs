@@ -1,8 +1,9 @@
 use super::*;
 use chrono::{NaiveDateTime, TimeZone};
 use sob_core::http::marketing::{
-    Campaign, CampaignAction, CampaignPage, Capabilities, Channel, DeliveryPage, DeliveryStatus,
-    LIVE_TOPIC, MutationError, Preview, Status, TestEmailMode, TestEmailStatus, Trigger,
+    Campaign, CampaignAction, CampaignComparison, CampaignPage, Capabilities, Channel, Counts,
+    DeliveryPage, DeliveryStatus, LIVE_TOPIC, MutationError, Preview, Status, TestEmailMode,
+    TestEmailStatus, Trigger,
 };
 use sob_core::sync::TransportError;
 
@@ -14,12 +15,23 @@ use draft::{Editor, EditorMode};
 use links::LinkDesk;
 use promotions::PromoDesk;
 
+// Matches CAMPAIGN_COMPARISON_MAX in the shared campaign contract.
+const MAX_COMPARISON_CAMPAIGNS: usize = 4;
+
+struct CampaignSelection {
+    id: String,
+    name: String,
+}
+
 pub(super) struct Desk {
     identity: Arc<()>,
     request: Option<Arc<()>>,
     refreshing: bool,
     retry_after: Option<std::time::Instant>,
     list: Option<CampaignPage>,
+    selected: Vec<CampaignSelection>,
+    comparing: bool,
+    comparison: Option<CampaignComparison>,
     detail: Option<(Campaign, DeliveryPage)>,
     review: Option<(Preview, Capabilities)>,
     test_email: Option<TestEmailResult>,
@@ -103,6 +115,7 @@ impl Desk {
 
 enum Request {
     List(u32),
+    Compare(Vec<String>),
     Detail(String, u32),
     Review(String),
     TestEmail {
@@ -118,6 +131,7 @@ enum Request {
 
 enum Loaded {
     List(CampaignPage),
+    Comparison(CampaignComparison),
     Detail(Campaign, DeliveryPage),
     Review(Preview, Capabilities),
     TestEmail(TestEmailResult),
@@ -134,6 +148,18 @@ impl TestEmailResult {
     fn for_retry(self) -> bool {
         matches!(self.status, None | Some(TestEmailStatus::Pending))
     }
+}
+
+fn delivery_totals(counts: &Counts, sent_label: Key) -> [(Key, u32); 7] {
+    [
+        (Key::MarketingPending, counts.pending),
+        (Key::MarketingProcessing, counts.processing),
+        (sent_label, counts.sent),
+        (Key::MarketingSkipped, counts.skipped),
+        (Key::MarketingFailed, counts.failed),
+        (Key::MarketingUnknown, counts.unknown),
+        (Key::CalendarCancelled, counts.cancelled),
+    ]
 }
 
 fn status_key(status: Status) -> Key {
@@ -196,6 +222,9 @@ impl Root {
             refreshing: false,
             retry_after: None,
             list: None,
+            selected: Vec::new(),
+            comparing: false,
+            comparison: None,
             detail: None,
             review: None,
             test_email: None,
@@ -241,9 +270,24 @@ impl Root {
             return;
         }
         let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
+        let can_compare = self.svc.store.cached_catalogue_access();
         let Some(desk) = self.marketing_desk() else {
             return;
         };
+        if !can_compare && (desk.comparing || !desk.selected.is_empty()) {
+            desk.selected.clear();
+            if desk.comparing {
+                desk.comparing = false;
+                desk.comparison = None;
+                desk.list = None;
+                desk.request = None;
+                desk.refreshing = false;
+                desk.busy = false;
+                desk.error = Some(Key::MarketingUnavailable);
+            }
+            cx.notify();
+            return;
+        }
         if desk.busy
             || desk.refreshing
             || desk.action.is_some()
@@ -251,15 +295,18 @@ impl Root {
             || desk
                 .retry_after
                 .is_some_and(|retry| retry > std::time::Instant::now())
-            || (!reconnected && desk.observed == observed)
+            || (!reconnected
+                && desk.observed == observed
+                && !(desk.comparing && desk.error.is_some()))
         {
             return;
         }
-        let request = match &desk.detail {
-            Some((campaign, deliveries)) => {
-                Request::Detail(campaign.id.clone(), deliveries.pagination.page)
-            }
-            None => Request::List(desk.list.as_ref().map_or(1, |list| list.pagination.page)),
+        let request = if desk.comparing {
+            Request::Compare(desk.selected.iter().map(|item| item.id.clone()).collect())
+        } else if let Some((campaign, deliveries)) = &desk.detail {
+            Request::Detail(campaign.id.clone(), deliveries.pagination.page)
+        } else {
+            Request::List(desk.list.as_ref().map_or(1, |list| list.pagination.page))
         };
         self.load_marketing(request, true, cx);
     }
@@ -280,6 +327,17 @@ impl Root {
             return;
         }
         if desk.links.take().is_some() {
+            cx.notify();
+            return;
+        }
+        if desk.comparing {
+            desk.comparing = false;
+            desk.comparison = None;
+            desk.request = None;
+            desk.refreshing = false;
+            desk.observed = None;
+            desk.error = None;
+            self.refresh_marketing(true, cx);
             cx.notify();
             return;
         }
@@ -323,6 +381,9 @@ impl Root {
         let session = self.svc.session.clone();
         let observed = self.svc.store.live_view_revision(LIVE_TOPIC).ok();
         let generation = self.svc.store.verified_reviewed_generation().ok();
+        if matches!(request, Request::Compare(_)) && !self.svc.store.cached_catalogue_access() {
+            return;
+        }
         let Some(desk) = self.marketing_desk().filter(|desk| !desk.busy) else {
             return;
         };
@@ -334,6 +395,10 @@ impl Root {
         }
         let search = desk.applied_search.clone();
         let status = desk.status;
+        let comparing = matches!(request, Request::Compare(_));
+        if comparing {
+            desk.comparing = true;
+        }
         let saving = matches!(request, Request::SaveDraft(_));
         let writing = saving || matches!(request, Request::Write(_));
         let test_request = match &request {
@@ -354,6 +419,9 @@ impl Root {
                     Ok::<Loaded, MutationError>(match request {
                         Request::List(page) => {
                             Loaded::List(transport.marketing_campaigns(page, &search, status)?)
+                        }
+                        Request::Compare(ids) => {
+                            Loaded::Comparison(transport.marketing_campaign_comparison(&ids)?)
                         }
                         Request::Detail(id, page) => Loaded::Detail(
                             transport.marketing_campaign(&id)?,
@@ -395,6 +463,10 @@ impl Root {
                 {
                     return;
                 }
+                if comparing && !root.svc.store.cached_catalogue_access() {
+                    root.refresh_marketing(false, cx);
+                    return;
+                }
                 let Some(desk) = root.marketing_desk().filter(|desk| {
                     Arc::ptr_eq(&identity, &desk.identity)
                         && desk
@@ -407,7 +479,10 @@ impl Root {
                 desk.busy = false;
                 desk.refreshing = false;
                 desk.request = None;
-                if matches!(&result, Ok(Loaded::List(_) | Loaded::Detail(_, _))) {
+                if matches!(
+                    &result,
+                    Ok(Loaded::List(_) | Loaded::Detail(_, _) | Loaded::Comparison(_))
+                ) {
                     desk.observed = observed;
                     desk.retry_after = None;
                 } else if background && result.is_err() {
@@ -416,10 +491,16 @@ impl Root {
                 }
                 let reload = match result {
                     Ok(Loaded::List(list)) => {
+                        desk.comparing = false;
+                        desk.comparison = None;
                         desk.list = Some(list);
                         desk.detail = None;
                         desk.review = None;
                         desk.test_email = None;
+                        None
+                    }
+                    Ok(Loaded::Comparison(result)) => {
+                        desk.comparison = Some(result);
                         None
                     }
                     Ok(Loaded::Detail(campaign, deliveries)) => {
@@ -510,6 +591,18 @@ impl Root {
                         None
                     }
                     Err(MutationError::Transport(error)) => {
+                        if comparing {
+                            desk.comparison = None;
+                            desk.retry_after =
+                                Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+                        }
+                        if matches!(error, TransportError::Forbidden(_))
+                            || (comparing && matches!(error, TransportError::Unauthorized))
+                        {
+                            desk.selected.clear();
+                            desk.comparing = false;
+                            desk.comparison = None;
+                        }
                         if matches!(error, TransportError::Forbidden(_)) {
                             desk.editor = None;
                             desk.list = None;
@@ -683,6 +776,8 @@ impl Root {
             self.campaign_templates(ready, desk.editor.is_some(), cx)
         } else if let Some(editor) = &desk.editor {
             self.render_campaign_editor(desk, editor, ready, cx)
+        } else if desk.comparing {
+            self.render_campaign_comparison(desk.comparison.as_ref())
         } else if let Some((campaign, deliveries)) = &desk.detail {
             self.render_campaign(desk, campaign, deliveries, ready, cx)
         } else {
@@ -718,7 +813,7 @@ impl Root {
                     )
                 });
             }
-            let close = if desk.choose_template || desk.links.is_some() {
+            let close = if desk.choose_template || desk.links.is_some() || desk.comparing {
                 Key::Back
             } else if desk.editor.is_some() {
                 if desk.confirm_exit {
@@ -896,6 +991,54 @@ impl Root {
                     }),
                 ));
         }
+        let can_compare = self.svc.store.cached_catalogue_access();
+        body = body.when(can_compare, |body| {
+            body.child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .items_center()
+                    .child(i18n::fill(
+                        self.t(Key::MarketingComparisonSelection),
+                        &[
+                            ("count", &desk.selected.len().to_string()),
+                            ("max", &MAX_COMPARISON_CAMPAIGNS.to_string()),
+                        ],
+                    ))
+                    .when(ready && desk.selected.len() >= 2, |row| {
+                        let ids: Vec<String> =
+                            desk.selected.iter().map(|item| item.id.clone()).collect();
+                        row.child(self.marketing_button(
+                            "compare-campaigns",
+                            Key::MarketingCompare,
+                            Kind::Primary,
+                            move |root, cx| {
+                                root.request_marketing(Request::Compare(ids.clone()), cx)
+                            },
+                            cx,
+                        ))
+                    })
+                    .children(desk.selected.iter().map(|item| {
+                        let id = item.id.clone();
+                        let name = &item.name;
+                        let key = SharedString::from(format!("remove-selected-{id}"));
+                        self.button(
+                            key,
+                            format!("{name} ×"),
+                            Kind::Ghost,
+                            cx.listener(move |root, _, _, cx| {
+                                if let Some(desk) = root.marketing_desk().filter(|desk| !desk.busy)
+                                {
+                                    desk.selected.retain(|item| item.id != id);
+                                    cx.notify();
+                                }
+                            }),
+                        )
+                        .tab_index(0)
+                    })),
+            )
+        });
         if let Some(list) = &desk.list {
             if list.campaigns.is_empty() {
                 body = body.child(self.t(Key::MarketingEmpty));
@@ -918,15 +1061,58 @@ impl Root {
                         self.t(channel_key(campaign.channel)),
                         self.t(trigger_key(campaign.trigger))
                     )));
-                row.when(ready, |row| {
+                let id_to_open = id.clone();
+                let row = row.when(ready, |row| {
                     row.tab_index(0)
                         .cursor_pointer()
                         .focus(|style| style.bg(theme::accent_soft()))
                         .hover(|style| style.bg(theme::accent_soft()))
                         .on_click(cx.listener(move |root, _, _, cx| {
-                            root.request_marketing(Request::Detail(id.clone(), 1), cx)
+                            root.request_marketing(Request::Detail(id_to_open.clone(), 1), cx)
                         }))
-                })
+                });
+                let selected = desk.selected.iter().any(|item| item.id == id);
+                let name = campaign.name.clone();
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(row.flex_1())
+                    .when(
+                        can_compare
+                            && ready
+                            && (selected || desk.selected.len() < MAX_COMPARISON_CAMPAIGNS),
+                        |row| {
+                            row.child(self.marketing_button(
+                                SharedString::from(format!("select-comparison-{id}")),
+                                if selected {
+                                    Key::MarketingRemoveComparison
+                                } else {
+                                    Key::MarketingSelectComparison
+                                },
+                                Kind::Ghost,
+                                move |root, cx| {
+                                    if let Some(desk) =
+                                        root.marketing_desk().filter(|desk| !desk.busy)
+                                    {
+                                        if let Some(index) =
+                                            desk.selected.iter().position(|item| item.id == id)
+                                        {
+                                            desk.selected.remove(index);
+                                        } else if desk.selected.len() < MAX_COMPARISON_CAMPAIGNS {
+                                            desk.selected.push(CampaignSelection {
+                                                id: id.clone(),
+                                                name: name.clone(),
+                                            });
+                                        }
+                                        cx.notify();
+                                    }
+                                },
+                                cx,
+                            ))
+                        },
+                    )
             }));
             if ready {
                 let page = list.pagination.page;
@@ -951,6 +1137,70 @@ impl Root {
                 cx,
             ))
         })
+    }
+
+    fn render_campaign_comparison(&self, comparison: Option<&CampaignComparison>) -> gpui::Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::MarketingCompare)),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::MarketingComparisonHelp)),
+            )
+            .child(
+                div().flex().flex_wrap().gap_2().children(
+                    comparison
+                        .into_iter()
+                        .flat_map(|comparison| &comparison.campaigns)
+                        .map(|campaign| {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .flex_1()
+                                .min_w(px(240.))
+                                .gap_2()
+                                .p_3()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(theme::line())
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(campaign.name.clone()),
+                                )
+                                .child(div().text_sm().text_color(theme::muted()).child(format!(
+                                    "{} · {}",
+                                    self.t(status_key(campaign.status)),
+                                    self.t(channel_key(campaign.channel)),
+                                )))
+                                .children(
+                                    delivery_totals(
+                                        &campaign.counts,
+                                        Key::MarketingProviderAccepted,
+                                    )
+                                    .into_iter()
+                                    .map(|(key, count)| {
+                                        div()
+                                            .flex()
+                                            .justify_between()
+                                            .gap_2()
+                                            .text_sm()
+                                            .child(self.t(key))
+                                            .child(count.to_string())
+                                    }),
+                                )
+                        }),
+                ),
+            )
     }
 
     fn marketing_pages(
@@ -1038,19 +1288,11 @@ impl Root {
             })
             .child(
                 div().flex().flex_wrap().gap_2().children(
-                    [
-                        (Key::MarketingPending, counts.pending),
-                        (Key::MarketingProcessing, counts.processing),
-                        (Key::MarketingSent, counts.sent),
-                        (Key::MarketingSkipped, counts.skipped),
-                        (Key::MarketingFailed, counts.failed),
-                        (Key::MarketingUnknown, counts.unknown),
-                        (Key::CalendarCancelled, counts.cancelled),
-                    ]
-                    .into_iter()
-                    .map(|(key, count)| {
-                        div().text_sm().child(format!("{} · {count}", self.t(key)))
-                    }),
+                    delivery_totals(counts, Key::MarketingSent)
+                        .into_iter()
+                        .map(|(key, count)| {
+                            div().text_sm().child(format!("{} · {count}", self.t(key)))
+                        }),
                 ),
             );
         if let Some((preview, capabilities)) = &desk.review {
@@ -1295,6 +1537,53 @@ impl Root {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[gpui::test]
+    async fn comparison_clears_when_catalogue_access_is_revoked_without_a_marketing_event(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, config) = crate::root::tests::desk();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_marketing(cx);
+            root
+        });
+        view.update(cx, |root, cx| {
+            let generation = root.svc.store.verified_reviewed_generation().unwrap();
+            root.svc.store.remember_catalogue_access(&generation).unwrap();
+            let desk = root.marketing_desk().unwrap();
+            desk.selected = vec![
+                CampaignSelection { id: "first".into(), name: "First".into() },
+                CampaignSelection { id: "second".into(), name: "Second".into() },
+            ];
+            desk.comparing = true;
+            desk.comparison = Some(serde_json::from_value(json!({
+                "campaigns": [{
+                    "name": "First", "channel": "email", "status": "active",
+                    "counts": {"pending":1,"processing":2,"sent":3,"skipped":4,"failed":5,"unknown":6,"cancelled":7}
+                }]
+            })).unwrap());
+
+            root.dismiss_marketing(cx);
+            let desk = root.marketing_desk().unwrap();
+            assert!(!desk.comparing);
+            assert_eq!(desk.selected.len(), 2);
+
+            desk.comparing = true;
+            desk.request = Some(Arc::new(()));
+            desk.refreshing = true;
+            root.svc.store.forget_catalogue_access().unwrap();
+            root.refresh_marketing(false, cx);
+            let desk = root.marketing_desk().unwrap();
+            assert!(!desk.comparing);
+            assert!(!desk.refreshing);
+            assert!(desk.selected.is_empty());
+            assert!(desk.comparison.is_none());
+            assert!(desk.request.is_none());
+        });
+    }
 
     #[test]
     fn campaign_scheduling_rejects_ambiguous_and_missing_local_times() {
