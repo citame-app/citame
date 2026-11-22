@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
+import { syncPullResponseSchema } from "@sob/contracts";
 import { sql } from "drizzle-orm";
 import {
   type Actor,
@@ -282,6 +283,9 @@ test("expiry and code reissue require manager authority and preserve the stored 
   expect((await pay((await sale()).id, "gift_card", 1000, gift.code)).status).toBe(409);
   const expired = await card(gift.card.id);
   expect(expired.status).toBe("expired");
+  const initial = syncPullResponseSchema.parse(
+    await (await call(owner, "/sync/pull?since=0")).json(),
+  );
   expect(
     (
       await call(client, `/me/gift-cards/${gift.card.id}/expiry`, "PATCH", {
@@ -300,12 +304,22 @@ test("expiry and code reissue require manager authority and preserve the stored 
       })
     ).status,
   ).toBe(200);
+  const expiryRefresh = syncPullResponseSchema.parse(
+    await (await call(owner, `/sync/pull?since=${initial.headSeq}`)).json(),
+  );
+  expect(expiryRefresh.refresh).toContain("commerce");
+  expect(expiryRefresh.changes).toEqual([]);
   const current = await card(gift.card.id);
   const reissued = await call(owner, `/admin/gift-cards/${gift.card.id}/reissue`, "POST", {
     version: current.version,
     reason: "Lost gift voucher",
   });
   expect(reissued.status).toBe(200);
+  const reissueRefresh = syncPullResponseSchema.parse(
+    await (await call(owner, `/sync/pull?since=${expiryRefresh.headSeq}`)).json(),
+  );
+  expect(reissueRefresh.refresh).toContain("commerce");
+  expect(reissueRefresh.changes).toEqual([]);
   const replacement = await reveal(gift.card.id);
   expect(replacement).not.toBe(gift.code);
   expect((await pay((await sale()).id, "gift_card", 1000, gift.code)).status).toBe(409);

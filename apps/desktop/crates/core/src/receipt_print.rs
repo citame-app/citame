@@ -6,12 +6,13 @@ use std::time::{Duration, Instant};
 use chrono_tz::Tz;
 
 use crate::billing::AppointmentCheckout;
+use crate::http::gift_cards::{GiftReveal, GiftStatus};
 use crate::i18n::{Key, Locale, amount_label, fill, receipt_status_label, t};
 use crate::pkce::new_verifier;
 
 const PREVIEW_LIFETIME: Duration = Duration::from_secs(30);
 
-/// One local print preview. The document contains only the reviewed receipt, and no external assets.
+/// A single-use local print preview of a reviewed receipt or voucher.
 pub struct ReceiptPreview {
     listener: TcpListener,
     host: String,
@@ -27,11 +28,39 @@ impl ReceiptPreview {
         timezone: Tz,
         locale: Locale,
     ) -> io::Result<Self> {
+        Self::build(|nonce| document(receipt, salon, timezone, locale, nonce))
+    }
+
+    pub fn gift_voucher(
+        gift: &GiftReveal,
+        salon: &str,
+        timezone: Tz,
+        locale: Locale,
+    ) -> io::Result<Self> {
+        let code_matches =
+            crate::billing::normalize_gift_card_code(&gift.code).is_some_and(|code| {
+                gift.card.balance.code_last4.len() == 4
+                    && code.ends_with(&gift.card.balance.code_last4)
+            });
+        if !matches!(
+            gift.card.balance.status,
+            GiftStatus::Active | GiftStatus::Expired
+        ) || !code_matches
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Gift voucher unavailable",
+            ));
+        }
+        Self::build(|nonce| gift_document(gift, salon, timezone, locale, nonce))
+    }
+
+    fn build(render: impl FnOnce(&str) -> String) -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
         listener.set_nonblocking(true)?;
         let host = listener.local_addr()?.to_string();
         let nonce = new_verifier();
-        let body = document(receipt, salon, timezone, locale, &nonce);
+        let body = render(&nonce);
         Ok(Self {
             listener,
             host,
@@ -46,8 +75,12 @@ impl ReceiptPreview {
     }
 
     pub fn serve(self) -> bool {
+        self.serve_while(|| true)
+    }
+
+    pub fn serve_while(self, valid: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + PREVIEW_LIFETIME;
-        while Instant::now() < deadline {
+        while Instant::now() < deadline && valid() {
             let mut socket = match self.listener.accept() {
                 Ok((socket, _)) => socket,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -65,7 +98,7 @@ impl ReceiptPreview {
             {
                 continue;
             }
-            if self.accepts(&mut socket, deadline) {
+            if self.accepts(&mut socket, deadline) && valid() {
                 return write!(
                     socket,
                     "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\nContent-Security-Policy: default-src 'none'; script-src 'nonce-{}'; style-src 'nonce-{}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -309,6 +342,60 @@ for (const cell of root.querySelectorAll("[data-cents]")) {{
     out
 }
 
+fn gift_document(gift: &GiftReveal, salon: &str, tz: Tz, locale: Locale, nonce: &str) -> String {
+    let label = |key| t(locale, key);
+    let card = &gift.card;
+    let balance = &card.balance;
+    let es = locale == Locale::EsAr;
+    let lang = if es { "es-AR" } else { "en" };
+    let date_format = if es {
+        "%d/%m/%Y %H:%M"
+    } else {
+        "%Y-%m-%d %H:%M"
+    };
+    let expiry = match balance.expires_at {
+        Some(date) => format!(
+            "{} · {}",
+            label(Key::GiftExpiry),
+            date.with_timezone(&tz).format(date_format)
+        ),
+        None => label(Key::GiftNoExpiry).to_owned(),
+    };
+    let price = |cents| escaped(&amount_label(locale, i64::from(cents), &balance.currency));
+    let status = label(if balance.status == GiftStatus::Expired {
+        Key::GiftExpired
+    } else {
+        Key::GiftActive
+    });
+    format!(
+        r#"<!doctype html><html lang="{lang}">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{title}</title><style nonce="{nonce}">
+body{{margin:0;color:#211c20;background:white;font:1rem/1.55 system-ui,sans-serif}}
+main{{margin:auto;max-width:38rem;padding:1.5rem;overflow-wrap:anywhere}}
+h1,h2,p{{margin:0 0 .75rem}} code{{display:block;font-size:1.13rem;margin:1rem 0}}
+button{{font:inherit;padding:.65rem 1rem;background:#823054;color:white;border:0;border-radius:.35rem;margin-bottom:1.25rem}}
+@media print{{button{{display:none}} main{{max-width:none;padding:0}}}}
+</style>
+<main><button type="button" id="print">{print}</button>
+<h1>{salon}</h1><h2>{title}</h2><p>{name}</p><p>{status}</p>
+<p>{value_label} · {value}</p><p>{available_label} · {available}</p>
+<code>{code}</code><p>{expiry}</p><p>{keep_private}</p></main>
+<script nonce="{nonce}">document.getElementById("print").addEventListener("click", () => window.print());</script></html>"#,
+        print = label(Key::GiftPrint),
+        title = label(Key::SalesGiftCard),
+        salon = escaped(salon),
+        name = escaped(&card.label),
+        value_label = label(Key::GiftVoucherValue),
+        value = price(card.amount_cents),
+        available_label = label(Key::GiftAvailable),
+        available = price(balance.available_cents),
+        code = escaped(&gift.code),
+        expiry = escaped(&expiry),
+        keep_private = label(Key::GiftVoucherPrivate),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,6 +428,42 @@ mod tests {
         assert!(preview.body.contains("4,00 EUR"));
         assert!(!preview.body.contains("<img"));
     }
+    #[test]
+    fn gift_voucher_uses_a_one_time_private_preview_of_the_current_code() {
+        let mut gift: GiftReveal = serde_json::from_value(serde_json::json!({
+            "code": "SOB-AABB-CCDD-0011-2233-4455-6677",
+            "card": {
+                "id":"0198f5a0-7b1c-7000-8000-000000000101",
+                "checkoutId":"0198f5a0-7b1c-7000-8000-000000000102",
+                "label":"<b>GIFT</b>", "amountCents":2500, "balanceCents":1000,
+                "reservedCents":0, "availableCents":1000, "currency":"EUR",
+                "status":"active", "codeLast4":"6677", "codeRevision":"2", "version":2,
+                "expiresAt":"2026-11-20T09:15:00Z"
+            }
+        }))
+        .unwrap();
+        let preview = ReceiptPreview::gift_voucher(
+            &gift,
+            "Salón & Spa",
+            chrono_tz::Europe::Madrid,
+            Locale::EsAr,
+        )
+        .unwrap();
+        assert!(preview.body.contains("Salón &amp; Spa"));
+        assert!(preview.body.contains("&lt;b&gt;GIFT&lt;/b&gt;"));
+        assert!(!preview.body.contains("<b>GIFT</b>"));
+        assert!(preview.body.contains("10:15"));
+        assert!(preview.body.contains(&gift.code));
+        assert!(!preview.url().contains(&gift.code));
+        let address = preview.listener.local_addr().unwrap();
+        assert!(!preview.serve_while(|| false));
+        assert!(TcpStream::connect(address).is_err());
+        gift.card.balance.status = GiftStatus::Void;
+        assert!(
+            ReceiptPreview::gift_voucher(&gift, "Salón", chrono_tz::UTC, Locale::EsAr).is_err()
+        );
+    }
+
     #[test]
     fn local_preview_rejects_the_wrong_origin_and_is_served_once() {
         use std::io::Read;

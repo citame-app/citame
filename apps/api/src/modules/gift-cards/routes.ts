@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { requirePermission } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { purchaseGift } from "./purchase";
 import {
@@ -27,6 +28,16 @@ export function giftCardRoutes(deps: AppDeps) {
     .use("*", async (c, next) => {
       authorizeGiftAccess(c.get("principal"));
       c.header("Cache-Control", "private, no-store");
+      if (
+        c.get("desktopRequest") &&
+        (c.req.method === "PATCH" ||
+          (c.req.method === "POST" && !/\/(?:check|code)$/.test(c.req.path))) &&
+        c.req.header("x-citame-generation") !== deps.config.syncReplicaGeneration
+      )
+        throw new DomainError(
+          "sync_generation_changed",
+          "Review the gift card on the restored server",
+        );
       await next();
     })
     .get("/", async (c) => {

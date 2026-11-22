@@ -249,6 +249,17 @@ impl Root {
                 ))
             },
         );
+        let body = body.when(
+            !matches!(desk, RegisterDesk::Ready(view) if view.form.is_some()),
+            |body| {
+                body.child(self.button(
+                    "cash-gift-cards",
+                    self.t(Key::GiftCards),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_gift_cards(cx)),
+                ))
+            },
+        );
         let body = match desk {
             RegisterDesk::Loading(_) => body.child(self.t(Key::CashLoading)),
             RegisterDesk::Error(key) => body.child(self.t(*key)),

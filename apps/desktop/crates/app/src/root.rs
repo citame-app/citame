@@ -50,6 +50,7 @@ mod connection;
 mod directory;
 mod email_delivery;
 mod form_admin;
+mod gift_cards;
 mod inbox;
 mod intake_editor;
 mod intake_live;
@@ -302,6 +303,7 @@ enum Overlay {
     Cash(cash::RegisterDesk),
     WalkIn(Box<walk_in::SaleDesk>),
     WalkInReceipt(checkout::CheckoutReview),
+    GiftCards(Box<gift_cards::Desk>),
     SalesHistory(Box<transactions::History>),
     Unpaid(Box<unpaid::Desk>),
     Inventory(Box<inventory::Desk>),
@@ -782,6 +784,7 @@ impl Root {
         }
         self.refresh_unpaid_if_changed(reconnected, cx);
         self.refresh_sales_history(reconnected, cx);
+        self.refresh_gift_cards(reconnected, cx);
         self.refresh_salon_configuration(reconnected, cx);
         self.refresh_booking_policy(reconnected, cx);
         self.refresh_staff_access(reconnected, cx);
@@ -2611,6 +2614,7 @@ impl Root {
                 self.load_register(cx);
                 return;
             }
+            Overlay::GiftCards(_) => self.dismiss_gift_cards(cx),
             Overlay::IntakeForms(_) => self.close_intake_forms(cx),
             Overlay::SalonConfiguration(_) => self.close_salon_configuration(cx),
             Overlay::EmailDelivery(_) => self.dismiss_email_delivery(cx),
@@ -4227,6 +4231,9 @@ impl Render for Root {
                             Some(self.render_walk_in(sale, content_viewport, cx))
                         }
                         Overlay::WalkInReceipt(review) => Some(self.render_checkout(review, cx)),
+                        Overlay::GiftCards(desk) => {
+                            Some(self.render_gift_cards(desk, content_viewport, cx))
+                        }
                         Overlay::SalesHistory(history) => {
                             Some(self.render_sales_history(history, content_viewport, cx))
                         }
