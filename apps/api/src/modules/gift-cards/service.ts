@@ -45,20 +45,25 @@ export async function giftView(
   row: typeof giftCard.$inferSelect,
 ): Promise<GiftCard> {
   const [line] = await db
-    .select({ checkoutId: checkoutLine.checkoutId })
+    .select({ checkoutId: checkoutLine.checkoutId, priceCents: checkoutLine.unitAmountCents })
     .from(checkoutLine)
     .where(eq(checkoutLine.giftCardId, row.id));
   if (!line) throw new Error("Gift card is missing its purchase receipt");
-  return toGiftCard(row, line.checkoutId);
+  return toGiftCard(row, line.checkoutId, line.priceCents);
 }
 
-function toGiftCard(row: typeof giftCard.$inferSelect, checkoutId: string): GiftCard {
+function toGiftCard(
+  row: typeof giftCard.$inferSelect,
+  checkoutId: string,
+  priceCents: number,
+): GiftCard {
   return {
     id: row.id,
     label: row.label,
     buyerClientId: row.buyerClientId,
     checkoutId,
     amountCents: row.amountCents,
+    purchasePriceCents: priceCents,
     balanceCents: row.balanceCents,
     reservedCents: row.reservedCents,
     availableCents: row.balanceCents - row.reservedCents,
@@ -126,7 +131,11 @@ export async function giftReplicaPage(db: Database, principal: Principal, page: 
         .where(and(eq(syncChange.entity, "live_view"), eq(syncChange.rowId, "commerce")));
       const [head] = await tx.select({ seq: max(syncChange.seq) }).from(syncChange);
       const rows = await tx
-        .select({ card: giftCard, checkoutId: checkoutLine.checkoutId })
+        .select({
+          card: giftCard,
+          checkoutId: checkoutLine.checkoutId,
+          priceCents: checkoutLine.unitAmountCents,
+        })
         .from(giftCard)
         .innerJoin(checkoutLine, eq(checkoutLine.giftCardId, giftCard.id))
         .where(giftScope(principal))
@@ -137,8 +146,8 @@ export async function giftReplicaPage(db: Database, principal: Principal, page: 
         scope,
         revision: Number(snapshot?.revision ?? 0),
         through: Number(head?.seq ?? 0),
-        rows: rows.slice(0, pageSize).map(({ card, checkoutId }) => {
-          const { buyerClientId: _, ...saved } = toGiftCard(card, checkoutId);
+        rows: rows.slice(0, pageSize).map(({ card, checkoutId, priceCents }) => {
+          const { buyerClientId: _, ...saved } = toGiftCard(card, checkoutId, priceCents);
           return saved;
         }),
         hasMore: rows.length > pageSize,

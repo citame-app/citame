@@ -18,9 +18,11 @@ export async function purchaseGift(
   if (
     principal.role === "client" &&
     ((input.buyerClientId && input.buyerClientId !== principal.clientId) ||
-      input.expiresAt !== undefined)
+      input.expiresAt !== undefined ||
+      input.purchasePriceCents !== undefined)
   )
-    throw new DomainError("forbidden", "Clients cannot choose another buyer or gift expiry");
+    throw new DomainError("forbidden", "Clients cannot customize gift purchase terms");
+  const purchasePriceCents = input.purchasePriceCents ?? input.amountCents;
   const buyerClientId =
     principal.role === "client" ? principal.clientId : (input.buyerClientId ?? null);
   return db.transaction(async (tx) => {
@@ -34,6 +36,7 @@ export async function purchaseGift(
           label: input.label,
           buyerClientId,
           expiresAt: input.expiresAt ?? null,
+          ...(purchasePriceCents !== input.amountCents ? { purchasePriceCents } : {}),
         }),
       )
       .digest("hex");
@@ -92,14 +95,14 @@ export async function purchaseGift(
         idempotencyKey: `gift-checkout-${id}`,
       },
       principal,
-      { giftPurchase: true },
+      { giftPurchase: { priceCents: purchasePriceCents } },
     );
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: "gift_card.purchase_created",
       entity: "gift_card",
       entityId: id,
-      metadata: { checkoutId: sale.id, amountCents: row.amountCents },
+      metadata: { checkoutId: sale.id, amountCents: row.amountCents, purchasePriceCents },
     });
     return { card: await giftView(tx, row), checkout: sale };
   });

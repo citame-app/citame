@@ -177,6 +177,14 @@ function GiftPurchaseForm({
   const online = useOnline();
   const queries = useQueryClient();
   const [amount, setAmount] = useState("");
+  const [price, setPrice] = useState("");
+  const [validating, setValidating] = useState(false);
+  const amountCents = inputCents(amount);
+  const salePriceCents = mode === "admin" && price.trim() ? inputCents(price) : undefined;
+  const amountInvalid = amountCents === null || amountCents <= 0 || amountCents > 999_999_999;
+  const priceInvalid =
+    salePriceCents !== undefined &&
+    (salePriceCents === null || salePriceCents <= 0 || salePriceCents > 999_999_999);
   const [label, setLabel] = useState("");
   const [expiry, setExpiry] = useState("");
   const [buyer, setBuyer] = useState("");
@@ -188,8 +196,8 @@ function GiftPurchaseForm({
   });
   const save = useMutation({
     mutationFn: () => {
-      const amountCents = inputCents(amount);
-      if (amountCents === null || amountCents <= 0) throw new Error("Invalid gift value");
+      if (amountCents === null || amountInvalid || priceInvalid)
+        throw new Error("Invalid gift values");
       return api().giftCards.purchase(
         {
           amountCents,
@@ -197,6 +205,9 @@ function GiftPurchaseForm({
           idempotencyKey: key,
           ...(mode === "admin"
             ? {
+                ...(salePriceCents !== undefined && salePriceCents !== null
+                  ? { purchasePriceCents: salePriceCents }
+                  : {}),
                 ...(buyer ? { buyerClientId: buyer } : {}),
                 expiresAt: expiry ? localDayBounds(expiry, timeZone).to : null,
               }
@@ -219,23 +230,50 @@ function GiftPurchaseForm({
       className="grid gap-4 rounded-xl border border-line bg-surface p-4 sm:grid-cols-2"
       onSubmit={(event) => {
         event.preventDefault();
-        save.mutate();
+        setValidating(true);
+        if (amountInvalid || priceInvalid) {
+          const first = event.currentTarget.elements.namedItem(
+            amountInvalid ? "gift-value" : "gift-price",
+          );
+          if (first instanceof HTMLInputElement) first.focus();
+          return;
+        }
+        if (!save.isPending) save.mutate();
       }}
     >
       <h3 className="font-semibold sm:col-span-2">{t("gift.new")}</h3>
       <TextField
         label={t("gift.amount")}
+        name="gift-value"
         value={amount}
         inputMode="decimal"
+        disabled={save.isPending}
+        error={validating && amountInvalid ? t("gift.positiveAmount") : undefined}
         onChange={(event) => {
           setAmount(event.target.value);
           reset();
         }}
       />
+      {mode === "admin" && (
+        <TextField
+          label={t("gift.salePrice")}
+          hint={t("gift.salePriceHelp")}
+          name="gift-price"
+          value={price}
+          inputMode="decimal"
+          disabled={save.isPending}
+          error={validating && priceInvalid ? t("gift.positiveAmount") : undefined}
+          onChange={(event) => {
+            setPrice(event.target.value);
+            reset();
+          }}
+        />
+      )}
       <TextField
         label={t("gift.label")}
         value={label}
         maxLength={120}
+        disabled={save.isPending}
         onChange={(event) => {
           setLabel(event.target.value);
           reset();
@@ -247,6 +285,7 @@ function GiftPurchaseForm({
             label={t("gift.validThrough")}
             type="date"
             value={expiry}
+            disabled={save.isPending}
             onChange={(event) => {
               setExpiry(event.target.value);
               reset();
@@ -255,6 +294,7 @@ function GiftPurchaseForm({
           <TextField
             label={t("gift.searchBuyer")}
             value={search}
+            disabled={save.isPending}
             onChange={(event) => {
               setSearch(event.target.value);
               setBuyer("");
@@ -267,6 +307,7 @@ function GiftPurchaseForm({
             <SelectField
               label={t("gift.buyer")}
               value={buyer}
+              disabled={save.isPending}
               options={[
                 { value: "", label: t("gift.walkIn") },
                 ...(clients.data?.clients ?? []).map((client) => ({
@@ -328,6 +369,10 @@ function GiftDetail({
       <p role="status">{t(`gift.status.${current.status}`)}</p>
       <div className="rounded-xl border border-line bg-surface p-4">
         <p>{t("gift.value", { amount: money(current.amountCents) })}</p>
+        {current.purchasePriceCents !== undefined &&
+          current.purchasePriceCents !== current.amountCents && (
+            <p>{t("gift.paidPrice", { amount: money(current.purchasePriceCents) })}</p>
+          )}
         <p className="font-semibold">
           {t("gift.available", { amount: money(current.availableCents) })}
         </p>

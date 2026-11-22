@@ -59,6 +59,7 @@ mod tests {
         let database = dir.path().join("replica.db");
         let purchase = GiftPurchase {
             amount_cents: 3500,
+            purchase_price_cents: Some(2700),
             label: "Synthetic gift".into(),
             buyer_client_id: None,
             expires_at: None,
@@ -83,6 +84,7 @@ mod tests {
         let reopened = store.pending_gift_purchase("owner").unwrap().unwrap();
         assert_eq!(reopened.idempotency_key, purchase.idempotency_key);
         assert_eq!(reopened.generation, "reviewed");
+        assert_eq!(reopened.price_cents(), 2700);
         assert_eq!(reopened.amount_cents, 3500);
         let timeout = TransportError::Offline("timed out".into());
         assert!(

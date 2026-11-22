@@ -255,6 +255,71 @@ test("purchase is idempotent, pending value cannot be used or revealed and activ
   const audit = await t.db.execute<Record<string, unknown>>(sql`select metadata from audit_log`);
   expect(JSON.stringify(audit)).not.toContain(code);
 });
+test("a reviewed sale price is charged separately from the face value, including refunds", async () => {
+  const request = { purchasePriceCents: 2400, idempotencyKey: key() };
+  const gift = await buy(3000, request);
+  expect(gift.card).toMatchObject({ amountCents: 3000, purchasePriceCents: 2400 });
+  expect(gift.checkout.totalCents).toBe(2400);
+  expect((await buy(3000, request)).checkout.id).toBe(gift.checkout.id);
+  expect(
+    (
+      await call(owner, "/admin/gift-cards", "POST", {
+        ...request,
+        amountCents: 3000,
+        purchasePriceCents: 2200,
+      })
+    ).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(client, "/me/gift-cards", "POST", {
+        amountCents: 3000,
+        purchasePriceCents: 10,
+        idempotencyKey: key(),
+      })
+    ).status,
+  ).toBe(403);
+
+  const first = await pay(gift.checkout.id, "external_card", 1800);
+  expect(first.status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "pending", balanceCents: 0 });
+  const second = await pay(gift.checkout.id, "external_card", 600);
+  expect(second.status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "active", balanceCents: 3000 });
+
+  const firstPayment = (await first.json()) as { payment: { id: string } };
+  const secondPayment = (await second.json()) as { payment: { id: string } };
+  const refundKey = key();
+  expect((await refund(secondPayment.payment.id, 1, refundKey)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 2998 });
+  expect((await refund(secondPayment.payment.id, 1, refundKey)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 2998 });
+  expect((await refund(secondPayment.payment.id, 599)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 2250 });
+  expect((await refund(firstPayment.payment.id, 1800)).status).toBe(201);
+  expect(await card(gift.card.id)).toMatchObject({ status: "void", balanceCents: 0 });
+});
+
+test("a pending bank refund reserves proportional value and a failed refund releases it", async () => {
+  const gift = await buy(3000, { purchasePriceCents: 2400 });
+  const bank = await pay(gift.checkout.id, "redsys_card", 2400);
+  expect(bank.status).toBe(201);
+  const started = (await bank.json()) as { payment: { id: string; order: string } };
+  expect((await notify(started.payment.order, 2400)).status).toBe(200);
+  const code = await reveal(gift.card.id);
+  const requested = await refund(started.payment.id, 600);
+  expect(requested.status).toBe(201);
+  const { id: refundId } = (await requested.json()) as { id: string };
+  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 3000, reservedCents: 750 });
+  expect((await pay((await sale(2251)).id, "gift_card", 2251, code)).status).toBe(409);
+  expect((await pay((await sale(2000)).id, "gift_card", 2000, code)).status).toBe(201);
+  expect((await call(owner, `/admin/commerce/refunds/${refundId}/cancel`, "POST", {})).status).toBe(
+    200,
+  );
+  expect(await card(gift.card.id)).toMatchObject({ balanceCents: 1000, reservedCents: 0 });
+  expect((await refund(started.payment.id, 801)).status).toBe(409);
+});
+
 test("competing redemptions cannot overspend and replaying one tender cannot debit twice", async () => {
   const gift = await active();
   const [a, b] = await Promise.all([sale(), sale()]);

@@ -131,11 +131,18 @@ export async function redeemGift(
     metadata: { checkoutId, paymentId, amountCents },
   });
 }
+/** Map cumulative cash refunds to revoked entitlement cents without rounding each refund. */
+function revokedGiftValue(faceValue: number, purchasePrice: number, cashCents: number): number {
+  const returned = Math.max(0, Math.min(purchasePrice, cashCents));
+  const denominator = BigInt(purchasePrice);
+  return Number((BigInt(returned) * BigInt(faceValue) + denominator - 1n) / denominator);
+}
+
 /** Checkout lock is held by callers. Gift-card locks serialize shared value across receipts. */
 export async function syncCheckoutGiftRefunds(tx: Tx, checkoutId: string) {
   let closed = false;
   const lines = await tx
-    .select({ id: checkoutLine.giftCardId })
+    .select({ id: checkoutLine.giftCardId, priceCents: checkoutLine.unitAmountCents })
     .from(checkoutLine)
     .where(and(eq(checkoutLine.checkoutId, checkoutId), isNotNull(checkoutLine.giftCardId)));
   if (lines.length) {
@@ -194,9 +201,15 @@ export async function syncCheckoutGiftRefunds(tx: Tx, checkoutId: string) {
         }
         continue;
       }
-      const desiredReturned = Math.min(card.amountCents, Math.max(0, returned - excess));
+      if (line.priceCents <= 0) throw new Error("Gift purchase receipt has no price");
+      const desiredReturned = revokedGiftValue(
+        card.amountCents,
+        line.priceCents,
+        returned - excess,
+      );
       const desiredReserved =
-        Math.min(card.amountCents, Math.max(0, reservedRefunds - excess)) - desiredReturned;
+        revokedGiftValue(card.amountCents, line.priceCents, reservedRefunds - excess) -
+        desiredReturned;
       const deduction = desiredReturned - card.purchaseRefundedCents;
       const balance = card.balanceCents - deduction;
       if (balance < desiredReserved || balance > card.amountCents)

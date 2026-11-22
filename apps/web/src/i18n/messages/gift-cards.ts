@@ -5,6 +5,10 @@ export const giftCardsEn = {
   "gift.buy": "Buy a gift card",
   "gift.lead": "Buy or manage prepaid value, check its balance and share its code after payment.",
   "gift.amount": "Gift value (EUR)",
+  "gift.salePrice": "Sale price (EUR, optional)",
+  "gift.salePriceHelp": "Leave blank to charge the same amount as the gift value.",
+  "gift.paidPrice": "Sale price: {amount}",
+  "gift.positiveAmount": "Enter a positive amount in euros with up to two decimal places.",
   "gift.label": "Recipient or reference",
   "gift.create": "Create gift purchase",
   "gift.value": "Original value: {amount}",
@@ -70,6 +74,11 @@ export const giftCardsEsAR: Record<keyof typeof giftCardsEn, string> = {
   "gift.lead":
     "Compra o gestiona saldo prepago, consulta su valor disponible y comparte el código tras el pago.",
   "gift.amount": "Valor del regalo (EUR)",
+  "gift.salePrice": "Precio de venta (EUR, opcional)",
+  "gift.salePriceHelp":
+    "Si lo dejas en blanco, se cobrará el mismo importe que el valor del regalo.",
+  "gift.paidPrice": "Precio de venta: {amount}",
+  "gift.positiveAmount": "Introduce un importe positivo en euros con hasta dos decimales.",
   "gift.label": "Destinatario o referencia",
   "gift.create": "Crear compra de regalo",
   "gift.value": "Valor original: {amount}",

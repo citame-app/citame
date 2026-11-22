@@ -26,3 +26,18 @@ Redsys is a server-only adapter, disabled until configured. Checkout totals and 
 Keep fulfillment hooks transaction-scoped so gift-card issuance/redemption, packages, memberships, loyalty and commission accrual can reuse the settlement boundary without duplicating balances or events. Service-product consumption must be distinguished from retail sale and retain an explicit reason/audit trail. Five staff-access presets and their scoped financial/catalog permissions are part of the staff-management delivery, with the owner retaining control of access changes.
 
 Booking deposits/holds, waitlist offers, resource/capacity scheduling, CRM/forms/reviews/portfolio and consent-based marketing remain separately tracked in FEATURE-EXPANSION.md. Multitenant marketplace and multisite operations remain outside the confirmed present scope.
+
+
+### Gift sale price and redeemable value
+
+The gift card stores its original redeemable value. The single gift line on the purchase
+receipt records the final sale price. Checkout can collect only that price. After settlement,
+the card activates with the full redeemable value.
+
+Purchase refunds remove the proportion of gift value corresponding to the cumulative cash
+returned. Keep cumulative refunded cash and open refund reservations separate. Round the
+cumulative value up to a cent, then apply only the difference from the amount already removed
+or reserved. A full refund revokes the original gift value. Reject a refund that would remove
+spent value. Reversing a failed bank refund releases its reservation. Excess bank captures
+remain refundable without changing the gift value. Purchases and retries for an equal value and
+price retain the original request identity.
