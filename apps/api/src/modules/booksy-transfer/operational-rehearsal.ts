@@ -956,6 +956,7 @@ export async function inspectNativeBooksy(
           resourceCapacityConflicts: capacity.resourceConflictPeriods,
           waitlistForReview: waitlistRows.length,
           waitlistObservedDates: waitlist.observedDates,
+          waitlistIgnoredObservations: waitlist.ignoredObservations,
           ...sideEffects,
         },
         blockers: {
@@ -1173,6 +1174,7 @@ export async function rehearseNativeBooksy(
     servicesWithResourceRules: new Set(plan.resourceRules.map((row) => row.serviceId)).size,
     waitlistRequestsForReview: waitlist.entries.length,
     waitlistObservedDates: waitlist.observedDates,
+    waitlistIgnoredObservations: waitlist.ignoredObservations,
     calendarLines: plan.visits.length,
     bookedServiceRows,
     occupiedResources,

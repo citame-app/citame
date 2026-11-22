@@ -21,14 +21,20 @@ const row = {
   order: 1,
   slot_duration: "90 mins slot",
 };
-function capture(capturedAt: string, results: (typeof row)[], day = "2026-11-18") {
+function capture(
+  capturedAt: string,
+  results: (typeof row)[],
+  day = "2026-11-18",
+  query = `start=${day}&end=${day}`,
+  parsedResults = results,
+) {
   const data = { results };
   const payload = Buffer.from(
     JSON.stringify({
-      source: `https://es.booksy.com/core/v2/business_api/me/businesses/${businessId}/waitlist/?start=${day}&end=${day}`,
+      source: `https://es.booksy.com/core/v2/business_api/me/businesses/${businessId}/waitlist/?${query}`,
       businessId,
       capturedAt,
-      data: { data, body: JSON.stringify(data) },
+      data: { data: { results: parsedResults }, body: JSON.stringify(data) },
     }),
   );
   return { payload, sha256: createHash("sha256").update(payload).digest("hex") };
@@ -50,6 +56,45 @@ test("archived waitlist projection uses the latest observation and retains only 
   expect(projectBooksyWaitlist([early, later, removed], source).entries).toHaveLength(0);
   expect(() => projectBooksyWaitlist([{ ...later, sha256: "invalid" }], source)).toThrow(
     "checksum",
+  );
+});
+
+test("filtered or ambiguous waitlist observations never replace a complete capture", () => {
+  const original = capture("2026-11-17T11:00:00Z", [row]);
+  const date = row.date;
+  const range = `start=${date}&end=${date}`;
+  const extras = ["staffer_id=10", "page=2", `start=${date}`, "end=2026-11-20"];
+  const partial = extras.map((suffix, index) =>
+    capture(`2026-11-17T1${index + 2}:00:00Z`, [], date, `${range}&${suffix}`),
+  );
+  partial.push(
+    capture("2026-11-17T16:00:00Z", [], date, `start=${date}`),
+    capture("2026-11-17T16:00:00Z", [], date, `end=${date}`),
+    capture("2026-11-17T16:00:00Z", [], date, `start=invalid&end=${date}`),
+  );
+  const destination = "2026-11-19";
+  const filteredMove = capture(
+    "2026-11-17T16:00:00Z",
+    [{ ...row, date: destination }],
+    destination,
+    `start=${destination}&end=${destination}&staffer_id=10`,
+  );
+  const before = projectBooksyWaitlist([original], source);
+  const after = projectBooksyWaitlist([filteredMove, ...partial, original], source);
+  expect(after).toMatchObject({
+    entries: before.entries,
+    observedDates: 1,
+    ignoredObservations: 8,
+  });
+  expect(compareBooksyWaitlists(before, projectBooksyWaitlist(partial, source))).toMatchObject({
+    absentOnReobservedDate: [],
+    absenceUnverified: [sourceUuid(businessId, "waitlist", String(row.id))],
+    currentObservedDates: 0,
+    currentIgnoredObservations: 7,
+  });
+  const inconsistent = capture("2026-11-17T16:00:00Z", [], date, `${range}&page=2`, [row]);
+  expect(() => projectBooksyWaitlist([original, inconsistent], source)).toThrow(
+    "response differs from retained data",
   );
 });
 
@@ -119,6 +164,8 @@ test("the delta distinguishes later empty observations from dates without new ev
     absenceUnverified: [id("2")],
     previousObservedDates: 3,
     currentObservedDates: 2,
+    previousIgnoredObservations: 0,
+    currentIgnoredObservations: 0,
     datesWithoutNewObservation: [unchangedDay],
   });
 });
