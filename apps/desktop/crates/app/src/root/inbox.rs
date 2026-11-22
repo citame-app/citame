@@ -263,11 +263,7 @@ impl Root {
                         .flex_col()
                         .gap_2()
                         .children(rows.map(|notice| {
-                            let kind = self.t(match notice.kind {
-                                CalendarNoticeKind::New => Key::NewBookingNotice,
-                                CalendarNoticeKind::Rescheduled => Key::InboxRescheduled,
-                                CalendarNoticeKind::Cancelled => Key::InboxCancelled,
-                            });
+                            let kind = self.t(notices::title_key(notice.kind));
                             let id = notice.id.clone();
                             let appointment_id = notice.appointment_id.clone();
                             let starts = notice.appointment_starts_at;

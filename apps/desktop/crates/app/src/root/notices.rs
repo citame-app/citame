@@ -2,33 +2,63 @@ use super::*;
 
 const NOTICE_DURATION: Duration = Duration::from_secs(12);
 
+pub(super) fn title_key(kind: CalendarNoticeKind) -> Key {
+    match kind {
+        CalendarNoticeKind::New => Key::NewBookingNotice,
+        CalendarNoticeKind::Rescheduled => Key::InboxRescheduled,
+        CalendarNoticeKind::Cancelled => Key::InboxCancelled,
+    }
+}
+
 impl Root {
+    pub(super) fn expire_notices(&mut self, now: Instant) {
+        if matches!(self.overlay, Overlay::None) {
+            self.notices.retain(|(_, _, deadline)| *deadline > now);
+        } else {
+            for (_, _, deadline) in &mut self.notices {
+                *deadline = now + NOTICE_DURATION;
+            }
+        }
+    }
+
     pub(super) fn refresh_notices(&mut self) {
         let store = &self.svc.store;
-        self.notices.retain_mut(|(appointment, _)| {
+        self.notices.retain_mut(|(kind, appointment, _)| {
             let Ok(Some(current)) = store.appointment(&appointment.id) else {
                 return false;
             };
+            if current.status != kind.appointment_status()
+                || current.starts_at != appointment.starts_at
+                || current.staff_id != appointment.staff_id
+            {
+                return false;
+            }
             *appointment = current;
-            appointment.status == AppointmentStatus::Booked
+            true
         });
         let Ok(fresh) = store.booking_notices_after(self.notice_cursor) else {
             return;
         };
         let deadline = Instant::now() + NOTICE_DURATION;
-        for (cursor, appointment) in fresh.into_iter().rev() {
+        for (cursor, kind, appointment) in fresh.into_iter().rev() {
             self.notice_cursor = cursor;
-            self.notices.insert(0, (appointment, deadline));
+            self.notices
+                .retain(|(_, shown, _)| shown.id != appointment.id);
+            self.notices.insert(0, (kind, appointment, deadline));
         }
         self.notices.truncate(3);
     }
 
     fn dismiss_notice(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.notices.retain(|(appointment, _)| appointment.id != id);
+        self.notices
+            .retain(|(_, appointment, _)| appointment.id != id);
         cx.notify();
     }
 
     pub(super) fn show_notice(&mut self, id: &str, cx: &mut Context<Self>) {
+        if !matches!(self.overlay, Overlay::None) {
+            return;
+        }
         self.dismiss_notice(id, cx);
         let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id) else {
             return;
@@ -51,7 +81,8 @@ impl Root {
             .flex()
             .flex_col()
             .gap_2()
-            .children(self.notices.iter().map(|(appointment, _)| {
+            .children(self.notices.iter().map(|(kind, appointment, _)| {
+                let title = self.t(title_key(*kind));
                 let id = appointment.id.clone();
                 let open_id = id.clone();
                 let dismiss_id = id.clone();
@@ -77,7 +108,7 @@ impl Root {
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme::accent())
-                            .child(self.t(Key::NewBookingNotice)),
+                            .child(title),
                     )
                     .child(div().truncate().child(SharedString::from(client)))
                     .child(

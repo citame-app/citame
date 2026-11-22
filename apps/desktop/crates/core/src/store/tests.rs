@@ -300,7 +300,7 @@ fn migrations_run_once_and_survive_reopen() {
         }
         conn.pragma_update(None, "user_version", 2).unwrap();
         let tx = conn.transaction().unwrap();
-        apply_change(&tx, &staff_change(3, "st1", "Ana")).unwrap();
+        apply_change(&tx, &staff_change(3, "st1", "Ana"), false).unwrap();
         tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','3')", [])
             .unwrap();
         tx.commit().unwrap();
@@ -324,7 +324,7 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
     data["importedFromBooksy"] = json!(true);
     data["services"][0]["sourceUnpriced"] = json!(true);
     data["billingReviewReasons"] = json!(["unknown_amount"]);
-    apply_change(&tx, &imported).unwrap();
+    apply_change(&tx, &imported, false).unwrap();
     tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','5')", [])
         .unwrap();
     tx.execute(
@@ -351,6 +351,37 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
     );
     assert_eq!(store.cursor().unwrap(), 5);
     assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
+}
+
+#[test]
+fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    for sql in &MIGRATIONS[..9] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", 9).unwrap();
+    let tx = conn.transaction().unwrap();
+    apply_change(&tx, &appt_change(1, A1, 1), false).unwrap();
+    tx.execute(
+        "INSERT INTO booking_notice (appointment_id) VALUES (?1)",
+        [A1],
+    )
+    .unwrap();
+    tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','1')", [])
+        .unwrap();
+    tx.execute(
+        "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
+         VALUES ('queued','2026-11-21T09:00:00Z','appointment.cancel',?1,'{}')",
+        [A1],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let store = Store::init(conn).unwrap();
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
+    let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices[0].1, CalendarNoticeKind::New);
+    assert_eq!(notices[0].2.id, A1);
 }
 
 #[test]
@@ -404,8 +435,9 @@ fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
         .unwrap();
     let notices = store.booking_notices_after(0).unwrap();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].1.id, "new");
-    assert_eq!(notices[0].1.client_name.as_deref(), Some("Lucía"));
+    assert_eq!(notices[0].1, CalendarNoticeKind::New);
+    assert_eq!(notices[0].2.id, "new");
+    assert_eq!(notices[0].2.client_name.as_deref(), Some("Lucía"));
     let cursor = notices[0].0;
 
     store
@@ -434,8 +466,118 @@ fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
         .apply_sync_page(&[appt_change(2, "another", 1)], 2, true, true, &[], None)
         .unwrap();
     assert_eq!(
-        store.booking_notices_after(cursor).unwrap()[0].1.id,
+        store.booking_notices_after(cursor).unwrap()[0].2.id,
         "another"
+    );
+}
+
+#[test]
+fn remote_moves_and_cancellations_notify_after_initial_sync_without_duplicate_rows() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .apply_sync_page(&[appt_change(1, A1, 1)], 1, false, true, &[], None)
+        .unwrap();
+
+    let mut moved = appt_change(2, A1, 2);
+    moved.data.as_mut().unwrap()["staffId"] = json!("new-professional");
+    store
+        .apply_sync_page(&[moved.clone()], 2, true, true, &[], None)
+        .unwrap();
+    let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1, CalendarNoticeKind::Rescheduled);
+    let moved_cursor = notices[0].0;
+
+    let mut notes = moved.clone();
+    notes.seq = 3;
+    notes.data.as_mut().unwrap()["version"] = json!(3);
+    notes.data.as_mut().unwrap()["notes"] = json!("An ordinary note edit");
+    store
+        .apply_sync_page(&[notes.clone()], 3, true, true, &[], None)
+        .unwrap();
+    assert!(
+        store
+            .booking_notices_after(moved_cursor)
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut cancelled = notes;
+    cancelled.seq = 4;
+    cancelled.data.as_mut().unwrap()["version"] = json!(4);
+    cancelled.data.as_mut().unwrap()["status"] = json!("cancelled");
+    store
+        .apply_sync_page(&[cancelled.clone()], 4, true, true, &[], None)
+        .unwrap();
+    store
+        .apply_sync_page(&[cancelled], 4, true, true, &[], None)
+        .unwrap();
+    let notices = store.booking_notices_after(moved_cursor).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1, CalendarNoticeKind::Cancelled);
+    assert_eq!(notices[0].2.status, AppointmentStatus::Cancelled);
+    assert_eq!(store.booking_notices_after(0).unwrap().len(), 1);
+}
+
+#[test]
+fn acknowledged_moves_and_cancellations_only_notify_the_other_device() {
+    let mut origin = Store::open_in_memory().unwrap();
+    let mut remote = Store::open_in_memory().unwrap();
+    for store in [&mut origin, &mut remote] {
+        store
+            .apply_sync_page(&[appt_change(1, A1, 1)], 1, false, true, &[], None)
+            .unwrap();
+    }
+    let mut moved = appt_change(2, A1, 2);
+    moved.data.as_mut().unwrap()["startsAt"] = json!("2026-03-09T12:15:00Z");
+    moved.data.as_mut().unwrap()["endsAt"] = json!("2026-03-09T13:15:00Z");
+    let mut cancelled = moved.clone();
+    cancelled.seq = 4;
+    cancelled.data.as_mut().unwrap()["version"] = json!(4);
+    cancelled.data.as_mut().unwrap()["status"] = json!("cancelled");
+    let mut other_move = moved.clone();
+    other_move.seq = 3;
+    other_move.data.as_mut().unwrap()["version"] = json!(3);
+    other_move.data.as_mut().unwrap()["staffId"] = json!("other-professional");
+    for (kind, seq) in [("appointment.reschedule", 2), ("appointment.cancel", 4)] {
+        let mutation = origin
+            .enqueue(kind, A1, json!({ "id": A1, "version": seq - 1 }))
+            .unwrap();
+        let receipt = MutationResult::Applied {
+            mutation_id: mutation.mutation_id.clone(),
+            applied_seq: Some(seq),
+            replayed: false,
+        };
+        origin.apply_push_results(&[mutation], &[receipt]).unwrap();
+    }
+    for store in [&mut origin, &mut remote] {
+        store
+            .apply_sync_page(&[moved.clone()], 2, true, true, &[], None)
+            .unwrap();
+    }
+    assert!(origin.booking_notices_after(0).unwrap().is_empty());
+    assert_eq!(
+        remote.booking_notices_after(0).unwrap()[0].1,
+        CalendarNoticeKind::Rescheduled
+    );
+    for store in [&mut origin, &mut remote] {
+        store
+            .apply_sync_page(&[other_move.clone()], 3, true, true, &[], None)
+            .unwrap();
+    }
+    assert_eq!(
+        origin.booking_notices_after(0).unwrap()[0].2.staff_id,
+        "other-professional"
+    );
+    for store in [&mut origin, &mut remote] {
+        store
+            .apply_sync_page(&[cancelled.clone()], 4, true, true, &[], None)
+            .unwrap();
+    }
+    assert!(origin.booking_notices_after(0).unwrap().is_empty());
+    assert_eq!(
+        remote.booking_notices_after(0).unwrap()[0].1,
+        CalendarNoticeKind::Cancelled
     );
 }
 
@@ -458,7 +600,138 @@ fn an_online_booking_marker_suppresses_only_the_origin_notification() {
         assert_eq!(store.outbox_len().unwrap(), 0);
     }
     assert!(origin.booking_notices_after(0).unwrap().is_empty());
-    assert_eq!(remote.booking_notices_after(0).unwrap()[0].1.id, A1);
+    assert_eq!(remote.booking_notices_after(0).unwrap()[0].2.id, A1);
+}
+
+#[test]
+fn local_receipts_match_versions_when_pull_sequences_are_coalesced() {
+    let mut origin = Store::open_in_memory().unwrap();
+    origin
+        .apply_page(&[appt_change(1, A1, 1), appt_change(2, A2, 1)], 2)
+        .unwrap();
+    for (id, seq) in [(A1, 3), (A2, 5)] {
+        let mutation = origin
+            .enqueue(
+                "appointment.reschedule",
+                id,
+                json!({"id": id, "version": 1}),
+            )
+            .unwrap();
+        let receipt = MutationResult::Applied {
+            mutation_id: mutation.mutation_id.clone(),
+            applied_seq: Some(seq),
+            replayed: false,
+        };
+        origin.apply_push_results(&[mutation], &[receipt]).unwrap();
+    }
+
+    // The row for our seq=3 move is already at the newer, remotely cancelled version.
+    let mut cancelled = appt_change(3, A1, 3);
+    cancelled.data.as_mut().unwrap()["status"] = json!("cancelled");
+    origin
+        .apply_sync_page(&[cancelled.clone()], 3, true, false, &[], None)
+        .unwrap();
+    let notices = origin.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1, CalendarNoticeKind::Cancelled);
+    let cursor = notices[0].0;
+    cancelled.seq = 4;
+
+    // A checkout re-announcement can surface the same version as our seq=5 move.
+    let mut moved = appt_change(6, A2, 2);
+    moved.data.as_mut().unwrap()["staffId"] = json!("new-professional");
+    origin
+        .apply_sync_page(&[cancelled, moved], 6, true, true, &[], None)
+        .unwrap();
+    assert!(origin.booking_notices_after(cursor).unwrap().is_empty());
+}
+
+#[test]
+fn a_reassigned_visit_notifies_the_receiving_professionals_scoped_replica() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.set_meta("calendar_scope", "st1").unwrap();
+    store
+        .apply_sync_page(&[appt_change(1, A1, 2)], 1, false, true, &[], None)
+        .unwrap();
+    assert!(store.booking_notices_after(0).unwrap().is_empty());
+    store
+        .apply_sync_page(&[appt_change(2, A2, 2)], 2, true, true, &[], None)
+        .unwrap();
+    let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].1, CalendarNoticeKind::New);
+    assert_eq!(notices[0].2.id, A2);
+}
+
+#[test]
+fn a_newer_projection_compares_against_the_acknowledged_local_move() {
+    for moved_back in [false, true] {
+        let mut store = Store::open_in_memory().unwrap();
+        store.apply_page(&[appt_change(1, A1, 1)], 1).unwrap();
+        let moved_to = "2026-03-09T12:15:00.000Z";
+        let mutation = store
+            .enqueue(
+                "appointment.reschedule",
+                A1,
+                json!({
+                    "id": A1, "version": 1, "startsAt": moved_to,
+                }),
+            )
+            .unwrap();
+        let receipt = MutationResult::Applied {
+            mutation_id: mutation.mutation_id.clone(),
+            applied_seq: Some(2),
+            replayed: false,
+        };
+        store.apply_push_results(&[mutation], &[receipt]).unwrap();
+
+        let mut latest = appt_change(2, A1, 3);
+        if !moved_back {
+            let data = latest.data.as_mut().unwrap();
+            data["startsAt"] = json!(moved_to);
+            data["endsAt"] = json!("2026-03-09T13:15:00.000Z");
+            data["notes"] = json!("Only the note changed after the move");
+        }
+        store
+            .apply_sync_page(&[latest], 3, true, true, &[], None)
+            .unwrap();
+        let notices = store.booking_notices_after(0).unwrap();
+        if moved_back {
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].1, CalendarNoticeKind::Rescheduled);
+        } else {
+            assert!(notices.is_empty());
+        }
+    }
+}
+
+#[test]
+fn a_remote_change_before_the_first_pull_of_a_local_booking_still_notifies() {
+    for (status, kind) in [
+        ("booked", CalendarNoticeKind::Rescheduled),
+        ("cancelled", CalendarNoticeKind::Cancelled),
+    ] {
+        let mut store = Store::open_in_memory().unwrap();
+        let local = store
+            .enqueue(
+                "appointment.create",
+                A1,
+                json!({
+                    "id": A1, "staffId": "st1", "startsAt": "2026-03-09T11:00:00Z",
+                }),
+            )
+            .unwrap();
+        store
+            .apply_push_results(std::slice::from_ref(&local), &[applied(&local.mutation_id)])
+            .unwrap();
+        let mut current = appt_change(1, A1, 2);
+        current.data.as_mut().unwrap()["status"] = json!(status);
+        store
+            .apply_sync_page(&[current], 2, true, true, &[], None)
+            .unwrap();
+        let notices = store.booking_notices_after(0).unwrap();
+        assert_eq!((notices[0].1, notices[0].2.id.as_str()), (kind, A1));
+    }
 }
 
 #[test]
