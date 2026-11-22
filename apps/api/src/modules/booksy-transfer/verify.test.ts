@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createTestDatabase, type TestDatabase } from "@sob/db/testing";
 import { sql } from "drizzle-orm";
+import { headSeq } from "../sync/pull";
 import { transferFixture } from "./fixtures";
 import { planBooksyTransfer } from "./plan";
 import { applyBooksyRehearsal } from "./rehearsal";
+import { rehearseRecoveredReplica } from "./replica-check";
 import { type BooksyArchiveManifest, stageBooksyArchive } from "./stage";
 import { archiveDocument, privateWriteVerified } from "./vault";
 import { verifyBooksyProjection, verifyBooksyRehearsal } from "./verify";
@@ -135,6 +137,30 @@ test("detects changed frozen service fields and retained document independently"
   await expect(verifyBooksyRehearsal(t.db, root, manifest, input)).rejects.toThrow(
     "retained import document",
   );
+});
+
+test("checks restored visit groups and ordered frozen services in the desktop calendar feed", async () => {
+  const originalHead = await headSeq(t.db);
+  expect(originalHead).toBeGreaterThan(0);
+  await t.db.execute(
+    sql`update appointment set status='completed', visit_group_id=${Bun.randomUUIDv7()}::uuid`,
+  );
+  await t.db.execute(sql`insert into appointment_service
+    (id, appointment_id, position, name, duration_minutes, buffer_minutes, price_cents, currency,
+      source_unpriced, reviewed_price_cents, price_type)
+    select ${Bun.randomUUIDv7()}::uuid, id, 1, 'Imported extra', 0, 0, 0, 'EUR', true, 725, 'hidden' from appointment`);
+  expect(
+    await rehearseRecoveredReplica(t.db, originalHead, { expectPaymentReannouncement: false }),
+  ).toMatchObject({
+    calendarLines: 1,
+    reannouncedCalendarLines: 1,
+    groupedCalendarLinesVerified: 1,
+    frozenServicesVerified: 2,
+  });
+  await t.db.execute(sql`update appointment_service set position=0 where position=1`);
+  await expect(
+    rehearseRecoveredReplica(t.db, originalHead, { expectPaymentReannouncement: false }),
+  ).rejects.toThrow("Recovered appointment has ambiguous frozen service order");
 });
 test("detects tampered parsed source metadata even if original archived bytes remain intact", async () => {
   await t.db.execute(sql`update booksy_rehearsal.raw_capture set document='{}'::jsonb`);

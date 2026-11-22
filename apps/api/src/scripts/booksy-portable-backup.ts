@@ -185,6 +185,7 @@ export function verifyPortableBooksyRehearsal(
     if (!proof.success) incompleteRehearsal();
     const { day, candidate, operationalCopy } = proof.data;
     const { application, replica, migrations } = operationalCopy;
+    const { groupedCalendarLinesVerified, frozenServicesVerified } = replica;
     if (
       (scope === "operational-write") !== Boolean(application.move) ||
       day.calendarLines > candidate.calendarLines ||
@@ -199,7 +200,11 @@ export function verifyPortableBooksyRehearsal(
       replica.reannouncedCalendarLines > replica.calendarLines ||
       replica.serviceIndicatorsVerified > candidate.frozenServices ||
       replica.serviceColorsVerified > candidate.services ||
-      replica.reannouncedServiceColors > replica.serviceColorsVerified
+      replica.reannouncedServiceColors > replica.serviceColorsVerified ||
+      (groupedCalendarLinesVerified === undefined) !== (frozenServicesVerified === undefined) ||
+      (groupedCalendarLinesVerified !== undefined &&
+        groupedCalendarLinesVerified !== candidate.calendarLines) ||
+      (frozenServicesVerified !== undefined && frozenServicesVerified !== candidate.frozenServices)
     )
       incompleteRehearsal();
     return {
@@ -207,6 +212,9 @@ export function verifyPortableBooksyRehearsal(
       rehearsal: scope,
       calendarLines: replica.calendarLines,
       dayCalendarLines: application.calendarLines,
+      ...(groupedCalendarLinesVerified !== undefined
+        ? { groupedCalendarLinesVerified, frozenServicesVerified }
+        : {}),
       ...(application.move ? { move: application.move } : {}),
     };
   }

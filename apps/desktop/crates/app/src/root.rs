@@ -4160,6 +4160,21 @@ impl Render for Root {
             window.appearance(),
             gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
         )));
+        #[cfg(target_os = "linux")]
+        let title_bar = crate::linux_window::client_title_bar(window, self.locale);
+        #[cfg(not(target_os = "linux"))]
+        let title_bar = None::<gpui::Div>;
+        #[cfg(target_os = "linux")]
+        let title_height = if title_bar.is_some() {
+            crate::linux_window::CLIENT_TITLE_HEIGHT
+        } else {
+            px(0.)
+        };
+        #[cfg(not(target_os = "linux"))]
+        let title_height = px(0.);
+        let viewport = window.viewport_size();
+        let content_viewport =
+            gpui::size(viewport.width, (viewport.height - title_height).max(px(0.)));
         let base = div()
             .flex_1()
             .w_full()
@@ -4176,96 +4191,96 @@ impl Render for Root {
                     let overlay = match &self.overlay {
                         Overlay::None => None,
                         Overlay::Cloud(desk) => {
-                            Some(self.render_web_management(desk, window.viewport_size(), cx))
+                            Some(self.render_web_management(desk, content_viewport, cx))
                         }
                         Overlay::SalonConfiguration(desk) => {
-                            Some(self.render_salon_configuration(desk, window.viewport_size(), cx))
+                            Some(self.render_salon_configuration(desk, content_viewport, cx))
                         }
                         Overlay::Whatsapp(desk) => {
-                            Some(self.render_whatsapp_desk(desk, window.viewport_size(), cx))
+                            Some(self.render_whatsapp_desk(desk, content_viewport, cx))
                         }
                         Overlay::EmailDelivery(desk) => {
-                            Some(self.render_email_delivery(desk, window.viewport_size(), cx))
+                            Some(self.render_email_delivery(desk, content_viewport, cx))
                         }
                         Overlay::Marketing(desk) => {
-                            Some(self.render_marketing(desk, window.viewport_size(), cx))
+                            Some(self.render_marketing(desk, content_viewport, cx))
                         }
                         Overlay::BookingPolicy(desk) => {
-                            Some(self.render_booking_policy(desk, window.viewport_size(), cx))
+                            Some(self.render_booking_policy(desk, content_viewport, cx))
                         }
                         Overlay::IntakeForms(desk) => {
-                            Some(self.render_intake_forms(desk, window.viewport_size(), cx))
+                            Some(self.render_intake_forms(desk, content_viewport, cx))
                         }
-                        Overlay::New(f) => Some(self.render_new(f, window.viewport_size(), cx)),
+                        Overlay::New(f) => Some(self.render_new(f, content_viewport, cx)),
                         Overlay::Slot(slot) => Some(self.render_slot_actions(slot, cx)),
                         Overlay::Details(d) => {
-                            Some(self.render_details(d, window.viewport_size().height, cx))
+                            Some(self.render_details(d, content_viewport.height, cx))
                         }
                         Overlay::Block(f) => Some(self.render_block_form(f, cx)),
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
                         Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
                         Overlay::Loyalty(desk) => {
-                            Some(self.render_loyalty(desk, window.viewport_size(), cx))
+                            Some(self.render_loyalty(desk, content_viewport, cx))
                         }
                         Overlay::WalkIn(sale) => {
-                            Some(self.render_walk_in(sale, window.viewport_size(), cx))
+                            Some(self.render_walk_in(sale, content_viewport, cx))
                         }
                         Overlay::WalkInReceipt(review) => Some(self.render_checkout(review, cx)),
                         Overlay::SalesHistory(history) => {
-                            Some(self.render_sales_history(history, window.viewport_size(), cx))
+                            Some(self.render_sales_history(history, content_viewport, cx))
                         }
                         Overlay::Unpaid(desk) => {
-                            Some(self.render_unpaid(desk, window.viewport_size(), cx))
+                            Some(self.render_unpaid(desk, content_viewport, cx))
                         }
                         Overlay::Inventory(desk) => {
-                            Some(self.render_inventory(desk, window.viewport_size(), cx))
+                            Some(self.render_inventory(desk, content_viewport, cx))
                         }
                         Overlay::Reports(desk) => {
-                            Some(self.render_reports(desk, window.viewport_size(), cx))
+                            Some(self.render_reports(desk, content_viewport, cx))
                         }
                         Overlay::Commissions(desk) => {
-                            Some(self.render_commissions(desk, window.viewport_size(), cx))
+                            Some(self.render_commissions(desk, content_viewport, cx))
                         }
                         Overlay::CalendarDate(picker) => {
-                            Some(self.render_calendar_date(picker, window.viewport_size(), cx))
+                            Some(self.render_calendar_date(picker, content_viewport, cx))
                         }
                         Overlay::TeamShifts(desk) => {
-                            Some(self.render_team_shifts(desk, window.viewport_size(), cx))
+                            Some(self.render_team_shifts(desk, content_viewport, cx))
                         }
                         Overlay::StaffPortraits(desk) => {
-                            Some(self.render_staff_portraits(desk, window.viewport_size(), cx))
+                            Some(self.render_staff_portraits(desk, content_viewport, cx))
                         }
                         Overlay::AccountRoles(desk) => {
-                            Some(self.render_account_roles(desk, window.viewport_size(), cx))
+                            Some(self.render_account_roles(desk, content_viewport, cx))
                         }
                         Overlay::StaffAccess(desk) => {
-                            Some(self.render_staff_access(desk, window.viewport_size(), cx))
+                            Some(self.render_staff_access(desk, content_viewport, cx))
                         }
                         Overlay::ServiceAssignments(desk) => {
-                            Some(self.render_service_assignments(desk, window.viewport_size(), cx))
+                            Some(self.render_service_assignments(desk, content_viewport, cx))
                         }
                         Overlay::ServiceCatalog(desk) => {
-                            Some(self.render_service_catalog(desk, window.viewport_size(), cx))
+                            Some(self.render_service_catalog(desk, content_viewport, cx))
                         }
-                        Overlay::ResourceRequirements(desk) => Some(
-                            self.render_resource_requirements(desk, window.viewport_size(), cx),
-                        ),
+                        Overlay::ResourceRequirements(desk) => {
+                            Some(self.render_resource_requirements(desk, content_viewport, cx))
+                        }
                         Overlay::ResourcePools(desk) => {
-                            Some(self.render_resource_pools(desk, window.viewport_size(), cx))
+                            Some(self.render_resource_pools(desk, content_viewport, cx))
                         }
                         Overlay::Combinations(desk) => {
-                            Some(self.render_combinations(desk, window.viewport_size(), cx))
+                            Some(self.render_combinations(desk, content_viewport, cx))
                         }
                         Overlay::Reviews(desk) => {
-                            Some(self.render_review_requests(desk, window.viewport_size(), cx))
+                            Some(self.render_review_requests(desk, content_viewport, cx))
                         }
                         Overlay::ReviewModeration(desk) => {
-                            Some(self.render_review_moderation(desk, window.viewport_size(), cx))
+                            Some(self.render_review_moderation(desk, content_viewport, cx))
                         }
                         Overlay::Waitlist(desk) => Some(self.render_waitlist(desk, cx)),
                         Overlay::Directory(directory) => {
-                            Some(self.render_directory(directory, window.viewport_size(), cx))
+                            Some(self.render_directory(directory, content_viewport, cx))
                         }
                         Overlay::Conflicts { editing, error } => {
                             Some(self.render_conflicts(editing, error, cx))
@@ -4280,7 +4295,7 @@ impl Render for Root {
                         .when(self.team_calendar_visible(), |frame| {
                             frame
                                 .child(self.render_overview_filter(cx))
-                                .child(self.render_team_calendar(window.viewport_size().width, cx))
+                                .child(self.render_team_calendar(content_viewport.width, cx))
                         })
                         .when(self.calendar_mode.is_overview(), |frame| {
                             frame
@@ -4296,13 +4311,13 @@ impl Render for Root {
                                             && !self.overview_staff.is_empty(),
                                         |frame| frame.child(self.render_overview_staff_filter(cx)),
                                     )
-                                    .child(self.render_calendar(window.viewport_size().height, cx))
+                                    .child(self.render_calendar(content_viewport.height, cx))
                             },
                         )
                         .when(!self.notices.is_empty(), |d| {
                             d.child(self.render_notices(cx))
                         })
-                        .children(self.render_slot_tooltip(window.viewport_size()))
+                        .children(self.render_slot_tooltip(viewport, title_height))
                         .children(overlay)
                 }
             }
@@ -4349,6 +4364,7 @@ impl Render for Root {
             .capture_any_mouse_up(cx.listener(|this, event: &gpui::MouseUpEvent, _, cx| {
                 this.finish_slot_drag(event, cx)
             }))
+            .children(title_bar)
             .child(content)
     }
 }
@@ -4754,7 +4770,7 @@ mod tests {
             assert!(matches!(&root.overlay, Overlay::Slot(slot)
                 if slot.staff_id == BEA && slot.start == 540 && slot.end == 600));
             assert!(
-                root.render_slot_tooltip(gpui::size(px(800.), px(600.)))
+                root.render_slot_tooltip(gpui::size(px(800.), px(600.)), px(0.))
                     .is_none()
             );
             assert!(outbox_kinds(root).is_empty());

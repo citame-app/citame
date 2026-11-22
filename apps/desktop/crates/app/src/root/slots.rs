@@ -168,6 +168,7 @@ impl Root {
     pub(super) fn render_slot_tooltip(
         &self,
         viewport: gpui::Size<gpui::Pixels>,
+        title_height: gpui::Pixels,
     ) -> Option<gpui::Div> {
         let drag = self.slot_drag.as_ref()?;
         let handle = &self.vertical_scroll.handle;
@@ -196,7 +197,7 @@ impl Root {
                 .absolute()
                 .debug_selector(|| "calendar-slot-tooltip".to_string())
                 .left(left.clamp(px(0.), max_left))
-                .top(top.clamp(min_top, max_top))
+                .top((top.clamp(min_top, max_top) - title_height).max(px(0.)))
                 .w(width)
                 .h(height)
                 .flex()

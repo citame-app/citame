@@ -2,13 +2,13 @@
 
 mod config;
 mod field;
+#[cfg(target_os = "linux")]
+mod linux_window;
 mod root;
 mod services;
 mod theme;
 
-use gpui::{
-    App, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size,
-};
+use gpui::{App, Bounds, TitlebarOptions, WindowBounds, WindowOptions, prelude::*, px, size};
 use sob_core::store::Store;
 
 fn check_installation() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,20 +52,24 @@ fn main() {
         return;
     }
     #[cfg(target_os = "linux")]
-    use_gnome_window_manager_decorations();
+    linux_window::prefer_native_gnome_decorations();
 
     let startup = std::time::Instant::now();
     let report_startup = std::env::var_os("SOB_STARTUP_TIMINGS").is_some();
     let config = config::Config::from_env();
-    Application::new().run(move |cx: &mut App| {
+    #[cfg(target_os = "linux")]
+    let application = linux_window::open_application();
+    #[cfg(not(target_os = "linux"))]
+    let application = gpui::Application::new();
+    application.run(move |cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
         let title = sob_core::i18n::t(config.locale, sob_core::i18n::Key::AppTitle);
-        cx.open_window(
+        let opened = cx.open_window(
             WindowOptions {
                 app_id: Some("app.citame.desktop".into()),
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 #[cfg(target_os = "linux")]
-                window_decorations: Some(gpui::WindowDecorations::Server),
+                window_decorations: Some(linux_window::requested_decorations()),
                 titlebar: Some(TitlebarOptions {
                     title: Some(title.into()),
                     ..Default::default()
@@ -84,8 +88,12 @@ fn main() {
                 }
                 root
             },
-        )
-        .expect("open the main window");
+        );
+        if let Err(error) = opened {
+            #[cfg(target_os = "linux")]
+            linux_window::retry_on_wayland();
+            panic!("open the main window: {error:#}");
+        }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
                 cx.quit();
@@ -94,34 +102,4 @@ fn main() {
         .detach();
         cx.activate(true);
     });
-}
-
-// GNOME's Wayland compositor expects applications to draw decorations. Use its XWayland
-// window manager for system title bars when both display backends are in the session.
-#[cfg(target_os = "linux")]
-fn use_gnome_window_manager_decorations() {
-    use std::os::unix::process::CommandExt;
-    use std::process::Command;
-
-    let has_display = |name| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-    if !(has_display("DISPLAY")
-        && (has_display("WAYLAND_DISPLAY") || has_display("WAYLAND_SOCKET")))
-    {
-        return;
-    }
-    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    if !desktop
-        .split(':')
-        .any(|name| name.eq_ignore_ascii_case("GNOME"))
-    {
-        return;
-    }
-    if let Ok(executable) = std::env::current_exe() {
-        let error = Command::new(executable)
-            .args(std::env::args_os().skip(1))
-            .env_remove("WAYLAND_DISPLAY")
-            .env_remove("WAYLAND_SOCKET")
-            .exec();
-        eprintln!("Citame could not start through XWayland: {error}");
-    }
 }
