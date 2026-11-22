@@ -244,6 +244,11 @@ fn overlay_calendar_outbox(
                     .iter()
                     .map(|s| s.duration_minutes + s.buffer_minutes)
                     .sum();
+                let client_id = str_of(p, "clientId").unwrap_or_default();
+                let client_name = match str_of(p, "_clientName") {
+                    Some(name) => Some(name),
+                    None => store.queued_client_display_name(&client_id)?,
+                };
                 map.insert(
                     e.entity_id.clone(),
                     Appointment {
@@ -251,8 +256,8 @@ fn overlay_calendar_outbox(
                         visit_group_id: None,
                         itinerary_id: None,
                         staff_id,
-                        client_id: str_of(p, "clientId").unwrap_or_default(),
-                        client_name: str_of(p, "_clientName"),
+                        client_id,
+                        client_name,
                         starts_at,
                         ends_at: starts_at + Duration::minutes(block),
                         status: AppointmentStatus::Booked,

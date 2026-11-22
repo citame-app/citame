@@ -1714,6 +1714,19 @@ impl Store {
         )?)
     }
 
+    pub(crate) fn queued_client_display_name(&self, id: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT json_extract(payload, '$.name') FROM outbox
+             WHERE entity_id = ?1 AND kind = 'client.create' ORDER BY seq DESC LIMIT 1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     pub(crate) fn conflicted_appointment_ids(&self) -> Result<HashSet<String>> {
         let mut stmt = self.conn.prepare(
             "SELECT entity_id FROM conflict WHERE kind GLOB 'appointment.*' AND resolved_at IS NULL"

@@ -978,6 +978,13 @@ fn an_accepted_booking_and_its_new_client_survive_reopening_before_pull() {
             .iter()
             .all(|(_, name)| name != "New client")
     );
+    // Upgraded replicas can have a booking queued before its display name was stored.
+    rusqlite::Connection::open(&file).unwrap().execute(
+        "UPDATE outbox SET payload = json_remove(payload, '$._clientName') WHERE entity_id = ?1",
+        [&id],
+    ).unwrap();
+    let legacy = day_view(&store, date).unwrap();
+    assert_eq!(column(&legacy, "Bea").items[0].client_name, "New client");
     store.set_meta("client_directory", "allowed").unwrap();
 
     store.apply_page(&[up(8, "client", &confirmed.client_id, json!({
