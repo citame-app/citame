@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
-import { type BusinessProfileChanges, desktopSalonSettingsSchema } from "@sob/contracts";
+import {
+  type BusinessProfileChanges,
+  desktopSalonSettingsSchema,
+  profileMediaSnapshotSchema,
+} from "@sob/contracts";
 import { clientPhotoFixture } from "../../api/test/client-photo-fixture";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
@@ -190,6 +194,30 @@ test("centre photos follow image publication and profile visibility", async ({ p
     if (!path) throw new Error("Published image URL missing");
     const url = new URL(path, fixture.baseURL).href;
     expect((await visitor.request.get(url)).status()).toBe(200);
+    await image.getByRole("button", { name: "Replace image", exact: true }).click();
+    await draft.getByLabel("Image file", { exact: true }).setInputFiles(file);
+    const mediaPath = "/api/admin/settings/profile/images";
+    const remote = profileMediaSnapshotSchema.parse(
+      await (await page.request.get(mediaPath)).json(),
+    );
+    const previous = remote.images.find((entry) => entry.alt === title);
+    if (!previous) throw new Error("Missing replacement target");
+    const removed = await page.request.put(mediaPath, {
+      headers: { Origin: fixture.baseURL },
+      data: {
+        generation: remote.generation,
+        expectedRevision: remote.revision,
+        action: { mode: "remove", id: previous.id },
+      },
+    });
+    expect(removed.status(), await removed.text()).toBe(200);
+    const saveDraft = draft.getByRole("button", { name: "Save image draft" });
+    if (await saveDraft.isEnabled()) await saveDraft.click();
+    await draft.getByRole("button", { name: "Keep draft and review the latest version" }).click();
+    await expect(saveDraft).toBeDisabled();
+    await draft.getByRole("button", { name: "Keep as new image" }).click();
+    await saveDraft.click();
+    await expect(image.getByText("Draft", { exact: true })).toBeVisible();
     await image.getByRole("button", { name: "Remove image", exact: true }).click();
     await page
       .getByRole("dialog", { name: "Remove image" })

@@ -98,6 +98,10 @@ export function ProfileMediaEditor() {
   const waiting = save.isPending || !online;
   const replaceExists =
     !draft?.replaceId || data.images.some((image) => image.id === draft.replaceId);
+  const canAdd =
+    draft &&
+    data.images.filter(({ kind }) => kind === draft.kind).length <
+      (draft.kind === "gallery" ? PROFILE_MEDIA_GALLERY_LIMIT : 1);
   return (
     <section className="max-w-2xl space-y-4" aria-labelledby="profile-images-heading">
       <h2 id="profile-images-heading" className="text-heading">
@@ -115,7 +119,7 @@ export function ProfileMediaEditor() {
           className="space-y-4 rounded-xl border border-line p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!stale && !conflict && !waiting && draft.file && draft.alt.trim())
+            if (!stale && !conflict && !waiting && replaceExists && draft.file && draft.alt.trim())
               save.mutate({ draft: { ...draft, file: draft.file, alt: draft.alt.trim() } });
           }}
         >
@@ -147,18 +151,39 @@ export function ProfileMediaEditor() {
           <div className="flex flex-wrap gap-2">
             <Button
               type="submit"
-              disabled={waiting || !!stale || conflict || !draft.file || !draft.alt.trim()}
+              disabled={
+                waiting || !!stale || conflict || !replaceExists || !draft.file || !draft.alt.trim()
+              }
             >
               {t("settings.media.save")}
             </Button>
-            {(stale || conflict) && replaceExists && (
+            {!replaceExists && <p role="status">{t("settings.media.missing")}</p>}
+            {!stale && !conflict && !replaceExists && canAdd && (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setDraft({ ...draft, replaceId: undefined });
+                }}
+              >
+                {t("settings.media.keepNew")}
+              </Button>
+            )}
+            {(stale || conflict) && (
               <Button
                 type="button"
                 variant="secondary"
                 disabled={waiting || query.isFetching}
-                onClick={() => {
-                  save.reset();
-                  setDraft({ ...draft, base: data });
+                onClick={async () => {
+                  try {
+                    const { data: latest } = await query.refetch({ throwOnError: true });
+                    if (latest) {
+                      save.reset();
+                      setDraft((current) => (current ? { ...current, base: latest } : null));
+                    }
+                  } catch {
+                    toast.error(t("settings.media.error"));
+                  }
                 }}
               >
                 {t("settings.media.review")}

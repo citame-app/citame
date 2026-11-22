@@ -91,7 +91,9 @@ test("profile images stay private until both the image and profile are published
   const published = profileMediaSnapshotSchema.parse(await (await save(draft, publication)).json());
   const current = published.images[0]?.version ?? "";
   expect(await profile()).toEqual({ profile: null });
-  expect((await get(null, url(publicMedia, current))).status).toBe(404);
+  const unpublished = await get(null, url(publicMedia, current));
+  expect(unpublished.status).toBe(404);
+  expect(unpublished.headers.get("Cache-Control")).toBe("private, no-store");
   const writeProfile = (revision: string, published: boolean) =>
     json(
       t.app,

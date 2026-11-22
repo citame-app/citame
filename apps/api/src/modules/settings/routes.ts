@@ -13,13 +13,14 @@ export function salonRoutes({ db }: Pick<AppDeps, "db">) {
     .get("/profile", async (c) =>
       c.json(await reviewPublicProfile(db), 200, { "Cache-Control": "no-store" }),
     )
-    .get("/profile/images/:id/:version", (c) =>
-      readProfileImage(
+    .get("/profile/images/:id/:version", (c) => {
+      c.header("Cache-Control", "private, no-store");
+      return readProfileImage(
         db,
         parseOrThrow(idSchema, c.req.param("id")),
         parseOrThrow(idSchema, c.req.param("version")),
         true,
-      ),
-    )
+      );
+    })
     .get("/", async (c) => c.json(toSalonResponse(await getSalonSettings(db))));
 }

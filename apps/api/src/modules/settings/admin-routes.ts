@@ -78,6 +78,7 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
       });
     })
     .get("/profile/images/:id/:version", (c) => {
+      c.header("Cache-Control", "private, no-store");
       requireRole(c.get("principal"), "owner");
       return readProfileImage(
         db,

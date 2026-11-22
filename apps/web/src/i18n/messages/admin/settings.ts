@@ -31,6 +31,8 @@ export const settingsEn = {
   "settings.media.error": "The image could not be saved. Check the file and try again.",
   "settings.media.conflict":
     "The profile or images changed. Review the latest version before saving.",
+  "settings.media.missing": "The previous image was removed.",
+  "settings.media.keepNew": "Keep as new image",
   "settings.media.review": "Keep draft and review the latest version",
   "settings.profile.description": "Short description",
   "settings.opening.title": "Opening hours",
@@ -129,6 +131,8 @@ export const settingsEsAR: Record<keyof typeof settingsEn, string> = {
   "settings.media.error": "No se pudo guardar la imagen. Revisa el archivo e inténtalo de nuevo.",
   "settings.media.conflict":
     "La ficha o sus imágenes cambiaron. Revisa la última versión antes de guardar.",
+  "settings.media.missing": "La imagen anterior se eliminó.",
+  "settings.media.keepNew": "Conservar como imagen nueva",
   "settings.media.review": "Conservar el borrador y revisar la versión actual",
   "settings.profile.description": "Descripción breve",
   "settings.opening.title": "Horario de apertura",

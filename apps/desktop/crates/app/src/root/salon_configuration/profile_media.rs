@@ -41,6 +41,34 @@ struct ImageDraft {
     base: ProfileImageSnapshot,
 }
 
+impl ImageDraft {
+    fn description<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
+        let alt = self.alt.read(cx).text().trim();
+        (!alt.is_empty() && alt.encode_utf16().count() <= 160 && !alt.chars().any(char::is_control))
+            .then_some(alt)
+    }
+
+    fn missing_replacement(&self, snapshot: Option<&ProfileImageSnapshot>) -> bool {
+        self.replace.is_some_and(|id| {
+            snapshot.is_none_or(|snapshot| !snapshot.images.iter().any(|image| image.id == id))
+        })
+    }
+}
+
+fn can_add_image(snapshot: &ProfileImageSnapshot, kind: ProfileImageKind) -> bool {
+    let count = snapshot
+        .images
+        .iter()
+        .filter(|image| image.kind == kind)
+        .count();
+    count
+        < if kind == ProfileImageKind::Gallery {
+            PROFILE_GALLERY_LIMIT
+        } else {
+            1
+        }
+}
+
 enum Request {
     Load,
     Review,
@@ -285,8 +313,10 @@ impl Root {
             return;
         };
         let Some(draft) = &media.draft else { return };
-        let alt = draft.alt.read(cx).text().trim();
-        if media.requires_review || alt.is_empty() || alt.encode_utf16().count() > 160 {
+        let Some(alt) = draft.description(cx) else {
+            return;
+        };
+        if media.requires_review || draft.missing_replacement(media.snapshot.as_ref()) {
             return;
         }
         let request = Request::Write(
@@ -332,12 +362,7 @@ impl Root {
                         .iter()
                         .filter(|row| row.kind == kind)
                         .collect();
-                    let can_add = images.len()
-                        < if kind == ProfileImageKind::Gallery {
-                            PROFILE_GALLERY_LIMIT
-                        } else {
-                            1
-                        };
+                    let can_add = can_add_image(snapshot, kind);
                     div()
                         .flex()
                         .flex_col()
@@ -398,8 +423,15 @@ impl Root {
                 }))
             })
             .when_some(media.draft.as_ref(), |view, draft| {
+                let missing = draft.missing_replacement(media.snapshot.as_ref());
                 let can_save =
-                    !draft.alt.read(cx).text().trim().is_empty() && !media.requires_review;
+                    draft.description(cx).is_some() && !media.requires_review && !missing;
+                let can_keep_new = missing
+                    && !media.requires_review
+                    && media
+                        .snapshot
+                        .as_ref()
+                        .is_some_and(|snapshot| can_add_image(snapshot, draft.kind));
                 view.child(
                     div()
                         .flex()
@@ -407,7 +439,11 @@ impl Root {
                         .gap_2()
                         .child(self.t(label(draft.kind)))
                         .child(self.t(Key::ProfileMediaDescription))
-                        .child(draft.alt.clone())
+                        .when(!media.busy, |view| view.child(draft.alt.clone()))
+                        .when(media.busy, |view| {
+                            view.child(draft.alt.read(cx).text().to_owned())
+                        })
+                        .when(missing, |view| view.child(self.t(Key::ProfileMediaMissing)))
                         .when(!media.busy, |view| {
                             view.child(
                                 div()
@@ -431,6 +467,22 @@ impl Root {
                                             Kind::Ghost,
                                             cx.listener(|root, _, _, cx| {
                                                 root.request_profile_images(Request::Review, cx)
+                                            }),
+                                        ))
+                                    })
+                                    .when(can_keep_new, |actions| {
+                                        actions.child(self.button(
+                                            "profile-image-keep-new",
+                                            self.t(Key::ProfileMediaKeepNew),
+                                            Kind::Ghost,
+                                            cx.listener(|root, _, _, cx| {
+                                                if let Some(draft) = root
+                                                    .profile_media()
+                                                    .and_then(|media| media.draft.as_mut())
+                                                {
+                                                    draft.replace = None;
+                                                }
+                                                cx.notify();
                                             }),
                                         ))
                                     })
@@ -508,18 +560,21 @@ impl Root {
                                 }),
                             ))
                         })
-                        .child(self.button(
-                            "profile-image-back",
-                            self.t(Key::Back),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| {
-                                if let Some(media) = root.profile_media() {
-                                    media.open = false;
-                                    media.preview = None;
-                                }
-                                cx.notify();
-                            }),
-                        )),
+                        .child(
+                            self.button(
+                                "profile-image-back",
+                                self.t(Key::Back),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| {
+                                    if let Some(media) = root.profile_media() {
+                                        media.open = false;
+                                        media.preview = None;
+                                    }
+                                    cx.notify();
+                                }),
+                            )
+                            .debug_selector(|| "profile-image-back".to_string()),
+                        ),
                 )
             })
     }
@@ -592,5 +647,51 @@ impl Root {
                 Kind::Ghost,
                 cx.listener(move |root, _, _, cx| root.choose_profile_image(kind, Some(id), cx)),
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn twelve_centre_photos_can_scroll_to_the_bottom_of_a_short_window(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::super::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(640.), px(420.)));
+        root.update(cx, |root, cx| {
+            root.status.connectivity = Connectivity::Offline;
+            root.open_salon_configuration(cx);
+            root.open_profile_images(cx);
+            let media = root.profile_media().expect("profile image panel");
+            media.snapshot = Some(ProfileImageSnapshot {
+                generation: "initial".into(),
+                revision: "2026-11-22T00:00:00Z".parse().unwrap(),
+                images: (0..PROFILE_GALLERY_LIMIT)
+                    .map(|index| ProfileImage {
+                        id: Uuid::from_u128(index as u128 + 1),
+                        version: Uuid::from_u128(index as u128 + 100),
+                        alt: format!("Centre photo {index}"),
+                        kind: ProfileImageKind::Gallery,
+                        published: false,
+                    })
+                    .collect(),
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let scroll = cx.debug_bounds("profile-image-scroll").unwrap();
+        let before = cx.debug_bounds("profile-image-back").unwrap();
+        assert!(before.bottom() > scroll.bottom());
+        cx.simulate_event(gpui::ScrollWheelEvent {
+            position: scroll.center(),
+            delta: gpui::ScrollDelta::Lines(gpui::point(0., -100.)),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("profile-image-back").unwrap().bottom() <= scroll.bottom());
     }
 }

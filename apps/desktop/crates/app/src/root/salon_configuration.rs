@@ -386,7 +386,15 @@ impl Root {
     ) -> gpui::Div {
         if desk.media.open && !desk.confirm_close {
             return self.modal_with_height(
-                self.render_profile_images(&desk.media, cx),
+                div().flex().min_h_0().child(
+                    div()
+                        .id("profile-image-scroll")
+                        .debug_selector(|| "profile-image-scroll".to_string())
+                        .min_h_0()
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .child(self.render_profile_images(&desk.media, cx)),
+                ),
                 (viewport.width - px(32.)).max(px(220.)).min(px(610.)),
                 (viewport.height - px(28.)).max(px(140.)),
                 Some(cx),
