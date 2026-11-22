@@ -247,6 +247,12 @@ impl Root {
                     Kind::Ghost,
                     cx.listener(|root, _, _, cx| root.open_sales_history(cx)),
                 ))
+                .child(self.button(
+                    "cash-gift-cards",
+                    self.t(Key::GiftCards),
+                    Kind::Ghost,
+                    cx.listener(|root, _, _, cx| root.open_gift_cards(cx)),
+                ))
             },
         );
         let body = match desk {

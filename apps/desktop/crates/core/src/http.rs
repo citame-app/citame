@@ -69,6 +69,7 @@ mod booking_links;
 mod checkout_rewards;
 pub mod client_controls;
 pub mod email_delivery;
+pub mod gift_cards;
 mod inventory_documents;
 mod inventory_numbering;
 pub use inventory_numbering::{

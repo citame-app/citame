@@ -1,5 +1,6 @@
 import {
   type GiftCard,
+  giftCardCodeSchema,
   giftCardStatusSchema,
   permissionsFor,
   type StaffAccessPreset,
@@ -34,7 +35,8 @@ export function GiftCardsView({
   const { t, locale } = useI18n();
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState<GiftCard["status"] | undefined>();
-  const [search, setSearch] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const search = /^SOB(?:[ -]|[A-F0-9]+$)/i.test(searchInput.trim()) ? "" : searchInput;
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const cards = useQuery({
@@ -88,14 +90,11 @@ export function GiftCardsView({
       <GiftBalanceChecker mode={mode} />
       <TextField
         label={t("gift.search")}
-        value={search}
+        value={searchInput}
         onChange={(event) => {
           const value = event.target.value;
-          setSearch(
-            /^SOB[ -]/i.test(value) && value.replace(/[ -]/g, "").length >= 27
-              ? value.replace(/[ -]/g, "").slice(-4)
-              : value,
-          );
+          const code = giftCardCodeSchema.safeParse(value);
+          setSearchInput(code.success ? code.data.slice(-4) : value);
           setPage(1);
         }}
       />

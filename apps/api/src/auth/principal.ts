@@ -140,6 +140,11 @@ export function requireAuth(
             path,
           )) ||
         (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
+      const giftCardMethod = /\/(?:code|check|reissue)$/.test(path)
+        ? method === "POST"
+        : path.endsWith("/expiry")
+          ? method === "PATCH"
+          : method === "GET" || (path === "/admin/gift-cards" && method === "POST");
       const rewardsAllowed =
         path === "/admin/rewards/stamps/program" || path === "/admin/rewards/policy/reviewed"
           ? method === "GET" || method === "PUT"
@@ -166,6 +171,8 @@ export function requireAuth(
           method !== "POST") ||
         (path.startsWith("/admin/marketing/") &&
           (method === "GET" ? /\/(?:queue|cancel|test-email)$/.test(path) : !campaignMutation)) ||
+        ((path === "/admin/gift-cards" || path.startsWith("/admin/gift-cards/")) &&
+          !giftCardMethod) ||
         (method !== "POST" &&
           [
             "/appointments/desktop-booking",

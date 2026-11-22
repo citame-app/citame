@@ -465,6 +465,7 @@ impl Root {
         match overlay {
             Overlay::Details(details) => details.checkout.as_mut(),
             Overlay::WalkInReceipt(review) => Some(review),
+            Overlay::GiftCards(desk) => desk.receipt.as_mut(),
             _ => overlay.sales_history_mut()?.receipt.as_mut(),
         }
     }
@@ -477,7 +478,12 @@ impl Root {
         let history = self.overlay.sales_history().is_some();
         let body = div().flex().flex_col().gap_3().child(
             div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if history || matches!(self.overlay, Overlay::WalkInReceipt(_)) {
+                if history
+                    || matches!(
+                        self.overlay,
+                        Overlay::WalkInReceipt(_) | Overlay::GiftCards(_)
+                    )
+                {
                     Key::SaleCreateReceipt
                 } else {
                     Key::OpenAppointmentCheckout

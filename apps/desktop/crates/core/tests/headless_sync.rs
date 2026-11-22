@@ -4400,22 +4400,96 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
 #[ignore = "requires smoke stack"]
 fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     use sob_core::billing::{SaleItem, WalkInSale};
+    use sob_core::http::gift_cards::{GiftPurchase, GiftStatus};
 
-    let browser = Device::sign_in();
-    let gift = browser.rest_post(
-        "/admin/gift-cards",
-        json!({"amountCents": 2000, "idempotencyKey": uuid::Uuid::now_v7()}),
-    );
-    let gift_id = gift["card"]["id"].as_str().unwrap();
-    let purchase_id = gift["checkout"]["id"].as_str().unwrap();
-    browser.rest_post(
-        &format!("/admin/commerce/checkouts/{purchase_id}/payments"),
-        json!({"method":"external_card","amountCents":2000,"idempotencyKey":uuid::Uuid::now_v7()}),
-    );
-    let revealed = browser.rest_post(&format!("/admin/gift-cards/{gift_id}/code"), json!({}));
-    let code = revealed["code"].as_str().unwrap();
-    let attempt = PaymentAttempt::with_gift_card(1200, &code.to_lowercase()).unwrap();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let generation = browser.store.verified_reviewed_generation().unwrap();
     let device = proxy_device();
+    let purchase = GiftPurchase {
+        amount_cents: 2000,
+        label: format!("Synthetic native gift {}", uuid::Uuid::now_v7()),
+        buyer_client_id: None,
+        expires_at: None,
+        idempotency_key: uuid::Uuid::now_v7(),
+        generation,
+    };
+    let mut wrong_generation = purchase.clone();
+    wrong_generation.generation = "restored-history".into();
+    assert!(matches!(
+        device.transport.purchase_gift_card(&wrong_generation),
+        Err(sob_core::sync::TransportError::ReplicaGenerationChanged)
+    ));
+    let gift = device.transport.purchase_gift_card(&purchase).unwrap();
+    let gift_id = gift.card.id;
+    assert!(gift.card.balance.status == GiftStatus::Pending);
+    let repeated = device.transport.purchase_gift_card(&purchase).unwrap();
+    assert_eq!(repeated.card.id, gift_id);
+    assert_eq!(repeated.checkout.id, gift.checkout.id);
+    let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
+    assert_eq!(cloud["checkoutId"], gift.checkout.id);
+    let paid_gift = device
+        .transport
+        .record_checkout_payment(
+            &gift.checkout,
+            &PaymentAttempt::new(ReceiptTender::ExternalCard, 2000),
+        )
+        .unwrap();
+    assert_eq!(paid_gift.status, "paid");
+    let listed = device
+        .transport
+        .gift_cards(1, &purchase.label, Some(GiftStatus::Active))
+        .unwrap();
+    assert_eq!(listed.pagination.total, 1);
+    assert_eq!(listed.cards[0].id, gift_id);
+    assert!(device.transport.can_manage_gift_cards().unwrap());
+    let revealed = device.transport.reveal_gift_card(gift_id).unwrap();
+    let expiry = chrono::Utc::now() + chrono::Duration::days(2);
+    let revised = device
+        .transport
+        .change_gift_card_expiry(
+            gift_id,
+            revealed.card.version,
+            "Synthetic new expiry",
+            Some(expiry),
+            &purchase.generation,
+        )
+        .unwrap();
+    assert_eq!(
+        revised.balance.expires_at.unwrap().timestamp_millis(),
+        expiry.timestamp_millis()
+    );
+    assert!(
+        device
+            .transport
+            .reissue_gift_card(
+                gift_id,
+                revealed.card.version,
+                "Synthetic stale reissue",
+                &purchase.generation,
+            )
+            .is_err()
+    );
+    device
+        .transport
+        .reissue_gift_card(
+            gift_id,
+            revised.version,
+            "Synthetic reviewed reissue",
+            &purchase.generation,
+        )
+        .unwrap();
+    assert!(device.transport.check_gift_card(&revealed.code).is_err());
+    let recovered = device.transport.reveal_gift_card(gift_id).unwrap();
+    assert_eq!(
+        device
+            .transport
+            .check_gift_card(&recovered.code)
+            .unwrap()
+            .available_cents,
+        2000
+    );
+    let attempt = PaymentAttempt::with_gift_card(1200, &recovered.code.to_lowercase()).unwrap();
     let receipt = device
         .transport
         .create_walk_in_sale(&WalkInSale {
@@ -4482,6 +4556,10 @@ fn native_gift_card_redeems_and_refunds_once_through_the_proxy() {
     );
     let cloud = browser.rest_get(&format!("/admin/gift-cards/{gift_id}"));
     assert_eq!(cloud["balanceCents"], 1100);
+    let native = device.transport.gift_card(gift_id).unwrap();
+    assert_eq!(native.balance.available_cents, 1100);
+    let history = device.transport.gift_card_movements(gift_id, 1).unwrap();
+    assert_eq!(history.pagination.total, 3);
 }
 
 #[test]
