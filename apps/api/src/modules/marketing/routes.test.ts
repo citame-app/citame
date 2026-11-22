@@ -174,12 +174,10 @@ test("booking invitations queue only the selected contacts with consent", async 
   });
   const path = `/admin/marketing/campaigns/${campaign.id}`;
   const reviewed = await preview(campaign);
-  expect(reviewed).toMatchObject({
-    eligible: 12,
-    excluded: 1,
-    sample: expect.arrayContaining([expect.objectContaining({ clientId: client.clientId })]),
-  });
-  expect(reviewed.sample).toHaveLength(reviewed.eligible);
+  expect(reviewed.eligible).toBe(12);
+  expect(reviewed.excluded).toBe(1);
+  expect(reviewed.sample).toHaveLength(12);
+  expect(reviewed.sample.some(({ clientId }) => clientId === client.clientId)).toBe(true);
   const broken = await create({
     emailBody: "This draft is missing the link",
     audience: { selectedClientIds: [client.clientId] },
