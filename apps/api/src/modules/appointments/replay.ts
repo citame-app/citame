@@ -49,6 +49,8 @@ export async function findAppointmentReplay(
         created.metadata.intakeConfirmed ||
         intakeBookingIdentity(request) ||
         created.metadata.promotionConfirmed ||
+        created.metadata.peakPriceConfirmed ||
+        request.peakPriceReview ||
         request.promotion
       )
         throw new DomainError(

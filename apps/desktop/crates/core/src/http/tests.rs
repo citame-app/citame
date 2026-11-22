@@ -1194,7 +1194,7 @@ fn pull_sends_cursor_and_limit_and_parses_the_page() {
     assert_eq!((p.next_cursor, p.has_more, p.head_seq), (3, true, 9));
     assert_eq!(p.changes[0].op, "delete");
     assert!(seen.lock().unwrap()[0].starts_with(
-        "GET /sync/pull?since=2&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1 HTTP/1.1"
+        "GET /sync/pull?since=2&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1 HTTP/1.1"
     ));
 }
 
@@ -1226,7 +1226,7 @@ fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
         .enqueue("client.create", "local", json!({"id":"local","name":"Ana"}))
         .unwrap();
     let page = r#"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42}"#;
-    let repaired = r##"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42,"catalogColors":{"s1":"#AC3456"},"resourcePools":[],"combinations":[],"viewerEditCatalogue":true}"##;
+    let repaired = r##"{"changes":[],"nextCursor":42,"hasMore":false,"headSeq":42,"catalogColors":{"s1":"#AC3456"},"resourcePools":[],"combinations":[],"peakPrices":{"version":3,"timezone":"Europe/Madrid","rules":[]},"viewerEditCatalogue":true}"##;
     let (base, seen) = serve(
         [page, repaired, page]
             .map(|body| http("200 OK", &["Content-Type: application/json"], body))
@@ -1248,16 +1248,17 @@ fn an_upgraded_replica_recovers_service_colors_without_rewinding_its_cursor() {
             .pools
             .is_empty()
     );
+    assert_eq!(store.peak_price_snapshot().unwrap().unwrap().version, 3);
     pull_all(&mut store, &transport).unwrap();
     let requests = seen.lock().unwrap();
     assert!(requests[0].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full&peakPrices=full "
     ));
     assert!(requests[1].starts_with(
-        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full "
+        "GET /sync/pull?since=42&limit=200&catalogColors=1&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=full&combinations=full&peakPrices=full "
     ));
     assert!(requests[2].starts_with(
-        "GET /sync/pull?since=42&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=delta&combinations=delta "
+        "GET /sync/pull?since=42&limit=200&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1&resourcePools=delta&combinations=delta&peakPrices=delta "
     ));
 }
 

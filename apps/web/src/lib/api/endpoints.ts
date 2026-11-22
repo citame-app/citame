@@ -57,7 +57,10 @@ import {
   oauthConnectionsSchema,
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
+  type PeakPricePolicy,
   type ProfileMediaWrite,
+  peakPricePolicySchema,
+  peakPriceQuoteSchema,
   profileMediaSnapshotSchema,
   publicBusinessProfileSchema,
   type ReportOutcomesQuery,
@@ -197,6 +200,16 @@ export function createEndpoints(client: ApiClient) {
           signal,
         },
       ),
+    peakPrice: (serviceIds: string[], startsAt: string, signal?: AbortSignal, team = false) =>
+      client.get(
+        team ? "/appointments/peak-price" : "/availability/peak-price",
+        peakPriceQuoteSchema,
+        {
+          query: { serviceIds: serviceIds.join(","), startsAt },
+          signal,
+          cache: "no-store",
+        },
+      ),
     me: (signal?: AbortSignal) => client.get("/me", meResponseSchema, { signal }),
     oauthConnections: {
       list: () => client.get("/me/connections", oauthConnectionsSchema),
@@ -233,6 +246,7 @@ export function createEndpoints(client: ApiClient) {
             portfolio: "1",
             intakeViews: "1",
             bookingPolicy: "1",
+            peakPriceViews: "1",
             emailDelivery: "1",
             marketingViews: "1",
             promotionViews: "1",
@@ -354,6 +368,11 @@ export function createEndpoints(client: ApiClient) {
         update: (id: string, request: UpdateClientRequest) =>
           client.patch(`/admin/clients/${id}`, request, adminClientSchema),
         remove: (id: string) => client.delete(`/admin/clients/${id}`, deletedAck),
+      },
+      peakPrices: {
+        get: () => client.get("/admin/peak-prices", peakPricePolicySchema, { cache: "no-store" }),
+        save: (policy: PeakPricePolicy) =>
+          client.put("/admin/peak-prices", policy, peakPricePolicySchema),
       },
       services: {
         configure: (id: string, request: ServiceConfiguration) =>

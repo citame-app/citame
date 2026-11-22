@@ -1722,3 +1722,62 @@ fn changed_reviewed_terms_cannot_be_accepted_by_merely_retrying_at_another_time(
     resolve_conflict(&mut s, &entry.mutation_id, Resolution::Cancel).unwrap();
     assert!(effective_appointment(&s, &id).unwrap().is_none());
 }
+
+#[test]
+fn offline_peak_quote_matches_the_api_encoding_and_fences_the_pending_booking() {
+    let mut replica = seeded();
+    replica
+        .apply_page(
+            &[up(
+                8,
+                "service",
+                CUT,
+                json!({
+                    "id": CUT, "name": "Haircut", "description": null, "durationMinutes": 40,
+                    "bufferMinutes": 5, "priceCents": 10000, "currency": "ARS", "active": true,
+                    "updatedAt": T0, "quoteHash": "a".repeat(64)
+                }),
+            )],
+            8,
+        )
+        .unwrap();
+    let snapshot = crate::booking::PeakPriceSnapshot {
+        version: 11,
+        timezone: "America/Argentina/Buenos_Aires".into(),
+        rules: vec![crate::booking::PeakPriceRule {
+            increase_basis_points: 1500,
+            service_ids: vec![CUT.into()],
+            ..Default::default()
+        }],
+    };
+    replica
+        .set_meta(
+            "peak_price_snapshot",
+            &serde_json::to_string(&snapshot).unwrap(),
+        )
+        .unwrap();
+    let new = || NewAppointment {
+        service_ids: vec![CUT.into()],
+        ..new_appt("2026-03-09T12:00:00Z")
+    };
+    let services = replica.services().unwrap();
+    let quote = snapshot
+        .quote(
+            new().starts_at,
+            services.iter().filter(|service| service.id == CUT),
+        )
+        .unwrap();
+    let approved = "008d08cb267034e5fa2de671a6c8848a9ff1ca9ad6411c3044aeb91b411cea96";
+    assert_eq!(quote.review.as_deref(), Some(approved));
+    assert_eq!(quote.services[0].price_cents, 11500);
+    assert!(matches!(
+        create_appointment(&mut replica, new()),
+        Err(crate::error::CoreError::PeakPriceReviewChanged)
+    ));
+    assert_eq!(replica.outbox_len().unwrap(), 0);
+    let id = create_appointment_reviewed(&mut replica, new(), Some(approved)).unwrap();
+    let queued = replica.outbox(10).unwrap().remove(0);
+    assert_eq!(queued.to_wire().payload["peakPriceReview"], approved);
+    let row = effective_appointment(&replica, &id).unwrap().unwrap();
+    assert_eq!(row.services[0].price_cents, 11500);
+}

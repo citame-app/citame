@@ -8,6 +8,7 @@ use sob_core::sync::TransportError;
 
 mod draft;
 mod links;
+mod peak_prices;
 mod promotions;
 use draft::{Editor, EditorMode};
 use links::LinkDesk;
@@ -30,6 +31,7 @@ pub(super) struct Desk {
     editor: Option<Editor>,
     links: Option<LinkDesk>,
     promotions: Option<PromoDesk>,
+    peak_prices: Option<peak_prices::PeakPriceDesk>,
     choose_template: bool,
     uncertain: bool,
     confirm_exit: bool,
@@ -201,6 +203,7 @@ impl Root {
             editor: None,
             links: None,
             promotions: None,
+            peak_prices: None,
             choose_template: false,
             search: cx.new(|cx| TextField::new(search, false, cx)),
             applied_search: String::new(),
@@ -225,6 +228,10 @@ impl Root {
     }
 
     pub(super) fn refresh_marketing(&mut self, reconnected: bool, cx: &mut Context<Self>) {
+        if matches!(&self.overlay, Overlay::Marketing(desk) if desk.peak_prices.is_some()) {
+            self.refresh_peak_prices(reconnected, cx);
+            return;
+        }
         if matches!(&self.overlay, Overlay::Marketing(desk) if desk.promotions.is_some()) {
             self.refresh_promotions(reconnected, cx);
             return;
@@ -262,6 +269,10 @@ impl Root {
             return;
         };
         if desk.busy {
+            return;
+        }
+        if desk.peak_prices.is_some() {
+            self.back_from_peak_prices(cx);
             return;
         }
         if desk.promotions.is_some() {
@@ -662,7 +673,9 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let ready = self.status.connectivity == Connectivity::Online && !desk.busy;
-        let body = if let Some(promotions) = &desk.promotions {
+        let body = if let Some(peak) = &desk.peak_prices {
+            self.render_peak_prices(peak, ready, cx)
+        } else if let Some(promotions) = &desk.promotions {
             self.render_promotions(promotions, ready, cx)
         } else if let Some(links) = &desk.links {
             self.render_booking_links(links, ready, cx)
@@ -676,6 +689,21 @@ impl Root {
             self.render_campaign_list(desk, ready, cx)
         };
         let footer = div().flex().flex_wrap().gap_2().when(!desk.busy, |row| {
+            if let Some(peak) = &desk.peak_prices {
+                return row.when(!peak.busy, |row| {
+                    row.child(self.marketing_button(
+                        "back-from-peak-prices",
+                        if peak.confirm_exit {
+                            Key::MarketingDiscardDraft
+                        } else {
+                            Key::Back
+                        },
+                        Kind::Ghost,
+                        Root::back_from_peak_prices,
+                        cx,
+                    ))
+                });
+            }
             if let Some(promotions) = &desk.promotions {
                 return row.when_some(self.promotion_back_key(promotions), |row, label| {
                     row.child(
@@ -805,6 +833,15 @@ impl Root {
                             )
                             .debug_selector(|| "marketing-promotions".to_owned()),
                         )
+                        .when(self.svc.store.cached_catalogue_access(), |row| {
+                            row.child(self.marketing_button(
+                                "marketing-peak-prices",
+                                Key::PeakPriceTitle,
+                                Kind::Ghost,
+                                Root::open_peak_prices,
+                                cx,
+                            ))
+                        })
                         .child(
                             self.marketing_button(
                                 "marketing-loyalty",

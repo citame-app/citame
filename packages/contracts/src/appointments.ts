@@ -11,6 +11,7 @@ import {
   syncGenerationSchema,
 } from "./common";
 import { intakeBookingShape } from "./intake";
+import { peakPriceReviewSchema } from "./peak-prices";
 import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema, workWindowSchema } from "./staff-capacity";
 
@@ -25,6 +26,7 @@ export const appointmentServiceSchema = z
     bufferMinutes: z.number().int().min(0),
     processing: processingTimeSchema.optional(),
     priceCents: z.number().int().min(0),
+    peakSurchargeCents: z.number().int().positive().optional(),
     /** Imported rows may explicitly lack a quoted amount; never treat these as free. */
     sourceUnpriced: z.literal(true).optional(),
     priceDisplayLabel: z.string().optional(),
@@ -117,6 +119,7 @@ export const createAppointmentBaseSchema = z.object({
   protectionAcceptedTotalCents: z.number().int().min(0).max(999999999).optional(),
   protectionAcceptedDepositCents: z.number().int().min(0).max(999999999).optional(),
   priceTermsAccepted: z.boolean().optional(),
+  peakPriceReview: peakPriceReviewSchema.optional(),
   protectionWaiverReason: z.string().trim().min(8).max(300).optional(),
   promotion: bookingPromotionReviewSchema.optional(),
 });

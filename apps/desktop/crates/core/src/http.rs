@@ -2037,6 +2037,47 @@ impl HttpTransport {
         Ok(viewer.user.role == "owner" || viewer.access_preset.as_deref() == Some("manager"))
     }
 
+    pub fn peak_price_policy(&self) -> Result<crate::booking::PeakPricePolicy, TransportError> {
+        read_response(self.get(&self.agent, "/admin/peak-prices", None)?, false)
+    }
+
+    pub fn write_peak_price_policy(
+        &self,
+        policy: &crate::booking::PeakPricePolicy,
+    ) -> Result<crate::booking::PeakPricePolicy, PolicyWriteError> {
+        let response = self.send_put_json("/admin/peak-prices", policy)?;
+        read_response_with(response, |status, retry_after, body| {
+            let parsed = serde_json::from_str::<serde_json::Value>(body).ok();
+            let code = parsed
+                .as_ref()
+                .and_then(|value| value.pointer("/error/code"))
+                .and_then(|value| value.as_str());
+            if (status, code) == (409, Some("version_conflict"))
+                || (status, code) == (409, Some("sync_generation_changed"))
+            {
+                return PolicyWriteError::Conflict;
+            }
+            classify_status(status, retry_after, body, false).into()
+        })
+    }
+
+    pub fn booking_peak_price(
+        &self,
+        terms: &BookingTerms,
+    ) -> Result<crate::booking::PeakPriceQuote, TransportError> {
+        let services = terms.service_ids().join(",");
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("serviceIds", &services)
+            .append_pair("startsAt", &terms.starts_at().to_rfc3339())
+            .finish();
+        let response = self.get(
+            &self.agent,
+            &format!("/appointments/peak-price?{query}"),
+            None,
+        )?;
+        read_response(response, false)
+    }
+
     pub fn direct_booking_requirements(
         &self,
         terms: &BookingTerms,
@@ -2231,6 +2272,7 @@ fn classify_booking_error(status: u16, retry_after: Option<&str>, body: &str) ->
         (409, Some("intake_required")) => BookingError::IntakeChanged,
         (409, Some("slot_taken" | "slot_unavailable")) => BookingError::SlotUnavailable,
         (409, Some("version_conflict")) => BookingError::CatalogueChanged,
+        (409, Some("peak_price_changed")) => BookingError::PeakPriceChanged,
         (409, Some("booking_intent_conflict")) => BookingError::IntentConflict,
         (401, Some("unauthorized")) | (403, Some("forbidden")) | (404, Some("not_found")) => {
             BookingError::AccessChanged
@@ -2401,16 +2443,17 @@ impl HttpTransport {
             .map(|snapshots| {
                 let mode = |full| if full { "full" } else { "delta" };
                 format!(
-                    "&resourcePools={}&combinations={}",
+                    "&resourcePools={}&combinations={}&peakPrices={}",
                     mode(snapshots.full_resource_pools),
-                    mode(snapshots.full_combinations)
+                    mode(snapshots.full_combinations),
+                    mode(snapshots.full_peak_prices)
                 )
             })
             .unwrap_or_default();
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
             ),
             None,
         )?;

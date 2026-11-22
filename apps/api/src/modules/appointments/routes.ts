@@ -248,9 +248,15 @@ export function appointmentsRoutes({
         });
       })
       .post("/desktop-visits", async (c) => {
-        const { reviewHash, ...input } = parseOrThrow(desktopVisitCreateSchema, await readJson(c));
+        const { reviewHash, peakPriceReviews, ...input } = parseOrThrow(
+          desktopVisitCreateSchema,
+          await readJson(c),
+        );
         assertDesktopGeneration(input.desktopGeneration);
-        return c.json(await createVisit(db, input, c.get("principal"), now(), reviewHash), 201);
+        return c.json(
+          await createVisit(db, input, c.get("principal"), now(), reviewHash, peakPriceReviews),
+          201,
+        );
       })
       .get("/visits/:id", async (c) =>
         c.json(await getVisit(db, parseOrThrow(idSchema, c.req.param("id")), c.get("principal"))),

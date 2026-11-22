@@ -7,6 +7,7 @@ import type { Tx } from "../../tx";
 import { assertStaffPerforms } from "../appointments/service";
 import { createCheckoutInTransaction } from "../commerce/service";
 import { membershipDiscounts } from "../passes/value";
+import { quotePeakSlot } from "../peak-prices/service";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists } from "../staff/service";
@@ -40,11 +41,13 @@ async function quoteInTransaction(
     lock,
   );
   const { timezone } = await getSalonSettings(tx);
+  const peak = await quotePeakSlot(tx, services, new Date(input.startsAt), timezone);
+  const prices = new Map(peak.services.map((line) => [line.serviceId, line.priceCents]));
   const source = services.map((s) => ({
     kind: "service",
     serviceId: s.id,
     quantity: 1,
-    unitAmountCents: s.priceCents,
+    unitAmountCents: prices.get(s.id) ?? s.priceCents,
   }));
   const discounts = await membershipDiscounts(
     tx,
@@ -58,11 +61,11 @@ async function quoteInTransaction(
     kind: "service",
     serviceId: s.id,
     quantity: 1,
-    unitAmountCents: s.priceCents,
+    unitAmountCents: prices.get(s.id) ?? s.priceCents,
     discountCents: discounts[index]?.amountCents ?? 0,
     taxBasisPoints: 0,
   }));
-  const subtotalCents = services.reduce((sum, s) => sum + s.priceCents, 0);
+  const subtotalCents = lines.reduce((sum, line) => sum + line.unitAmountCents, 0);
   if (subtotalCents > 999999999)
     throw new DomainError("validation_error", "The booking total exceeds the supported amount");
   const totalCents = subtotalCents - lines.reduce((sum, line) => sum + line.discountCents, 0);

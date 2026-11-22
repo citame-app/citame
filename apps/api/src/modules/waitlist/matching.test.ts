@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { waitlistAcceptedSchema, waitlistEntrySchema, waitlistListSchema } from "@sob/contracts";
+import {
+  peakPricePolicySchema,
+  waitlistAcceptedSchema,
+  waitlistEntrySchema,
+  waitlistListSchema,
+} from "@sob/contracts";
 import { appointment, clientProfile, reminder, service, waitlistOffer } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import {
@@ -397,4 +402,66 @@ test("the daily offer cap includes an offer published exactly at salon-local mid
   const capped = (await list()).entries[0];
   expect(capped?.state).toBe("waiting");
   expect(capped?.offer).toBeNull();
+});
+
+test("a waitlist offer shows the exact surcharge and a later schedule change cannot silently reprice it", async () => {
+  const base = peakPricePolicySchema.parse(await (await call(owner, "/admin/peak-prices")).json());
+  const rules = [
+    {
+      weekday: 1,
+      startMinute: 540,
+      endMinute: 720,
+      increaseBasisPoints: 1500,
+      serviceIds: [f.haircutId],
+    },
+  ];
+  const saved = await call(owner, "/admin/peak-prices", "PUT", { ...base, rules });
+  expect(saved.status, await saved.clone().text()).toBe(200);
+  const policy = peakPricePolicySchema.parse(await saved.json());
+  const entry = await join();
+  expect(await runWaitlist(t.db, { now })).toMatchObject({ offersCreated: 1 });
+  const offered = (await list()).entries[0];
+  if (!offered?.offer) throw new Error("No waitlist offer");
+  expect(offered.offer).toMatchObject({
+    priceCents: 11500,
+    services: [{ priceCents: 11500, peakSurchargeCents: 1500 }],
+  });
+
+  const request = {
+    version: offered.version,
+    offerId: offered.offer.id,
+    expectedTotalCents: 11500,
+    idempotencyKey: crypto.randomUUID(),
+  };
+  const path = `/me/waitlist/${entry.id}/accept`;
+  const accepted = await call(client, path, "POST", request);
+  expect(accepted.status, await accepted.clone().text()).toBe(201);
+  expect(waitlistAcceptedSchema.parse(await accepted.json()).appointment.services).toMatchObject([
+    { priceCents: 11500, peakSurchargeCents: 1500 },
+  ]);
+
+  const queued = await call(other, "/me/waitlist", "POST", {
+    ...selection(),
+    fromTime: "10:00",
+    toTime: "12:00",
+  });
+  expect(queued.status, await queued.clone().text()).toBe(201);
+  const pending = waitlistEntrySchema.parse(await queued.json());
+  expect(await runWaitlist(t.db, { now })).toMatchObject({ offersCreated: 1 });
+  const second = (await list(other)).entries[0];
+  if (!second?.offer) throw new Error("No second waitlist offer");
+  const changed = await call(owner, "/admin/peak-prices", "PUT", {
+    ...policy,
+    rules: [{ ...rules[0], increaseBasisPoints: 2500 }],
+  });
+  expect(changed.status).toBe(200);
+  const refused = await call(other, `/me/waitlist/${pending.id}/accept`, "POST", {
+    version: second.version,
+    offerId: second.offer.id,
+    expectedTotalCents: second.offer.priceCents,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(refused.status).toBe(409);
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
+  expect((await call(client, path, "POST", request)).status).toBe(201);
 });

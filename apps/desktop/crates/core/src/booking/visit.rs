@@ -78,6 +78,8 @@ pub struct VisitPreviewPart {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub price_cents: i64,
+    pub peak_surcharge_cents: Option<i64>,
+    pub peak_price_review: Option<String>,
     pub price_status: VisitPriceStatus,
     pub deposit_waiver_required: bool,
     pub available: bool,
@@ -97,6 +99,8 @@ pub struct ReviewedVisit {
     #[serde(flatten)]
     packet: VisitPacket,
     review_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_price_reviews: Option<Vec<Option<String>>>,
     #[serde(skip_serializing)]
     expected_starts: Vec<DateTime<Utc>>,
 }
@@ -219,6 +223,17 @@ impl VisitPacket {
         Ok(ReviewedVisit {
             packet: self,
             review_hash: preview.review_hash.clone(),
+            peak_price_reviews: preview
+                .parts
+                .iter()
+                .any(|part| part.peak_price_review.is_some())
+                .then(|| {
+                    preview
+                        .parts
+                        .iter()
+                        .map(|part| part.peak_price_review.clone())
+                        .collect()
+                }),
             expected_starts: preview.parts.iter().map(|part| part.starts_at).collect(),
         })
     }

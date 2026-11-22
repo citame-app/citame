@@ -10,11 +10,15 @@ import { api } from "~/lib/api/instance";
 export function GiftServicePicker({
   selected,
   reviewedCatalogue,
+  maximum = maximumGiftServices,
+  emptySelectionHint,
   disabled,
   onChange,
 }: {
   selected: GiftEligibleService[];
   reviewedCatalogue?: GiftEligibleService[];
+  maximum?: number;
+  emptySelectionHint?: string;
   disabled: boolean;
   onChange: (services: GiftEligibleService[]) => void;
 }) {
@@ -44,7 +48,7 @@ export function GiftServicePicker({
         <p id={limitHelp} className="text-sm text-muted">
           {selected.length
             ? t("gift.selectedServices", { count: selected.length })
-            : t("gift.allServices")}
+            : (emptySelectionHint ?? t("gift.allServices"))}
         </p>
         <Button
           type="button"
@@ -79,7 +83,7 @@ export function GiftServicePicker({
                           type="checkbox"
                           checked={checked}
                           className="h-4 w-4 accent-current"
-                          disabled={!checked && selected.length >= maximumGiftServices}
+                          disabled={!checked && selected.length >= maximum}
                           onChange={() =>
                             onChange(
                               checked

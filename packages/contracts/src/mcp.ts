@@ -7,6 +7,7 @@ import {
 import { bookingPolicySchema } from "./booking-protection";
 import { adminClientSchema } from "./clients";
 import { idSchema, instantSchema, localDateSchema } from "./common";
+import { peakPriceQuoteSchema } from "./peak-prices";
 import { serviceSchema } from "./services";
 import { staffSchema } from "./staff";
 
@@ -49,7 +50,16 @@ export const mcpFindAvailabilityOutput = z.object({
   ),
 });
 
+export const mcpQuoteAppointmentPriceInput = z.object({
+  serviceIds: mcpFindAvailabilityInput.shape.serviceIds,
+  startsAt: instantSchema.describe("Start instant from find_availability."),
+});
+export const mcpQuoteAppointmentPriceOutput = peakPriceQuoteSchema;
+
 export const mcpCreateAppointmentInput = z.object({
+  peakPriceReview: createAppointmentBaseSchema.shape.peakPriceReview.describe(
+    "Copy review from quote_appointment_price only after the customer explicitly accepts the displayed price, including each peak-time surcharge. Omit when the review is null.",
+  ),
   priceTermsAccepted: createAppointmentBaseSchema.shape.priceTermsAccepted.describe(
     "Only true after the customer explicitly accepts that variable/starting prices are finalized at the salon and advertised minimums apply. Never infer acceptance.",
   ),
@@ -176,6 +186,7 @@ export const mcpFindClientOutput = z.object({
 export const MCP_TOOL_SCOPES = {
   list_services: "mcp:read",
   find_availability: "mcp:read",
+  quote_appointment_price: "mcp:read",
   list_my_appointments: "mcp:read",
   create_appointment: "mcp:book",
   cancel_appointment: "mcp:book",

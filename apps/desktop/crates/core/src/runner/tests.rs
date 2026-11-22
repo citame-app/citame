@@ -71,6 +71,8 @@ impl Transport for Scripted {
             calendar_scope: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
+            peak_prices: None,
+            peak_price_access: None,
             resource_pools: None,
             combinations: None,
             viewer_write_inventory: None,

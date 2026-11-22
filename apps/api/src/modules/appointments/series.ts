@@ -26,6 +26,7 @@ import { serviceWorkWindows } from "../availability/work-windows";
 import { getBookingPolicy } from "../booking-protection/policy";
 import { protectionView } from "../booking-protection/value";
 import { applicableIntakeForms } from "../clients/intake";
+import { assertPeakReviews, pricePeakSlot, readPeakPricePolicy } from "../peak-prices/service";
 import { filterResourceAvailability } from "../resources/reservations";
 import { getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
@@ -71,6 +72,7 @@ async function previewInTransaction(
       "Every service in a series must use the same currency",
     );
   const starts = seriesStartsAt(input, settings.timezone);
+  const peakPolicy = await readPeakPricePolicy(tx, "initial");
   const blockMs = totalBlockMinutes(services) * 60000;
   const workWindows = serviceWorkWindows(services);
   const occurrences: AppointmentSeriesPreview["occurrences"] = [];
@@ -97,7 +99,19 @@ async function previewInTransaction(
         throw error;
       available = false;
     }
-    occurrences.push({ startsAt: value, endsAt: endsAt.toISOString(), available });
+    const peak = pricePeakSlot(peakPolicy, services, startsAt, settings.timezone);
+    occurrences.push({
+      startsAt: value,
+      endsAt: endsAt.toISOString(),
+      available,
+      ...(peak.review
+        ? {
+            peakPriceReview: peak.review,
+            priceCents: peak.services.reduce((sum, item) => sum + item.priceCents, 0),
+            peakSurchargeCents: peak.services.reduce((sum, item) => sum + item.surchargeCents, 0),
+          }
+        : {}),
+    });
   }
   const resourceSlots = await filterResourceAvailability(
     tx,
@@ -118,6 +132,11 @@ async function previewInTransaction(
       settings,
       policy,
       starts,
+      ...(occurrences.some((slot) => slot.peakPriceReview)
+        ? {
+            peakReviews: occurrences.map((slot) => slot.peakPriceReview ?? null),
+          }
+        : {}),
       intake: (await applicableIntakeForms(tx, services)).map((form) => [
         form.id,
         form.contentHash,
@@ -197,10 +216,15 @@ export async function createAppointmentSeries(
   now: Date,
   options: { appointmentIds?: readonly string[] } = {},
 ) {
-  const { reviewHash, idempotencyKey, ...fields } = request;
+  const { reviewHash, idempotencyKey, peakPriceReviews, ...fields } = request;
   const input = appointmentSeriesInputSchema.parse(fields);
   const { appointmentIds } = options;
-  const requestHash = hash({ input, reviewHash, ...(appointmentIds ? { appointmentIds } : {}) });
+  const requestHash = hash({
+    input,
+    reviewHash,
+    peakPriceReviews,
+    ...(appointmentIds ? { appointmentIds } : {}),
+  });
   return db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`appointment-series:${principal.userId}:${idempotencyKey}`},0))`,
@@ -247,6 +271,10 @@ export async function createAppointmentSeries(
         "version_conflict",
         "The series terms changed; review the visits again",
       );
+    assertPeakReviews(
+      preview.occurrences.map((slot) => slot.peakPriceReview),
+      peakPriceReviews,
+    );
     if (preview.occurrences.some((o) => !o.available))
       throw new DomainError(
         "slot_taken",
@@ -257,7 +285,12 @@ export async function createAppointmentSeries(
       const { cadence: _cadence, interval: _interval, count: _count, ...booking } = input;
       const next = await createAppointment(
         tx,
-        { ...booking, id: appointmentIds?.[index], startsAt: occurrence.startsAt },
+        {
+          ...booking,
+          id: appointmentIds?.[index],
+          startsAt: occurrence.startsAt,
+          peakPriceReview: occurrence.peakPriceReview,
+        },
         { userId: principal.userId, role: principal.role },
         { now, desktopReviewed: Boolean(appointmentIds) },
       );

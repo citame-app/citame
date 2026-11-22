@@ -6,6 +6,7 @@ import { BookingLinks } from "~/features/acquisition/booking-links";
 import { SocialCreative } from "~/features/acquisition/social-creative";
 import { ClientTransfer } from "~/features/admin/clients/client-transfer";
 import { LoyaltyView } from "~/features/admin/commerce/loyalty-view";
+import { PeakPricesView } from "~/features/admin/commerce/peak-prices-view";
 import { PromotionsView } from "~/features/admin/commerce/promotions-view";
 import { adminHead } from "~/features/admin/route-head";
 import { CampaignsView } from "~/features/marketing/campaigns";
@@ -28,6 +29,7 @@ function MarketingPage() {
     { value: "social", label: t("social.title") },
     { value: "links", label: t("acquisition.title") },
     { value: "promotions", label: t("promotions.title") },
+    ...(permissions.editCatalog ? [{ value: "peak", label: t("peakPrices.title") }] : []),
     { value: "loyalty", label: t("loyalty.title") },
     ...(permissions.deleteClients ? [{ value: "clients", label: t("pos.importClients") }] : []),
   ];
@@ -72,9 +74,11 @@ function MarketingPage() {
                           ? "pos.linksHelp"
                           : item.value === "promotions"
                             ? "pos.promotionsHelp"
-                            : item.value === "loyalty"
-                              ? "pos.loyaltyHelp"
-                              : "pos.importHelp",
+                            : item.value === "peak"
+                              ? "peakPrices.help"
+                              : item.value === "loyalty"
+                                ? "pos.loyaltyHelp"
+                                : "pos.importHelp",
                   )}
                 </span>
                 <span className="marketing-tool-action">{t("admin.open")}</span>
@@ -104,6 +108,11 @@ function MarketingPage() {
       {visited.has("promotions") && (
         <div hidden={section !== "promotions"}>
           <PromotionsView />
+        </div>
+      )}
+      {visited.has("peak") && permissions.editCatalog && (
+        <div hidden={section !== "peak"}>
+          <PeakPricesView />
         </div>
       )}
       {visited.has("loyalty") && (

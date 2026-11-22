@@ -2,6 +2,7 @@ import {
   type Appointment,
   type AppointmentSeriesInput,
   type AppointmentSeriesPreview,
+  type CreateAppointmentRequest,
   permissionsFor,
   type StaffAccessPreset,
   type UserRole,
@@ -16,11 +17,12 @@ import { Sheet } from "~/components/ui/sheet";
 import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
 import { createBookingIntent } from "~/features/booking/intent";
+import { BookingPeakPrice, useBookingPeakPrice } from "~/features/booking/peak-price";
 import { acceptedServiceQuotes } from "~/features/booking/quotes";
 import { BookingForms, useBookingForms } from "~/features/intake/booking-forms";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
@@ -88,10 +90,11 @@ function AppointmentDraft({
 }: Omit<NewAppointmentProps, "open" | "initial" | "ownStaffId"> & {
   initial: Required<NewAppointmentInitial>;
 }) {
-  const { t, locale, timeZone } = useI18n();
+  const { t, locale, timeZone: contextTimeZone } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const salon = useQuery(salonQuery);
+  const timeZone = salon.data?.timezone ?? contextTimeZone;
   const services = useQuery({
     queryKey: ["appointment-catalog"],
     queryFn: async () => (await api().appointments.catalog()).services,
@@ -101,6 +104,7 @@ function AppointmentDraft({
   const timeRef = useRef<HTMLInputElement>(null);
   const formId = useId();
   const submitting = useRef(false);
+  const requests = useRef(new Map<string, CreateAppointmentRequest>());
 
   const [values, setValues] = useState<WalkInValues>({
     clientMode: "existing",
@@ -155,7 +159,11 @@ function AppointmentDraft({
     timeZone,
   });
   const reviewed = review?.signature === signature ? review : null;
+  const recoverable = requests.current.has(signature);
   const unavailableVisit = reviewed?.data.occurrences.some((occurrence) => !occurrence.available);
+  const seriesHasSurcharge = reviewed?.data.occurrences.some(
+    (occurrence) => occurrence.peakSurchargeCents,
+  );
 
   const debounced = useDebounced(search.trim());
   const clients = useQuery({
@@ -171,7 +179,16 @@ function AppointmentDraft({
     return s ? [s] : [];
   });
   const totalMinutes = chosen.reduce((sum, s) => sum + s.durationMinutes, 0);
-  const totalCents = chosen.reduce((sum, s) => sum + s.priceCents, 0);
+  const startsAt = resolveStart(date, time, timeZone);
+  const peak = useBookingPeakPrice(
+    chosen.map((service) => service.id),
+    cadence === "none" ? startsAt : undefined,
+    true,
+  );
+  const peakReady = peak.isSuccess && !peak.isFetching;
+  const surchargeCents =
+    peak.data?.services.reduce((sum, service) => sum + service.surchargeCents, 0) ?? 0;
+  const totalCents = chosen.reduce((sum, s) => sum + s.priceCents, 0) + surchargeCents;
 
   const preview = useMutation({
     mutationFn: async (request: { signature: string; input: AppointmentSeriesInput }) => ({
@@ -183,7 +200,9 @@ function AppointmentDraft({
     onError: (error) => setFailure(describeProblem(error)),
   });
   const create = useMutation({
-    mutationFn: async (startsAt: string) => {
+    mutationFn: async ({ startsAt, draft }: { startsAt: string; draft: string }) => {
+      const previous = requests.current.get(draft);
+      if (previous) return api().appointments.create(previous);
       if (!intake.ready) throw new Error("Complete the current forms");
       if (cadence !== "none") {
         if (!reviewed) throw new Error("Review the recurring visits first");
@@ -191,20 +210,33 @@ function AppointmentDraft({
           ...reviewed.input,
           reviewHash: reviewed.data.reviewHash,
           idempotencyKey: reviewed.key,
+          ...(seriesHasSurcharge
+            ? {
+                peakPriceReviews: reviewed.data.occurrences.map(
+                  (slot) => slot.peakPriceReview ?? null,
+                ),
+              }
+            : {}),
         });
         const first = series.appointments[0];
         if (!first) throw new Error("The series has no appointments");
         return first;
       }
+      if (!peakReady || peak.data?.startsAt !== startsAt)
+        throw new Error("Review the current price for this time");
       const request = {
         ...intake.payload,
+        ...(peak.data.review ? { peakPriceReview: peak.data.review } : {}),
         ...buildWalkInRequest({ ...values, startsAt }),
         serviceQuotes: acceptedServiceQuotes(chosen),
         ...(waiver.trim() ? { protectionWaiverReason: waiver.trim() } : {}),
       };
-      return api().appointments.create({ ...request, id: intent(request) });
+      const packet = { ...request, id: intent(request) };
+      requests.current.set(draft, packet);
+      return api().appointments.create(packet);
     },
-    onSuccess: (appointment) => {
+    onSuccess: (appointment, { draft }) => {
+      requests.current.delete(draft);
       toast.success(
         cadence === "none"
           ? t("calendar.toast.created")
@@ -216,7 +248,21 @@ function AppointmentDraft({
       onCreated?.(appointment);
       onOpenChange(false);
     },
-    onError: (error) => {
+    onError: (error, { draft }) => {
+      if (
+        !(
+          error instanceof NetworkError ||
+          error instanceof ResponseShapeError ||
+          (error instanceof ApiError && error.status >= 500)
+        )
+      ) {
+        requests.current.delete(draft);
+      }
+      if (error instanceof ApiError && error.code === "peak_price_changed") {
+        if (cadence === "none") void peak.refetch();
+        else setReview(null);
+        return;
+      }
       if (error instanceof ApiError && error.code === "intake_required") void intake.refresh();
       const problem = describeProblem(error);
       setFailure(problem);
@@ -249,7 +295,10 @@ function AppointmentDraft({
 
   function submit() {
     if (submitting.current || unavailableVisit) return;
-    const startsAt = resolveStart(date, time, timeZone);
+    if (requests.current.has(signature)) {
+      void runSubmission(() => create.mutateAsync({ startsAt, draft: signature }));
+      return;
+    }
     const found = validateWalkIn({ ...values, startsAt });
     setShowErrors(Object.keys(found).length > 0);
     setFailure(null);
@@ -280,7 +329,8 @@ function AppointmentDraft({
           input,
         }),
       );
-    } else void runSubmission(() => create.mutateAsync(startsAt));
+    } else if (cadence !== "none" || peakReady)
+      void runSubmission(() => create.mutateAsync({ startsAt, draft: signature }));
   }
 
   const errors = useMemo(
@@ -319,7 +369,10 @@ function AppointmentDraft({
           </Button>
           <Button
             loading={create.isPending || preview.isPending}
-            disabled={!intake.ready || unavailableVisit}
+            disabled={
+              !recoverable &&
+              (!intake.ready || unavailableVisit || (cadence === "none" && peak.isFetching))
+            }
             type="submit"
             form={formId}
           >
@@ -513,6 +566,13 @@ function AppointmentDraft({
           />
         </div>
 
+        {create.error instanceof ApiError && create.error.code === "peak_price_changed" && (
+          <p role="alert">{t("bookingPeak.changed")}</p>
+        )}
+        {cadence === "none" && (
+          <BookingPeakPrice quote={peak} currency={chosen[0]?.currency ?? "EUR"} />
+        )}
+
         <TextAreaField
           label={t("walkin.notes")}
           value={values.notes}
@@ -562,15 +622,19 @@ function AppointmentDraft({
               )}
               {reviewed && (
                 <section aria-label={t("series.dates")} className="space-y-3" aria-live="polite">
-                  <p className="text-sm font-medium">
-                    {t("series.price", {
-                      price: formatMoney(
-                        reviewed.data.perVisitCents,
-                        reviewed.data.currency,
-                        locale,
-                      ),
-                    })}
-                  </p>
+                  {!reviewed.data.occurrences.some(
+                    (occurrence) => occurrence.peakSurchargeCents,
+                  ) && (
+                    <p className="text-sm font-medium">
+                      {t("series.price", {
+                        price: formatMoney(
+                          reviewed.data.perVisitCents,
+                          reviewed.data.currency,
+                          locale,
+                        ),
+                      })}
+                    </p>
+                  )}
                   <ol className="space-y-2">
                     {reviewed.data.occurrences.map((o) => (
                       <li key={o.startsAt} className="rounded-md bg-sunken p-3 text-sm">
@@ -578,6 +642,26 @@ function AppointmentDraft({
                           {formatDateLong(localDateOf(o.startsAt, reviewed.data.timezone), locale)}{" "}
                           · {formatTime(o.startsAt, reviewed.data.timezone, locale)}
                         </p>
+                        {reviewed.data.occurrences.some(
+                          (occurrence) => occurrence.peakSurchargeCents,
+                        ) && (
+                          <p>
+                            {formatMoney(
+                              o.priceCents ?? reviewed.data.perVisitCents,
+                              reviewed.data.currency,
+                              locale,
+                            )}
+                            {o.peakSurchargeCents
+                              ? ` · ${t("bookingPeak.surcharge", {
+                                  amount: formatMoney(
+                                    o.peakSurchargeCents,
+                                    reviewed.data.currency,
+                                    locale,
+                                  ),
+                                })}`
+                              : null}
+                          </p>
+                        )}
                         <p className={o.available ? "text-success-fg" : "text-danger-fg"}>
                           {t(o.available ? "series.available" : "series.unavailable")}
                         </p>

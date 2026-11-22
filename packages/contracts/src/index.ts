@@ -43,6 +43,7 @@ export * from "./mcp";
 export * from "./notifications";
 export * from "./oauth";
 export * from "./passes";
+export * from "./peak-prices";
 export * from "./permissions";
 export * from "./portfolio";
 export * from "./promotion-timing";

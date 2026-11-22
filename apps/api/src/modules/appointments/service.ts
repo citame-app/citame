@@ -54,6 +54,7 @@ import {
 import { assertClientCanBook } from "../clients/controls";
 import { prepareBookingIntake, recordBookingIntake } from "../clients/intake-booking";
 import { refreshAppointmentCheckout } from "../commerce/service";
+import { assertPeakReview, quotePeakSlot } from "../peak-prices/service";
 import { reassignAppointmentResources, reserveResources } from "../resources/reservations";
 import { applyBookingPromotion } from "../rewards/booking";
 import { awardAppointmentStamp, reverseAppointmentStamp } from "../rewards/stamps";
@@ -116,6 +117,7 @@ export function toAppointment(
             }
           : {}),
         priceCents: s.reviewedPriceCents ?? s.priceCents,
+        ...(s.peakSurchargeCents ? { peakSurchargeCents: s.peakSurchargeCents } : {}),
         ...(s.sourceUnpriced && s.reviewedPriceCents === null
           ? { sourceUnpriced: true as const }
           : {}),
@@ -208,6 +210,9 @@ export async function createAppointment(
       assertOnlineBookingEnabled(settings, actor?.role);
       const onlineCustomer = await assertOnlineServices(tx, request.serviceIds, actor?.userId);
       const services = await getBookableServices(tx, request.serviceIds, request.serviceQuotes);
+      const peak = await quotePeakSlot(tx, services, startsAt, settings.timezone);
+      assertPeakReview(peak, request.peakPriceReview);
+      const prices = new Map(peak.services.map((line) => [line.serviceId, line]));
       if (
         onlineCustomer &&
         services.some((s) => needsFinalPrice(s.priceType)) &&
@@ -293,7 +298,8 @@ export async function createAppointment(
             bufferMinutes: s.bufferMinutes,
             processingStartMinutes: s.processing?.startsAfterMinutes ?? null,
             processingMinutes: s.processing?.minutes ?? null,
-            priceCents: s.priceCents,
+            priceCents: prices.get(s.id)?.priceCents ?? s.priceCents,
+            peakSurchargeCents: prices.get(s.id)?.surchargeCents || null,
             priceType: s.priceType ?? "fixed",
             currency: s.currency,
           })),
@@ -325,6 +331,12 @@ export async function createAppointment(
               request.intakeResponses?.length || request.intakeSubmissionIds?.length,
             ),
             ...(request.promotion ? { promotionConfirmed: true } : {}),
+            ...(peak.review
+              ? {
+                  peakPriceConfirmed: true,
+                  peakPriceLines: peak.services.filter((line) => line.surchargeCents),
+                }
+              : {}),
             staffId: row.staffId,
             clientId: row.clientId,
             startsAt: row.startsAt.toISOString(),

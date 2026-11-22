@@ -77,6 +77,8 @@ export function CalendarLiveProvider({
               (queryKey[1] === "policy" || queryKey[1] === "admin" || queryKey[1] === "stamps")) ||
             queryKey[0] === "intake" ||
             queryKey[0] === "booking-policy" ||
+            queryKey[0] === "peak-price-policy" ||
+            queryKey[0] === "booking-peak-price" ||
             queryKey[0] === "salon" ||
             (queryKey[0] === "commerce" && queryKey[1] === "transactions") ||
             (queryKey[0] === "admin" &&

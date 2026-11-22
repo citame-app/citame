@@ -1,6 +1,7 @@
 //! Online booking with a reviewed appointment and intake kept outside the outbox.
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, SecondsFormat, Timelike, Utc};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
 use crate::error::{CoreError, Result};
@@ -63,6 +64,8 @@ struct Contact {
 pub struct ReviewedBooking {
     #[serde(flatten)]
     terms: BookingTerms,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_price_review: Option<String>,
     #[serde(flatten)]
     forms: ReviewedForms,
 }
@@ -75,6 +78,186 @@ struct ReviewedForms {
     intake_submission_ids: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     intake_responses: Vec<IntakeResponse>,
+}
+
+pub const MAX_PEAK_PRICE_RULES: usize = 100;
+pub const MAX_PEAK_PRICE_SERVICES: usize = 200;
+pub const MAX_PEAK_PRICE_BASIS_POINTS: u32 = 10_000;
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPricePolicy {
+    pub version: u32,
+    pub generation: String,
+    pub rules: Vec<PeakPriceRule>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceRule {
+    pub weekday: u8,
+    pub start_minute: u16,
+    pub end_minute: u16,
+    pub increase_basis_points: u32,
+    pub service_ids: Vec<String>,
+}
+
+impl Default for PeakPriceRule {
+    fn default() -> Self {
+        Self {
+            weekday: 1,
+            start_minute: 540,
+            end_minute: 600,
+            increase_basis_points: 1000,
+            service_ids: vec![],
+        }
+    }
+}
+
+impl PeakPriceRule {
+    pub fn with_input(mut self, start: &str, end: &str, increase: &str) -> Option<Self> {
+        self.start_minute = crate::promotions::parse_minute(start, false)?;
+        self.end_minute = crate::promotions::parse_minute(end, true)?;
+        self.increase_basis_points = crate::billing::parse_reviewed_amount(increase)?;
+        (self.start_minute < self.end_minute
+            && (1..=MAX_PEAK_PRICE_BASIS_POINTS).contains(&self.increase_basis_points))
+        .then_some(self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceSnapshot {
+    pub version: u32,
+    pub timezone: String,
+    pub rules: Vec<PeakPriceRule>,
+}
+
+impl PeakPriceSnapshot {
+    pub(crate) fn validate(&self) -> Result<()> {
+        if self.timezone.parse::<chrono_tz::Tz>().is_err()
+            || self.rules.len() > MAX_PEAK_PRICE_RULES
+            || self.rules.iter().any(|rule| {
+                !(1..=7).contains(&rule.weekday)
+                    || rule.start_minute >= rule.end_minute
+                    || rule.end_minute > 1440
+                    || !(1..=MAX_PEAK_PRICE_BASIS_POINTS).contains(&rule.increase_basis_points)
+                    || rule.service_ids.len() > MAX_PEAK_PRICE_SERVICES
+                    || rule
+                        .service_ids
+                        .iter()
+                        .any(|id| uuid::Uuid::parse_str(id).is_err())
+            })
+        {
+            return Err(CoreError::Protocol("Invalid peak price snapshot".into()));
+        }
+        Ok(())
+    }
+
+    pub fn quote<'a>(
+        &self,
+        start: DateTime<Utc>,
+        services: impl IntoIterator<Item = &'a crate::model::Service>,
+    ) -> Result<PeakPriceQuote> {
+        use crate::model::CatalogPrice;
+        let zone: chrono_tz::Tz = self
+            .timezone
+            .parse()
+            .map_err(|_| CoreError::Protocol("Invalid peak price timezone".into()))?;
+        let mut offset = 0;
+        let mut canonical = Vec::new();
+        let mut quotes = Vec::new();
+        let mut lines = Vec::new();
+        for service in services {
+            let time = (start + Duration::minutes(offset)).with_timezone(&zone);
+            offset += service.duration_minutes + service.buffer_minutes;
+            let minute = time.hour() * 60 + time.minute();
+            let increase = if matches!(
+                service.price_type.unwrap_or_default(),
+                CatalogPrice::Fixed | CatalogPrice::From
+            ) {
+                self.rules
+                    .iter()
+                    .filter(|rule| {
+                        u32::from(rule.weekday) == time.weekday().number_from_monday()
+                            && u32::from(rule.start_minute) <= minute
+                            && minute < u32::from(rule.end_minute)
+                            && (rule.service_ids.is_empty()
+                                || rule.service_ids.contains(&service.id))
+                    })
+                    .map(|rule| i64::from(rule.increase_basis_points))
+                    .max()
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            let surcharge = (service.price_cents * increase + 5000) / 10_000;
+            let price = service.price_cents + surcharge;
+            if surcharge > 0 && price > 999_999_999 {
+                return Err(CoreError::Invalid(
+                    "Peak service price exceeds supported amount".into(),
+                ));
+            }
+            canonical.push((
+                &service.id,
+                &service.currency,
+                service.price_cents,
+                surcharge,
+                price,
+            ));
+            quotes.push(&service.quote_hash);
+            lines.push(PeakPriceLine {
+                service_id: service.id.clone(),
+                currency: service.currency.clone(),
+                surcharge_cents: surcharge,
+                price_cents: price,
+            });
+        }
+        // The API hashes the same JSON array of version, timezone, UTC instant, price tuples and
+        // service-term hashes. Tuple order is part of the offline wire contract.
+        let review = if lines.iter().any(|line| line.surcharge_cents > 0) {
+            let encoded = serde_json::to_vec(&(
+                self.version,
+                &self.timezone,
+                start.to_rfc3339_opts(SecondsFormat::Millis, true),
+                canonical,
+                quotes,
+            ))?;
+            const HEX: &[u8; 16] = b"0123456789abcdef";
+            let token = Sha256::digest(encoded)
+                .iter()
+                .flat_map(|byte| {
+                    [
+                        char::from(HEX[usize::from(byte >> 4)]),
+                        char::from(HEX[usize::from(byte & 15)]),
+                    ]
+                })
+                .collect();
+            Some(token)
+        } else {
+            None
+        };
+        Ok(PeakPriceQuote {
+            review,
+            services: lines,
+        })
+    }
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceQuote {
+    pub review: Option<String>,
+    pub services: Vec<PeakPriceLine>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeakPriceLine {
+    pub service_id: String,
+    pub currency: String,
+    pub surcharge_cents: i64,
+    pub price_cents: i64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -127,6 +310,9 @@ pub struct SeriesOccurrence {
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub available: bool,
+    pub price_cents: Option<i64>,
+    pub peak_surcharge_cents: Option<i64>,
+    pub peak_price_review: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -137,6 +323,8 @@ pub struct ReviewedSeries {
     review_hash: String,
     idempotency_key: String,
     appointment_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peak_price_reviews: Option<Vec<Option<String>>>,
     #[serde(skip_serializing)]
     reviewed_starts: Vec<DateTime<Utc>>,
 }
@@ -161,6 +349,8 @@ pub enum BookingError {
     SlotUnavailable,
     #[error("the reviewed catalogue changed")]
     CatalogueChanged,
+    #[error("the reviewed peak-time price changed")]
+    PeakPriceChanged,
     #[error("access to the requested booking changed")]
     AccessChanged,
     #[error("this booking identity is associated with a different request")]
@@ -248,6 +438,7 @@ impl BookingTerms {
     pub fn reviewed(&self, review_hash: String, intake: IntakeSelection) -> ReviewedBooking {
         ReviewedBooking {
             terms: self.clone(),
+            peak_price_review: None,
             forms: ReviewedForms {
                 intake_review_hash: review_hash,
                 intake_submission_ids: intake.saved,
@@ -258,6 +449,11 @@ impl BookingTerms {
 }
 
 impl ReviewedBooking {
+    pub fn with_peak_price_review(mut self, quote: Option<&PeakPriceQuote>) -> Self {
+        self.peak_price_review = quote.and_then(|quote| quote.review.clone());
+        self
+    }
+
     /// Keep an opaque origin marker only. The booking and its responses stay in memory.
     pub fn mark_local_dispatch(&self, store: &mut Store) -> Result<()> {
         store.mark_local_booking_dispatch(&self.terms.id, &self.terms.generation)
@@ -293,6 +489,17 @@ impl SeriesPacket {
             review_hash: preview.review_hash.clone(),
             idempotency_key: uuid::Uuid::now_v7().to_string(),
             appointment_ids,
+            peak_price_reviews: preview
+                .occurrences
+                .iter()
+                .any(|date| date.peak_price_review.is_some())
+                .then(|| {
+                    preview
+                        .occurrences
+                        .iter()
+                        .map(|date| date.peak_price_review.clone())
+                        .collect()
+                }),
             reviewed_starts: preview
                 .occurrences
                 .iter()

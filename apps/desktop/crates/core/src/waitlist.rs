@@ -85,6 +85,7 @@ pub struct WaitlistOffer {
 pub struct OfferedService {
     pub name: String,
     pub price_cents: u32,
+    pub peak_surcharge_cents: Option<u32>,
     pub currency: String,
 }
 

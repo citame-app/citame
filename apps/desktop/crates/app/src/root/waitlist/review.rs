@@ -281,11 +281,20 @@ impl Root {
                     .unwrap_or_else(|| self.staff_name(&offer.staff_id)),
             ))
             .children(offer.services.iter().map(|service| {
-                div().text_sm().child(SharedString::from(format!(
-                    "{} · {}",
-                    service.name,
-                    self.amount_label(i64::from(service.price_cents), &service.currency)
-                )))
+                div()
+                    .text_sm()
+                    .child(SharedString::from(format!(
+                        "{} · {}",
+                        service.name,
+                        self.amount_label(i64::from(service.price_cents), &service.currency)
+                    )))
+                    .when_some(service.peak_surcharge_cents, |row, surcharge| {
+                        let amount = self.amount_label(i64::from(surcharge), &service.currency);
+                        row.child(div().text_color(theme::muted()).child(i18n::fill(
+                            self.t(Key::PeakPriceSurcharge),
+                            &[("amount", &amount)],
+                        )))
+                    })
             }))
             .child(SharedString::from(i18n::fill(
                 self.t(Key::WaitlistOfferTotal),

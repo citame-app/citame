@@ -33,6 +33,7 @@ import { loadSnapshots, toAppointment } from "../appointments/service";
 import { groupName } from "../clients/groups";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { giftReplicaScope } from "../gift-cards/service";
+import { offlinePeakPriceSnapshot } from "../peak-prices/service";
 import { listResources } from "../resources/catalog";
 import { listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
@@ -306,6 +307,8 @@ export async function pullChanges(
       const topic = syncLiveViewSchema.safeParse(row.rowId);
       if (
         topic.success &&
+        (topic.data !== "peak_prices" ||
+          (query.peakPriceViews === "1" && permissions.editCalendar)) &&
         (topic.data !== "commerce" || permissions.commerce || permissions.manageCash) &&
         (topic.data !== "portfolio" || (query.portfolio === "1" && permissions.editCatalog)) &&
         (topic.data !== "marketing" || (query.marketingViews === "1" && permissions.editCatalog)) &&
@@ -394,11 +397,23 @@ export async function pullChanges(
     (query.combinations === "full" || (query.combinations === "delta" && combinationsChanged))
       ? (await listCombinations(db, principal)).combinations
       : undefined;
+  const peakPricesChanged = page.some(
+    (row) =>
+      row.entity === "salon_settings" ||
+      (row.entity === "live_view" && row.rowId === "peak_prices"),
+  );
+  const peakPrices =
+    permissions.editCalendar &&
+    (query.peakPrices === "full" || (query.peakPrices === "delta" && peakPricesChanged))
+      ? await offlinePeakPriceSnapshot(db)
+      : undefined;
   return {
     changes,
     ...(catalogColors ? { catalogColors } : {}),
     ...(resourcePools ? { resourcePools } : {}),
     ...(combinations ? { combinations } : {}),
+    ...(peakPrices ? { peakPrices } : {}),
+    ...(query.peakPrices ? { peakPriceAccess: permissions.editCalendar } : {}),
     ...(refresh.size ? { refresh: [...refresh] } : {}),
     nextCursor,
     hasMore,

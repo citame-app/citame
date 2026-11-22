@@ -83,6 +83,7 @@ export const appointmentService = pgTable(
     processingStartMinutes: integer(),
     processingMinutes: integer(),
     priceCents: integer().notNull(),
+    peakSurchargeCents: integer(),
     sourceUnpriced: boolean().notNull().default(false),
     reviewedPriceCents: integer(),
     priceType: text()
@@ -92,6 +93,10 @@ export const appointmentService = pgTable(
     currency: text().notNull(),
   },
   (t) => [
+    check(
+      "appointment_service_peak_price_valid",
+      sql`${t.peakSurchargeCents} is null or ${t.peakSurchargeCents} between 1 and ${t.priceCents}`,
+    ),
     index("appointment_service_appointment_idx").on(t.appointmentId),
     check(
       "appointment_service_reviewed_price_valid",

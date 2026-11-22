@@ -855,6 +855,13 @@
       "when": 1795318500000,
       "tag": "0121_gift_storefront",
       "breakpoints": true
+    },
+    {
+      "idx": 122,
+      "version": "7",
+      "when": 1795319100000,
+      "tag": "0122_scheduled_peak_prices",
+      "breakpoints": true
     }
   ]
 }

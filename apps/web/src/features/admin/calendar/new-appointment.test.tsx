@@ -36,6 +36,9 @@ beforeEach(() => {
   };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/appointments/peak-price") {
+      return json({ startsAt: url.searchParams.get("startsAt"), review: null, services: [] });
+    }
     if (url.pathname === "/api/intake/requirements")
       return json({ forms: [], reviewHash: "1".repeat(64), readyResponses: [] });
     if (url.pathname === "/api/appointments/catalog") {
@@ -456,6 +459,23 @@ test("a connection failure keeps the submitted visit id until the operator chang
   const baseFetch = globalThis.fetch;
   let failed = false;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost");
+    if (path.pathname === "/api/appointments/peak-price") {
+      const surchargeCents = failed ? 600_000 : 300_000;
+      return json({
+        startsAt: path.searchParams.get("startsAt"),
+        review: failed ? "b".repeat(64) : "a".repeat(64),
+        services: [
+          {
+            serviceId: CUT,
+            currency: "ARS",
+            baseCents: 1_500_000,
+            surchargeCents,
+            priceCents: 1_500_000 + surchargeCents,
+          },
+        ],
+      });
+    }
     if (
       new URL(String(input), "http://localhost").pathname === "/api/appointments" &&
       init?.method === "POST"
@@ -470,13 +490,16 @@ test("a connection failure keeps the submitted visit id until the operator chang
     return baseFetch(input, init);
   }) as unknown as typeof fetch;
   const created = mock();
-  open({ onCreated: created });
+  const { queryClient } = open({ onCreated: created });
   fireEvent.click(await screen.findByRole("radio", { name: "New client" }));
   fireEvent.change(screen.getByLabelText("Full name"), { target: { value: "Retry customer" } });
   fireEvent.click(await screen.findByRole("checkbox", { name: "Haircut" }));
   await clickReady("Create appointment");
   await screen.findByRole("alert");
   expect(created).not.toHaveBeenCalled();
+  expect(posts[0]).toMatchObject({ peakPriceReview: "a".repeat(64) });
+  await queryClient.invalidateQueries({ queryKey: ["booking-peak-price"] });
+  expect(await screen.findByText(/Peak-time surcharge.*6,000/)).toBeInTheDocument();
   await clickReady("Create appointment");
   await waitFor(() => expect(created).toHaveBeenCalledTimes(1));
   expect(posts).toHaveLength(2);
