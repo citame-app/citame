@@ -10,12 +10,12 @@ import { TextField } from "~/components/ui/field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
+import { inventoryNumberingQuery } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { describeProblem } from "../problems";
 import { UnsavedGuard } from "../unsaved-guard";
 
-const key = ["admin", "settings", "inventory-numbering"] as const;
 const series = ["orders", "receipts"] as const;
 type Draft = { text: string; next: number; generation: string };
 
@@ -26,10 +26,7 @@ export function InventoryNumbering() {
     orders: null,
     receipts: null,
   });
-  const query = useQuery({
-    queryKey: key,
-    queryFn: () => api().admin.settings.inventoryNumbering(),
-  });
+  const query = useQuery(inventoryNumberingQuery);
   if (!query.data)
     return query.isError ? (
       <ErrorState error={query.error} onRetry={() => void query.refetch()} />

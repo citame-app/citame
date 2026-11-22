@@ -70,7 +70,7 @@ mod inventory_documents;
 mod inventory_numbering;
 pub use inventory_numbering::{
     INVENTORY_NUMBER_MAX, InventoryNumberingSeries, InventoryNumberingSnapshot,
-    InventoryNumberingState,
+    InventoryNumberingState, ReviewedInventorySeries,
 };
 mod loyalty;
 pub mod marketing;

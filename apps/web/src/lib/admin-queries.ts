@@ -47,6 +47,12 @@ export const adminServicesQuery = queryOptions({
   staleTime: 30_000,
 });
 
+export const inventoryNumberingQueryKey = ["admin", "settings", "inventory-numbering"] as const;
+export const inventoryNumberingQuery = queryOptions({
+  queryKey: inventoryNumberingQueryKey,
+  queryFn: () => api().admin.settings.inventoryNumbering(),
+});
+
 export const adminSettingsQuery = queryOptions({
   queryKey: ["admin", "settings"],
   queryFn: () => api().admin.settings.get(),

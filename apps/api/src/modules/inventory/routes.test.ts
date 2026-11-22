@@ -180,6 +180,41 @@ test("only the owner can advance reviewed numbering, and new documents keep thei
   });
 });
 
+test("document numbering exposes narrow runtime grants and rolls back with its transaction", async () => {
+  const rollback = new Error("rollback numbering test");
+  const name = `numbering_runtime_${crypto.randomUUID().replaceAll("-", "")}`;
+  const role = sql.identifier(name);
+  const read = sql`select next_number as number from public.inventory_numbering_status('orders')`;
+  const [before] = await t.db.execute<{ number: number }>(read);
+  if (!before) throw new Error("Missing numbering fixture");
+  await expect(
+    t.db.transaction(async (tx) => {
+      await tx.execute(sql`CREATE ROLE ${role} NOLOGIN`);
+      const signature = "public.inventory_numbering_advance(text,integer,integer)";
+      const [permissions] = await tx.execute<{ permitted: boolean }>(
+        sql`select has_function_privilege(${name}::name, ${signature}::text, 'EXECUTE') as permitted`,
+      );
+      expect(permissions?.permitted).toBe(false);
+      await tx.execute(sql`GRANT USAGE ON SCHEMA public TO ${role}`);
+      await tx.execute(
+        sql`GRANT EXECUTE ON FUNCTION public.inventory_numbering_status(text) TO ${role}`,
+      );
+      await tx.execute(
+        sql`GRANT EXECUTE ON FUNCTION public.inventory_numbering_advance(text,integer,integer) TO ${role}`,
+      );
+      await tx.execute(sql`SET LOCAL ROLE ${role}`);
+      expect(await tx.execute(read)).toEqual([before]);
+      const next = before.number + 10;
+      await tx.execute(
+        sql`select * from public.inventory_numbering_advance('orders', ${before.number}::integer, ${next}::integer)`,
+      );
+      expect(await tx.execute(read)).toEqual([{ number: next }]);
+      throw rollback;
+    }),
+  ).rejects.toBe(rollback);
+  expect(await t.db.execute(read)).toEqual([before]);
+});
+
 test("numbered receipts atomically receive reviewed lines and replay without adding stock twice", async () => {
   const first = await product();
   const second = await product({ sku: "CREAM", openingStock: 1, name: "Cream" });

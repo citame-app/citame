@@ -218,7 +218,7 @@ impl Root {
             self.request_salon_configuration(false, cx);
         }
         self.refresh_profile_images(observed, reconnected, cx);
-        self.refresh_numbering(observed, reconnected, cx);
+        self.refresh_numbering(reconnected, cx);
     }
 
     fn request_salon_configuration(&mut self, review_conflict: bool, cx: &mut Context<Self>) {

@@ -3,40 +3,24 @@ import {
   INVENTORY_NUMBER_MAX,
   type InventoryNumberingSeries,
   type InventoryNumberingSnapshot,
+  inventoryNumberingStateSchema,
 } from "@sob/contracts";
-import { type Database, pgErrorCode, salonSettings } from "@sob/db";
-import { eq, sql } from "drizzle-orm";
+import { type Database, pgErrorCode } from "@sob/db";
+import { sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requireRole } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 
-const relations = { orders: "purchase_order", receipts: "stock_receipt" } as const;
+type NumberingState = InventoryNumberingSnapshot["orders"];
 
-async function seriesState(db: Pick<Database, "execute">, series: InventoryNumberingSeries) {
-  const relation = relations[series];
-  const [sequence] = await db.execute<{ name: string; schema: string; max: number }>(sql`
-    select c.relname as name, n.nspname as schema, s.seqmax::integer as max
-    from pg_catalog.pg_class c
-    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-    join pg_catalog.pg_sequence s on s.seqrelid = c.oid
-    where c.oid = pg_catalog.pg_get_serial_sequence(${`public.${relation}`}, 'number')::regclass
-      and s.seqcache = 1 and s.seqincrement = 1 and not s.seqcycle
-  `);
-  if (!sequence || sequence.max !== INVENTORY_NUMBER_MAX)
-    throw new DomainError("internal_error", "Document numbering is not configured");
-  const [state] = await db.execute<{ prior: number; called: boolean; issued: number | null }>(sql`
-    select last_value::integer as prior, is_called as called,
-      (select max(number) from public.${sql.identifier(relation)}) as issued
-    from ${sql.identifier(sequence.schema)}.${sql.identifier(sequence.name)}
+async function seriesState(db: Database, series: InventoryNumberingSeries) {
+  const [state] = await db.execute<NumberingState>(sql`
+    select next_number as "nextNumber", last_issued_number as "lastIssuedNumber"
+    from public.inventory_numbering_status(${series}::text)
   `);
   if (!state) throw new DomainError("internal_error", "Document numbering is not configured");
-  const allocatedNext = state.prior + Number(state.called);
-  const next = Math.max(allocatedNext, (state.issued ?? 0) + 1);
-  return {
-    allocatedNext,
-    view: { nextNumber: next <= sequence.max ? next : null, lastIssuedNumber: state.issued },
-  };
+  return inventoryNumberingStateSchema.parse(state);
 }
 
 export async function reviewInventoryNumbering(
@@ -47,7 +31,7 @@ export async function reviewInventoryNumbering(
     seriesState(db, "orders"),
     seriesState(db, "receipts"),
   ]);
-  return { generation, orders: orders.view, receipts: receipts.view };
+  return { generation, orders, receipts };
 }
 
 export async function advanceInventoryNumbering(
@@ -66,49 +50,48 @@ export async function advanceInventoryNumbering(
   if (
     !Number.isInteger(input.nextNumber) ||
     input.nextNumber < 1 ||
-    input.nextNumber > INVENTORY_NUMBER_MAX
+    input.nextNumber > INVENTORY_NUMBER_MAX ||
+    input.nextNumber < input.expectedNextNumber
   )
-    throw new DomainError("validation_error", "Select a valid document number");
-  const relation = sql`public.${sql.identifier(relations[series])}`;
+    throw new DomainError("validation_error", "The next document number can only increase");
   try {
     return await db.transaction(async (tx) => {
-      // Inserting a document acquires a conflicting table lock before allocating its identity.
-      // Take the same lock needed by ALTER up front, so the reviewed number cannot be consumed
-      // between the check and the restart. NOWAIT keeps a settings save out of document writers' way.
-      await tx.execute(sql`LOCK TABLE ${relation} IN ACCESS EXCLUSIVE MODE NOWAIT`);
       const actor = await loadPrincipal(tx, principal.userId);
       if (!actor) throw new DomainError("forbidden", "The account is unavailable");
       requireRole(actor, "owner");
-      const current = await seriesState(tx, series);
-      if (current.view.nextNumber !== input.expectedNextNumber)
-        throw new DomainError(
-          "version_conflict",
-          "The series changed. Review the next document number.",
-        );
-      if (input.nextNumber < input.expectedNextNumber)
-        throw new DomainError("validation_error", "The next document number can only increase");
-      if (input.nextNumber === current.allocatedNext) return current.view;
-      // PostgreSQL utility statements do not accept bindings. Only an already checked integer
-      // and the fixed relation map enter the DDL.
-      await tx.execute(
-        sql`ALTER TABLE ${relation} ALTER COLUMN number RESTART WITH ${sql.raw(String(input.nextNumber))}`,
-      );
-      await tx
-        .update(salonSettings)
-        .set({
-          updatedAt: sql`greatest(clock_timestamp(), ${salonSettings.updatedAt} + interval '1 millisecond')`,
-        })
-        .where(eq(salonSettings.id, 1));
-      await recordAudit(tx, {
-        actorUserId: actor.userId,
-        action: "inventory.numbering_advanced",
-        entity: "inventory_numbering",
-        entityId: series,
-        metadata: { oldNextNumber: current.allocatedNext, nextNumber: input.nextNumber },
-      });
-      return { ...current.view, nextNumber: input.nextNumber };
+      const [change] = await tx.execute<
+        NumberingState & { previousNumber: number; changed: boolean }
+      >(sql`
+        select previous_number as "previousNumber", next_number as "nextNumber",
+          last_issued_number as "lastIssuedNumber", changed
+        from public.inventory_numbering_advance(
+          ${series}::text, ${input.expectedNextNumber}::integer, ${input.nextNumber}::integer
+        )
+      `);
+      if (!change) throw new DomainError("internal_error", "Document numbering is not configured");
+      if (change.changed) {
+        await recordAudit(tx, {
+          actorUserId: actor.userId,
+          action: "inventory.numbering_advanced",
+          entity: "inventory_numbering",
+          entityId: series,
+          metadata: { oldNextNumber: change.previousNumber, nextNumber: input.nextNumber },
+        });
+        // Use the same commit-ordered topic as inventory writes without modifying settings
+        // revisions or creating a second event when an ordinary document is issued.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.sync_change', 0))`);
+        await tx.execute(sql`
+          insert into sync_change (entity, row_id, op) values ('live_view', 'commerce', 'upsert')
+        `);
+      }
+      return inventoryNumberingStateSchema.parse(change);
     });
   } catch (error) {
+    if (pgErrorCode(error) === "PT409")
+      throw new DomainError(
+        "version_conflict",
+        "The series changed. Review the next document number.",
+      );
     if (pgErrorCode(error) === "55P03")
       throw new DomainError(
         "version_conflict",

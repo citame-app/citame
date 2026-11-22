@@ -1,5 +1,5 @@
 import type { SyncEntity, SyncLiveView } from "@sob/contracts";
-import { teamShiftWeekKey } from "~/lib/admin-queries";
+import { inventoryNumberingQueryKey, teamShiftWeekKey } from "~/lib/admin-queries";
 import { intakeAdminQueryKey, intakeHistoryQueryKey } from "~/lib/api/intake-endpoints";
 import { reviewRequestQueryKey } from "~/lib/api/review-endpoints";
 import {
@@ -20,7 +20,7 @@ const staffSchedule = [
 ] as const;
 const moderation = ["reviews", "admin"] as const;
 const commerce = [
-  ["admin", "settings", "inventory-numbering"],
+  inventoryNumberingQueryKey,
   ["commerce"],
   ["inventory"],
   ["passes"],
