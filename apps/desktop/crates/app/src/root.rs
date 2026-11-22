@@ -2801,36 +2801,24 @@ impl Root {
             return self.render_booking_intake(f, review, viewport, cx);
         }
         const CLIENT_LIMIT: usize = 12;
-        let offline_price =
-            if self.status.connectivity != Connectivity::Online && !f.services.is_empty() {
-                self.svc
-                    .store
-                    .peak_price_snapshot()
-                    .ok()
-                    .flatten()
-                    .and_then(|snapshot| {
-                        let start = salon_local_instant(self.tz, f.date, f.minutes)?;
-                        snapshot
-                            .quote(
-                                start,
-                                f.services.iter().filter_map(|id| {
-                                    self.services.iter().find(|service| &service.id == id)
-                                }),
-                            )
-                            .ok()
-                    })
-            } else {
-                None
-            };
+        let review_offline_price =
+            self.status.connectivity != Connectivity::Online && !f.services.is_empty();
+        let offline_price = if review_offline_price {
+            salon_local_instant(self.tz, f.date, f.minutes)
+                .map(|start| ops::offline_peak_quote(&self.svc.store, start, &f.services))
+                .transpose()
+                .map(Option::flatten)
+        } else {
+            Ok(None)
+        };
+        let price_error = offline_price.is_err();
+        let price_snapshot_unknown = review_offline_price && matches!(offline_price, Ok(None));
+        let offline_price = offline_price.ok().flatten();
         let price_adjustment = offline_price
             .as_ref()
             .filter(|price| price.review.is_some())
             .and_then(|price| {
-                let currency = f
-                    .services
-                    .first()
-                    .and_then(|id| self.services.iter().find(|service| &service.id == id))
-                    .map(|service| service.currency.as_str())?;
+                let currency = price.services.first()?.currency.as_str();
                 let surcharge = self.amount_label(
                     price.services.iter().map(|line| line.surcharge_cents).sum(),
                     currency,
@@ -3103,6 +3091,22 @@ impl Root {
             .pt_3()
             .border_t_1()
             .border_color(theme::line())
+            .when(price_snapshot_unknown, |row| {
+                row.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::PeakPriceOfflineUnknown)),
+                )
+            })
+            .when(price_error, |row| {
+                row.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::PeakPriceLoadFailed)),
+                )
+            })
             .when_some(price_adjustment, |row, adjustment| {
                 row.child(div().text_sm().child(adjustment))
             })

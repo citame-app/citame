@@ -307,7 +307,8 @@ export async function pullChanges(
       const topic = syncLiveViewSchema.safeParse(row.rowId);
       if (
         topic.success &&
-        (topic.data !== "peak_prices" || (query.peakPriceViews === "1" && permissions.editCalendar)) &&
+        (topic.data !== "peak_prices" ||
+          (query.peakPriceViews === "1" && permissions.editCalendar)) &&
         (topic.data !== "commerce" || permissions.commerce || permissions.manageCash) &&
         (topic.data !== "portfolio" || (query.portfolio === "1" && permissions.editCatalog)) &&
         (topic.data !== "marketing" || (query.marketingViews === "1" && permissions.editCatalog)) &&
@@ -402,7 +403,8 @@ export async function pullChanges(
       (row.entity === "live_view" && row.rowId === "peak_prices"),
   );
   const peakPrices =
-    query.peakPrices === "full" || (query.peakPrices === "delta" && peakPricesChanged)
+    permissions.editCalendar &&
+    (query.peakPrices === "full" || (query.peakPrices === "delta" && peakPricesChanged))
       ? await offlinePeakPriceSnapshot(db)
       : undefined;
   return {
@@ -411,6 +413,7 @@ export async function pullChanges(
     ...(resourcePools ? { resourcePools } : {}),
     ...(combinations ? { combinations } : {}),
     ...(peakPrices ? { peakPrices } : {}),
+    ...(query.peakPrices ? { peakPriceAccess: permissions.editCalendar } : {}),
     ...(refresh.size ? { refresh: [...refresh] } : {}),
     nextCursor,
     hasMore,

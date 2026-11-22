@@ -23,6 +23,7 @@ import {
   mcpQuoteAppointmentPriceInput,
   mcpQuoteAppointmentPriceOutput,
   type OAuthScope,
+  permissionsFor,
 } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import type { z } from "zod";
@@ -163,8 +164,16 @@ export function registerTools(server: McpServer, ctx: ToolContext): void {
       outputSchema: mcpQuoteAppointmentPriceOutput.shape,
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    guarded(ctx, "quote_appointment_price", (args: z.infer<typeof mcpQuoteAppointmentPriceInput>) =>
-      previewPeakSlot(db, args.serviceIds, args.startsAt, true),
+    guarded(
+      ctx,
+      "quote_appointment_price",
+      (args: z.infer<typeof mcpQuoteAppointmentPriceInput>) => {
+        const internal =
+          principal.role !== "client" &&
+          permissionsFor(principal.role, principal.accessPreset).editCalendar &&
+          (ctx.scopes.includes("schedule:read") || ctx.scopes.includes("schedule:write"));
+        return previewPeakSlot(db, args.serviceIds, args.startsAt, !internal);
+      },
     ),
   );
 

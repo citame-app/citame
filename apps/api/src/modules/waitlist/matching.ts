@@ -1,4 +1,4 @@
-import type { PeakPriceQuote } from "@sob/contracts";
+import type { BookingPolicy, PeakPriceQuote } from "@sob/contracts";
 import {
   clientProfile,
   type Database,
@@ -48,6 +48,18 @@ export function offerServices(services: ServiceRow[], prices: PeakPriceQuote["se
     };
   });
 }
+export function offerCatalogHash(
+  snapshots: ReturnType<typeof offerServices>,
+  policy: BookingPolicy,
+  priceReview: string | null,
+) {
+  return selectionHash({
+    services: snapshots,
+    policy,
+    ...(priceReview ? { peakPriceReview: priceReview } : {}),
+  });
+}
+
 async function finishEntry(tx: Tx, entry: EntryRow, state: "expired" | "unavailable", now: Date) {
   await tx
     .update(waitlistEntry)
@@ -360,11 +372,7 @@ async function matchEntry(db: Connection, id: string, now: Date): Promise<boolea
               ? { workWindows: sql`${JSON.stringify(serviceWorkWindows(snapshots))}::jsonb` }
               : {}),
             policy: bookingPolicy,
-            catalogHash: selectionHash({
-              services: snapshots,
-              policy: bookingPolicy,
-              ...(price.review ? { peakPriceReview: price.review } : {}),
-            }),
+            catalogHash: offerCatalogHash(snapshots, bookingPolicy, price.review),
             priceCents,
             currency: snapshots[0]?.currency ?? "EUR",
             createdAt: now,

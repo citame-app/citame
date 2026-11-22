@@ -21,7 +21,7 @@ import { protectionView } from "../booking-protection/value";
 import { quotePeakSlot } from "../peak-prices/service";
 import { getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
-import { offerServices } from "./matching";
+import { offerCatalogHash, offerServices } from "./matching";
 import { entryRow, entryView, selectionHash, versionConflict } from "./service";
 
 async function bookedView(tx: Tx, id: string, p: Principal) {
@@ -134,11 +134,7 @@ export async function acceptWaitlist(
     if (
       settings.timezone !== entry.timezone ||
       input.expectedTotalCents !== offer.priceCents ||
-      selectionHash({
-        services: current,
-        policy,
-        ...(price.review ? { peakPriceReview: price.review } : {}),
-      }) !== offer.catalogHash
+      offerCatalogHash(current, policy, price.review) !== offer.catalogHash
     )
       throw new DomainError(
         "version_conflict",

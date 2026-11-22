@@ -192,6 +192,8 @@ A reviewed settings edit uses the `revision` from `ownerConfiguration` or `/admi
 
 Rejections are final and stored: resending the same `mutationId` returns the same rejection. To retry after the user resolved it, create a NEW mutation with a NEW `mutationId`.
 
+A peak-time appointment includes the optional `appointment.create.payload.peakPriceReview` token. Present the total and surcharge before booking, then send the token for the reviewed selection. The booking stores that rate in the service snapshot. Changing the rate, slot, treatment terms or salon timezone invalidates the token. New or changed surcharges return an appointment creation rejection with reason `conflict`. Review the current quote as a new proposal before retrying.
+
 ### Idempotency, retries and backoff
 
 - Network failure, timeout or a 5xx with no body: resend the SAME batch. Replays are free and exact (`replayed: true`).
@@ -207,6 +209,8 @@ Rejections are final and stored: resending the same `mutationId` returns the sam
 - `catalogColors=1` (optional, staff and owners): also return `catalogColors`, a map from service IDs to configured colors. It includes inactive services and excludes deleted services. An empty map means there are no configured colors. Desktop installations request it on upgrade even at the current cursor and record completion after repairing the local service projection.
 - `reviewRequests=1` (optional): ask for the `review_requests` refresh topic. The server requires the caller's current `editCatalog` permission. Clients that omit the flag still advance their cursor past these notices.
 - `intakeViews=1` (optional): enable `intake_forms` for callers with `deleteClients` and `intake_records` for callers with `clients`. Older clients advance past these notices without receiving the new topic values.
+- `peakPriceViews=1` (optional): opt into the payload-free `peak_prices` refresh marker with `editCalendar`. Older clients advance their cursor past the marker.
+- `peakPrices=full` or `peakPrices=delta` (optional): request the reviewed pricing snapshot `{ version, timezone, rules }` for offline bookings. `full` backfills a missing cache. `delta` only returns rules when the page scans a rule or salon-settings change. A client applies the snapshot with its cursor in the same SQLite transaction and clears it on a replica reset or when `peakPriceAccess` is false.
 - `bookingPolicy=1` (optional): enable the payload-free `booking_policy` refresh topic. Read the public policy or the owner-only reviewed policy after receiving a notice. Both owner clients use `GET /admin/settings/booking-policy/reviewed` to retrieve the current sync generation and policy. Publish with `PUT /admin/settings/booking-policy/reviewed` using that generation and policy version. The legacy version-only PUT is accepted only in the initial generation.
 - `portfolio=1` (optional): return the payload-free `portfolio` refresh topic to callers with `editCatalog`. The gallery reloads the authenticated list and the selected image. The response advertises `portfolioUploads` when queued private drafts are supported for the caller. Direct desktop writes send the generation reported by the gallery and the reviewed photo version or upload key.
 

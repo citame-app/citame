@@ -265,6 +265,27 @@ pub fn create_appointment_reviewed(
     store.write_transaction(|store| queue_appointment(store, new, review))
 }
 
+pub fn offline_peak_quote(
+    store: &Store,
+    starts_at: DateTime<Utc>,
+    service_ids: &[String],
+) -> Result<Option<crate::booking::PeakPriceQuote>> {
+    let Some(snapshot) = store.peak_price_snapshot()? else {
+        return Ok(None);
+    };
+    let services = store.services()?;
+    let selected = service_ids
+        .iter()
+        .map(|id| {
+            services
+                .iter()
+                .find(|service| &service.id == id && service.active)
+                .ok_or(CoreError::IncompatibleServices)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    snapshot.quote(starts_at, selected).map(Some)
+}
+
 fn queue_appointment(
     store: &mut Store,
     new: NewAppointment,
@@ -280,20 +301,7 @@ fn queue_appointment(
         )));
     };
     let (quotes, mut reviewed) = reviewed_service_terms(store, &new)?;
-    let prices = match store.peak_price_snapshot()? {
-        Some(snapshot) => {
-            let services = store.services()?;
-            Some(
-                snapshot.quote(
-                    new.starts_at,
-                    new.service_ids
-                        .iter()
-                        .filter_map(|id| services.iter().find(|service| &service.id == id)),
-                )?,
-            )
-        }
-        None => None,
-    };
+    let prices = offline_peak_quote(store, new.starts_at, &new.service_ids)?;
     if prices.as_ref().and_then(|quote| quote.review.as_deref()) != review {
         return Err(CoreError::PeakPriceReviewChanged);
     }

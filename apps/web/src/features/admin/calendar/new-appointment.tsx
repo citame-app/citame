@@ -89,10 +89,11 @@ function AppointmentDraft({
 }: Omit<NewAppointmentProps, "open" | "initial" | "ownStaffId"> & {
   initial: Required<NewAppointmentInitial>;
 }) {
-  const { t, locale, timeZone } = useI18n();
+  const { t, locale, timeZone: contextTimeZone } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const salon = useQuery(salonQuery);
+  const timeZone = salon.data?.timezone ?? contextTimeZone;
   const services = useQuery({
     queryKey: ["appointment-catalog"],
     queryFn: async () => (await api().appointments.catalog()).services,

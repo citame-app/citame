@@ -208,6 +208,7 @@ impl PeakPriceSnapshot {
             quotes.push(&service.quote_hash);
             lines.push(PeakPriceLine {
                 service_id: service.id.clone(),
+                currency: service.currency.clone(),
                 surcharge_cents: surcharge,
                 price_cents: price,
             });
@@ -254,6 +255,7 @@ pub struct PeakPriceQuote {
 #[serde(rename_all = "camelCase")]
 pub struct PeakPriceLine {
     pub service_id: String,
+    pub currency: String,
     pub surcharge_cents: i64,
     pub price_cents: i64,
 }

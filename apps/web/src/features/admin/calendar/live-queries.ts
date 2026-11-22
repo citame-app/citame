@@ -89,6 +89,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["admin", "settings"],
     ["admin", "report"],
     ["salon"],
+    ["booking-peak-price"],
     ["commerce", "transactions"],
     teamShiftWeekKey,
   ],

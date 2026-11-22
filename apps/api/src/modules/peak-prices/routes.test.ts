@@ -7,7 +7,7 @@ import {
   peakPricePolicySchema,
   peakPriceQuoteSchema,
 } from "@sob/contracts";
-import { appointment, service } from "@sob/db";
+import { appointment, service, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
   type Actor,
@@ -243,14 +243,42 @@ test("the desktop delta carries schedule edits and an offline booking with a sta
         },
       ],
     });
-  const rejected = await write(startsAt);
+  const changed = await call("/admin/peak-prices", "PUT", {
+    ...(await policy()),
+    rules: [rule(2000)],
+  });
+  expect(changed.status).toBe(200);
+  const rejected = await write(startsAt, approved.review ?? undefined);
   expect(rejected.status, await rejected.clone().text()).toBe(200);
   expect(await rejected.json()).toMatchObject({
     results: [{ status: "rejected", reason: "conflict" }],
   });
   expect(await t.db.select().from(appointment)).toHaveLength(0);
-  const accepted = await write(startsAt, approved.review ?? undefined);
+  const accepted = await write(startsAt, (await preview()).review ?? undefined);
   expect(accepted.status, await accepted.clone().text()).toBe(200);
   expect(await accepted.json()).toMatchObject({ results: [{ status: "applied" }] });
   expect(await t.db.select().from(appointment)).toHaveLength(1);
+});
+
+test("restricted accounts cannot pull an offline pricing policy even when requesting a full cache", async () => {
+  const state = await policy();
+  expect((await call("/admin/peak-prices", "PUT", { ...state, rules: [rule(1500)] })).status).toBe(
+    200,
+  );
+  const staff = await actor(t, "staff", "peak-limited@example.com", { staffProfileId: f.anaId });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, f.anaId));
+  const result = await call(
+    "/sync/pull?since=0&limit=100&peakPrices=full&peakPriceViews=1",
+    "GET",
+    undefined,
+    staff,
+  );
+  expect(result.status).toBe(200);
+  const pull = await result.json();
+  expect(pull).toMatchObject({ peakPriceAccess: false });
+  expect(pull).not.toHaveProperty("peakPrices");
+  expect((pull as { refresh?: string[] }).refresh ?? []).not.toContain("peak_prices");
 });

@@ -8318,3 +8318,82 @@ fn native_classifications_replay_after_restart_and_keep_legacy_product_stock() {
         Some(subcategory.id)
     );
 }
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn a_rust_offline_peak_quote_is_accepted_and_an_outdated_one_becomes_a_conflict() {
+    use sob_core::booking::{BookingTerms, PeakPriceRule};
+
+    let mut offline = Device::sign_in();
+    let mut cloud = Device::sign_in();
+    offline.sync();
+    cloud.sync();
+    let c = catalog(&offline);
+    let client = ops::create_client(&mut offline.store, "Peak review fixture", None).unwrap();
+    assert_eq!(offline.sync().push.applied, 1);
+
+    let baseline = cloud.transport.peak_price_policy().unwrap();
+    let mut draft = baseline.clone();
+    draft.rules = (1..=7)
+        .map(|weekday| PeakPriceRule {
+            weekday,
+            start_minute: 0,
+            end_minute: 1440,
+            increase_basis_points: 2500,
+            service_ids: vec![c.haircut.clone()],
+        })
+        .collect();
+    let mut saved = cloud.transport.write_peak_price_policy(&draft).unwrap();
+
+    offline.sync();
+    let at = free_slot(&offline, &c.staff);
+    let input = || booking(&c, &c.staff, &client, at);
+    let local = ops::offline_peak_quote(&offline.store, at, &input().service_ids)
+        .unwrap()
+        .unwrap();
+    let terms = BookingTerms::prepare(&offline.store, input(), None).unwrap();
+    let remote = cloud.transport.booking_peak_price(&terms).unwrap();
+    assert_eq!(local.review, remote.review);
+    let reviewed_price = local.services[0].price_cents;
+    assert!(local.services[0].surcharge_cents > 0);
+    let reviewed =
+        ops::create_appointment_reviewed(&mut offline.store, input(), local.review.as_deref())
+            .unwrap();
+    assert_eq!(offline.sync().push.applied, 1);
+    cloud.sync();
+    assert_eq!(
+        cloud
+            .store
+            .appointment(&reviewed)
+            .unwrap()
+            .unwrap()
+            .services[0]
+            .price_cents,
+        reviewed_price
+    );
+
+    let later = free_slot(&offline, &c.staff);
+    let outdated = booking(&c, &c.staff, &client, later);
+    let local = ops::offline_peak_quote(&offline.store, later, &outdated.service_ids)
+        .unwrap()
+        .unwrap();
+    let rejected =
+        ops::create_appointment_reviewed(&mut offline.store, outdated, local.review.as_deref())
+            .unwrap();
+    for rule in &mut saved.rules {
+        rule.increase_basis_points = 3500;
+    }
+    let mut updated = cloud.transport.write_peak_price_policy(&saved).unwrap();
+    assert_eq!(offline.sync().push.rejected, 1);
+    assert!(offline.store.appointment(&rejected).unwrap().is_none());
+    assert!(
+        offline
+            .store
+            .conflicts()
+            .unwrap()
+            .iter()
+            .any(|conflict| conflict.entity_id == rejected && conflict.reason == "conflict")
+    );
+    updated.rules = baseline.rules;
+    cloud.transport.write_peak_price_policy(&updated).unwrap();
+}

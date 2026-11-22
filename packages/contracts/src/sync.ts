@@ -694,6 +694,7 @@ export const syncPullResponseSchema = z.object({
   resourcePools: z.array(resourceSchema).max(50).optional(),
   combinations: z.array(serviceCombinationSchema).max(100).optional(),
   peakPrices: peakPriceSnapshotSchema.optional(),
+  peakPriceAccess: z.boolean().optional(),
   changes: z.array(syncChangeSchema),
   /** Store this and send it as `since` next time. Never decreases. */
   nextCursor: z.number().int().min(0),

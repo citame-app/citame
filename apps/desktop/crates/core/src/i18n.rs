@@ -2044,6 +2044,7 @@ keys! {
     PeakPriceInvalid => ("Enter a valid time range and a surcharge from 0.01% through 100%.", "Introduce un horario válido y un recargo entre el 0,01 % y el 100 %."),
     PeakPriceSaved => ("Peak-time pricing saved", "Precios en horas punta guardados"),
     PeakPriceStale => ("The pricing rules changed. Reload the current policy before saving.", "Cambiaron las reglas de precios. Vuelve a cargar la configuración antes de guardar."),
+    PeakPriceOfflineUnknown => ("Current pricing will be checked when you reconnect. A changed price requires review.", "El precio se comprobará al reconectar. Si cambia, tendrás que revisarlo."),
     PeakPriceChanged => ("The price for this time changed. Review the new amount before confirming.", "El precio para este horario cambió. Revisa el nuevo importe antes de confirmar."),
     PeakPriceSurcharge => ("Peak-time surcharge · {amount}", "Recargo de hora punta · {amount}"),
     SeriesPrice => ("Per visit: {price}", "Por cita: {price}"),

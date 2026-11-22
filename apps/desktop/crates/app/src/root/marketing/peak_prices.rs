@@ -453,10 +453,18 @@ impl Root {
                 .iter()
                 .any(|selected| selected == id)
         };
-        let service_choices = self
-            .services
+        let service_choices = editor
+            .rule
+            .service_ids
             .iter()
-            .filter(|service| selected(&service.id))
+            .map(|id| {
+                let name = self
+                    .services
+                    .iter()
+                    .find(|service| &service.id == id)
+                    .map_or(id.as_str(), |service| service.name.as_str());
+                (id, name)
+            })
             .chain(
                 self.services
                     .iter()
@@ -465,7 +473,8 @@ impl Root {
                             && !selected(&service.id)
                             && service.name.to_lowercase().contains(&search)
                     })
-                    .take(15),
+                    .take(15)
+                    .map(|service| (&service.id, service.name.as_str())),
             );
         div()
             .flex()
@@ -519,11 +528,11 @@ impl Root {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .children(service_choices.map(|service| {
-                        let id = service.id.clone();
+                    .children(service_choices.map(|(id, name)| {
+                        let id = id.clone();
                         self.chip(
                             SharedString::from(format!("peak-service-{id}")),
-                            SharedString::from(service.name.clone()),
+                            SharedString::from(name.to_owned()),
                             selected(&id),
                             cx.listener(move |root, _, _, cx| {
                                 if let Some(editor) =

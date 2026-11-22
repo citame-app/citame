@@ -191,6 +191,7 @@ struct PullMetadata<'a> {
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     peak_prices: Option<&'a crate::booking::PeakPriceSnapshot>,
+    peak_price_access: Option<bool>,
     inventory_access: Option<bool>,
     inventory_read_access: Option<bool>,
     portfolio_uploads: bool,
@@ -1077,6 +1078,7 @@ impl Store {
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
                 peak_prices: page.peak_prices.as_ref(),
+                peak_price_access: page.peak_price_access,
                 inventory_access: page.viewer_write_inventory,
                 inventory_read_access: page.viewer_read_inventory.or(page.viewer_write_inventory),
                 portfolio_uploads: page.portfolio_uploads.unwrap_or(false),
@@ -1130,7 +1132,9 @@ impl Store {
             Self::apply_portfolio_upload_support_at(&tx, metadata.portfolio_uploads)?;
             gift_cache::apply_scope_at(&tx, metadata.gift_cards_scope)?;
         }
-        if let Some(prices) = metadata.peak_prices {
+        if metadata.peak_price_access == Some(false) {
+            tx.execute("DELETE FROM meta WHERE key = 'peak_price_snapshot'", [])?;
+        } else if let Some(prices) = metadata.peak_prices {
             prices.validate()?;
             Self::set_meta_at(&tx, "peak_price_snapshot", &serde_json::to_string(prices)?)?;
         }
