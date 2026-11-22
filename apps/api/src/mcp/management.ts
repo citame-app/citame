@@ -228,6 +228,17 @@ const appointmentWrite = C.updateAppointmentRequestSchema;
 const promotionWrite = C.promotionInputSchema.safeExtend({
   active: z.boolean(),
 });
+const staffWorkQuery = C.reportStaffWorkQuerySchema;
+const staffWorkToolQuery = staffWorkQuery.safeExtend({
+  from: staffWorkQuery.shape.from.describe(
+    "First centre-local calendar date, inclusive (YYYY-MM-DD).",
+  ),
+  to: staffWorkQuery.shape.to.describe("Last centre-local calendar date, inclusive (YYYY-MM-DD)."),
+  staffId: staffWorkQuery.shape.staffId.describe("UUID of the professional whose report to read."),
+  currency: staffWorkQuery.shape.currency.describe(
+    "Optional currency code. It does not change work durations.",
+  ),
+});
 
 export function registerManagementTools(
   server: McpServer,
@@ -980,7 +991,7 @@ export function registerManagementTools(
     "Read one professional's daily scheduled, blocked and reserved minutes and unavailable intervals for a date range and the next 14 days. Staff without team calendar access can only read their own report.",
     read("operationalReports"),
     "GET",
-    C.reportStaffWorkQuerySchema,
+    staffWorkToolQuery,
     C.reportStaffWorkSchema,
     (query) => ({ path: "/reports/staff-work", query }),
   );

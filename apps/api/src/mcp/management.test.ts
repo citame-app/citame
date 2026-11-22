@@ -205,7 +205,12 @@ test("the daily staff work tool shares the REST report and enforces the current 
   const ownerToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
   const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
   const personalToken = (await tokenFor(t, owner, "mcp:read")).tokens.access_token;
-  expect(await listTools(t.app, ownerToken)).toContain(tool);
+  const listing = await rpc(t.app, ownerToken, "tools/list");
+  const listed = listing.body?.result?.tools.find(({ name }: { name: string }) => name === tool);
+  expect(listed?.annotations.readOnlyHint).toBe(true);
+  expect(listed?.inputSchema.properties.from.description).toContain("centre-local");
+  expect(listed?.inputSchema.properties.to.description).toContain("inclusive");
+  expect(listed?.inputSchema.properties.staffId.description).toContain("professional");
   expect(await listTools(t.app, personalToken)).not.toContain(tool);
 
   const own = { from: MONDAY, to: MONDAY, staffId: f.anaId };
