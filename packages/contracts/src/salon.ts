@@ -2,6 +2,7 @@ import { z } from "zod";
 import { instantSchema, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
 import { reminderLeadSchema } from "./notifications";
+import { publicProfileImagesSchema } from "./salon-media";
 
 export const phoneSchema = z
   .string()
@@ -144,6 +145,7 @@ export type BusinessProfile = z.infer<typeof businessProfileSchema>;
 export const publicBusinessProfileSchema = z.object({
   profile: businessProfileContentSchema.nullable(),
   openingSchedule: openingScheduleSchema.optional(),
+  images: publicProfileImagesSchema.optional(),
 });
 export type PublicBusinessProfile = NonNullable<
   z.infer<typeof publicBusinessProfileSchema>["profile"]

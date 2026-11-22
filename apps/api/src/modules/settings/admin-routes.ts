@@ -1,6 +1,8 @@
 import {
   bookingPolicyInputSchema,
+  idSchema,
   initialSyncGeneration,
+  profileMediaWriteSchema,
   reviewedBookingPolicyInputSchema,
   reviewedBusinessProfileRequestSchema,
   reviewedSalonSettingsRequestSchema,
@@ -13,6 +15,7 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { getBookingPolicy, publishBookingPolicy } from "../booking-protection/policy";
+import { readProfileImage, reviewProfileMedia, saveProfileMedia } from "./profile-media";
 import {
   getSalonSettings,
   toOwnerSettings,
@@ -67,6 +70,29 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
         ...toReviewedSettings(await getSalonSettings(db)),
         generation: config.syncReplicaGeneration,
       });
+    })
+    .get("/profile/images", async (c) => {
+      requireRole(c.get("principal"), "owner");
+      return c.json(await reviewProfileMedia(db, config.syncReplicaGeneration), 200, {
+        "Cache-Control": "private, no-store",
+      });
+    })
+    .get("/profile/images/:id/:version", (c) => {
+      c.header("Cache-Control", "private, no-store");
+      requireRole(c.get("principal"), "owner");
+      return readProfileImage(
+        db,
+        parseOrThrow(idSchema, c.req.param("id")),
+        parseOrThrow(idSchema, c.req.param("version")),
+        false,
+      );
+    })
+    .put("/profile/images", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const change = parseOrThrow(profileMediaWriteSchema, await readJson(c));
+      const snapshot = await saveProfileMedia(db, change, principal, config.syncReplicaGeneration);
+      return c.json(snapshot, 200, { "Cache-Control": "private, no-store" });
     })
     .put("/profile", async (c) => {
       const principal = c.get("principal");

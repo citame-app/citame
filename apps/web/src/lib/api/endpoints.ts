@@ -53,6 +53,8 @@ import {
   oauthConnectionsSchema,
   optOutPreviewSchema,
   ownerSalonSettingsSchema,
+  type ProfileMediaWrite,
+  profileMediaSnapshotSchema,
   publicBusinessProfileSchema,
   type ReportOutcomesQuery,
   type ReviewedBusinessProfileRequest,
@@ -402,6 +404,10 @@ export function createEndpoints(client: ApiClient) {
         reviewed: () => client.get("/admin/settings/desktop", desktopSalonSettingsSchema),
         saveProfile: (request: ReviewedBusinessProfileRequest) =>
           client.put("/admin/settings/profile", request, desktopSalonSettingsSchema),
+        profileImages: () =>
+          client.get("/admin/settings/profile/images", profileMediaSnapshotSchema),
+        saveProfileImage: (request: ProfileMediaWrite) =>
+          client.put("/admin/settings/profile/images", request, profileMediaSnapshotSchema),
         update: (request: UpdateSalonSettingsRequest) =>
           client.patch("/admin/settings", request, ownerSalonSettingsSchema),
       },

@@ -1855,6 +1855,78 @@ fn native_service_assignments_replay_and_keep_concurrent_cloud_changes_through_t
 }
 
 #[test]
+#[ignore = "needs the isolated production smoke stack behind the web gateway (see README)"]
+fn native_profile_images_use_the_reviewed_connection_through_the_proxy() {
+    use sob_core::http::{ProfileImageAction, ProfileImageKind};
+    use sob_core::staff_portrait_image::prepare_photo;
+
+    let device = proxy_device();
+    let browser = Device::sign_in();
+    let initial = device.transport.profile_images().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let raster = directory.path().join("profile-photo.png");
+    image::RgbImage::from_pixel(64, 32, image::Rgb([120, 64, 90]))
+        .save(&raster)
+        .unwrap();
+    let upload = ProfileImageAction::Upload {
+        kind: ProfileImageKind::Gallery,
+        replace_id: None,
+        alt: format!("Synthetic room {}", uuid::Uuid::now_v7()),
+        jpeg: prepare_photo(&raster).unwrap(),
+    };
+    let draft = device
+        .transport
+        .update_profile_image(&initial, upload.clone())
+        .unwrap();
+    assert!(
+        device
+            .transport
+            .update_profile_image(&initial, upload)
+            .is_err()
+    );
+    let asset = draft
+        .images
+        .iter()
+        .find(|image| !initial.images.iter().any(|old| old.id == image.id))
+        .unwrap();
+    assert!(!asset.published);
+    let jpeg = device.transport.profile_image(asset).unwrap();
+    assert!(jpeg.starts_with(&[255, 216, 255]));
+    let browser_state = browser.rest_get("/admin/settings/profile/images");
+    assert!(
+        browser_state["images"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|image| image["id"] == asset.id.to_string())
+    );
+    let saved = device
+        .transport
+        .update_profile_image(
+            &draft,
+            ProfileImageAction::Publish {
+                id: asset.id,
+                published: true,
+            },
+        )
+        .unwrap();
+    assert!(
+        saved
+            .images
+            .iter()
+            .find(|image| image.id == asset.id)
+            .unwrap()
+            .published
+    );
+    assert!(device.transport.profile_image(asset).is_err());
+    let removed = device
+        .transport
+        .update_profile_image(&saved, ProfileImageAction::Remove { id: asset.id })
+        .unwrap();
+    assert!(removed.images.iter().all(|image| image.id != asset.id));
+}
+
+#[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_salon_settings_resume_after_restart_and_preserve_cloud_changes_through_the_proxy() {
     let device = proxy_device();

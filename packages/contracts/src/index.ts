@@ -49,6 +49,7 @@ export * from "./resources";
 export * from "./reviews";
 export * from "./rewards";
 export * from "./salon";
+export * from "./salon-media";
 export * from "./service-combinations";
 export * from "./service-options";
 export * from "./service-pricing";

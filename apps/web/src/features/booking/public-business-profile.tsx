@@ -2,19 +2,26 @@ import type {
   DateShiftRange,
   OpeningSchedule,
   PublicBusinessProfile as Profile,
+  PublicProfileImage,
 } from "@sob/contracts";
 import { useEffect, useState } from "react";
 import { useI18n } from "~/i18n/react";
 import { formatDateWithYear, formatWallTime, localDateOf, WEEKDAY_ORDER } from "~/lib/format";
 
+export function publicProfileImageUrl(image: Pick<PublicProfileImage, "id" | "version">) {
+  return `/api/salon/profile/images/${image.id}/${image.version}`;
+}
+
 export function PublicBusinessProfile({
   profile,
   openingSchedule,
+  gallery = [],
   initialDate,
   timezone,
 }: {
   profile: Profile;
   openingSchedule?: OpeningSchedule;
+  gallery?: PublicProfileImage[];
   initialDate: string;
   timezone: string;
 }) {
@@ -63,6 +70,7 @@ export function PublicBusinessProfile({
     mobileService,
     weekly,
     exceptions.length,
+    gallery.length,
   ].some(Boolean);
   if (!hasDetails) return null;
   const hours = (ranges: DateShiftRange[]) =>
@@ -195,6 +203,33 @@ export function PublicBusinessProfile({
             </div>
           )}
         </div>
+        {gallery.length > 0 && (
+          <section aria-labelledby="centre-gallery-heading" className="space-y-3 lg:col-span-2">
+            <h3 className="text-heading" id="centre-gallery-heading">
+              {t("settings.media.gallery")}
+            </h3>
+            <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {gallery.map((image) => (
+                <li key={image.id}>
+                  <a
+                    href={publicProfileImageUrl(image)}
+                    className="block overflow-hidden rounded-lg bg-sunken"
+                  >
+                    <img
+                      src={publicProfileImageUrl(image)}
+                      alt={image.alt}
+                      width={image.width}
+                      height={image.height}
+                      loading="lazy"
+                      decoding="async"
+                      className="aspect-[4/3] h-auto w-full object-cover"
+                    />
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
       </div>
     </section>
   );

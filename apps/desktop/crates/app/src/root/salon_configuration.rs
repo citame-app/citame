@@ -5,6 +5,7 @@ use sob_core::http::{
 use sob_core::store::SalonConfigurationWork;
 
 mod business_profile;
+mod profile_media;
 use business_profile::BusinessEditor;
 
 const LABELS: [Key; 6] = [
@@ -27,6 +28,7 @@ pub(super) struct Desk {
     message: Option<Key>,
     read_failed: bool,
     review_after_restore: bool,
+    media: profile_media::MediaDesk,
 }
 
 impl Desk {
@@ -147,6 +149,7 @@ impl Root {
             message,
             read_failed: false,
             review_after_restore: false,
+            media: profile_media::MediaDesk::default(),
         }));
         self.request_salon_configuration(false, cx);
     }
@@ -156,10 +159,12 @@ impl Root {
             return false;
         };
         let keep = desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
-            || desk.reviewing_conflict.is_some();
+            || desk.reviewing_conflict.is_some()
+            || desk.media.dirty();
         if keep {
             desk.instance = Arc::new(());
             desk.busy = false;
+            desk.media.reset_request();
             desk.review_after_restore = true;
             desk.message = Some(Key::SalonRestoreReview);
         }
@@ -207,6 +212,7 @@ impl Root {
         {
             self.request_salon_configuration(false, cx);
         }
+        self.refresh_profile_images(observed, reconnected, cx);
     }
 
     fn request_salon_configuration(&mut self, review_conflict: bool, cx: &mut Context<Self>) {
@@ -358,12 +364,13 @@ impl Root {
         let Overlay::SalonConfiguration(desk) = &mut self.overlay else {
             return;
         };
-        if desk.busy {
+        if desk.busy || desk.media.busy() {
             return;
         }
         if desk.confirm_close {
             desk.confirm_close = false;
-        } else if desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx)) {
+        } else if desk.media.dirty() || desk.editor.as_ref().is_some_and(|editor| editor.dirty(cx))
+        {
             desk.confirm_close = true;
         } else {
             self.overlay = Overlay::None;
@@ -377,6 +384,22 @@ impl Root {
         viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if desk.media.open && !desk.confirm_close {
+            return self.modal_with_height(
+                div().flex().min_h_0().child(
+                    div()
+                        .id("profile-image-scroll")
+                        .debug_selector(|| "profile-image-scroll".to_string())
+                        .min_h_0()
+                        .flex_1()
+                        .overflow_y_scroll()
+                        .child(self.render_profile_images(&desk.media, cx)),
+                ),
+                (viewport.width - px(32.)).max(px(220.)).min(px(610.)),
+                (viewport.height - px(28.)).max(px(140.)),
+                Some(cx),
+            );
+        }
         let online = self.status.connectivity == Connectivity::Online;
         let body = div()
             .flex()
@@ -477,6 +500,18 @@ impl Root {
                         cx.listener(move |root, _, _, cx| {
                             root.request_salon_configuration(needs_review, cx)
                         }),
+                    ));
+                }
+                if desk
+                    .editor
+                    .as_ref()
+                    .is_some_and(|editor| editor.profile.is_some())
+                {
+                    actions = actions.child(self.button(
+                        "salon-media",
+                        self.t(Key::ProfileMediaTitle),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.open_profile_images(cx)),
                     ));
                 }
                 body.when(pending, |body| body.child(self.t(Key::SalonQueued)))
@@ -713,7 +748,7 @@ mod tests {
             editor.online = false;
             root.overlay = Overlay::SalonConfiguration(Box::new(Desk {
                 instance: Arc::new(()), editor: Some(editor), busy: false, work: SalonConfigurationWork::Idle,
-                reviewing_conflict: None, confirm_close: false, observed: None, message: None, read_failed: false, review_after_restore: false,
+                reviewing_conflict: None, confirm_close: false, observed: None, message: None, read_failed: false, review_after_restore: false, media: profile_media::MediaDesk::default(),
             }));
             assert!(root.preserve_open_salon_draft(cx));
             root.save_salon_configuration(cx);
