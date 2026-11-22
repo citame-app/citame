@@ -6,16 +6,19 @@ import { TextField } from "~/components/ui/field";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useDebounced } from "~/features/admin/use-debounced";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 
 export function InvitationContacts({
   selected,
   contacts,
+  viewerId,
   feedback,
   onChange,
 }: {
   selected: string[];
   contacts?: Campaign["selectedContacts"];
+  viewerId: string;
   feedback?: string;
   onChange: (ids: string[]) => void;
 }) {
@@ -27,11 +30,14 @@ export function InvitationContacts({
   const id = useId();
   const pageSize = 10;
   const clients = useQuery({
-    queryKey: ["admin", "clients", "booking-invitation", term, page],
+    queryKey: ["admin", "clients", "booking-invitation", viewerId, term, page],
     queryFn: () => api().admin.clients.list({ search: term, page, pageSize }),
   });
   const limit = BOOKING_INVITATION_MAX_CONTACTS;
   const remove = (id: string) => onChange(selected.filter((client) => client !== id));
+  if (clients.error instanceof ApiError && [401, 403].includes(clients.error.status)) {
+    return <ErrorState error={clients.error} />;
+  }
   return (
     <fieldset aria-describedby={id} className="space-y-3 rounded-xl border border-line p-4">
       <legend className="px-1 font-semibold">{t("marketing.invitationContacts")}</legend>

@@ -25,7 +25,7 @@ function MarketingPage() {
   const permissions = permissionsFor(session.user.role, session.accessPreset);
   const items = [
     { value: "overview", label: t("pos.overview") },
-    { value: "campaigns", label: t("marketing.campaigns") },
+    ...(permissions.editCatalog ? [{ value: "campaigns", label: t("marketing.campaigns") }] : []),
     { value: "social", label: t("social.title") },
     { value: "links", label: t("acquisition.title") },
     { value: "promotions", label: t("promotions.title") },
@@ -86,7 +86,7 @@ function MarketingPage() {
             ))}
         </div>
       )}
-      {visited.has("campaigns") && (
+      {visited.has("campaigns") && permissions.editCatalog && (
         <div hidden={section !== "campaigns"}>
           <CampaignsView
             key={session.user.id}

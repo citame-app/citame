@@ -25,6 +25,19 @@ import { localDateOf } from "~/lib/format";
 import { zonedInstant } from "~/lib/zoned";
 import { InvitationContacts } from "./invitation-contacts";
 
+function lostMarketingAccess(error: unknown): error is ApiError {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403);
+}
+
+function MarketingAccessError({ error, onClose }: { error: ApiError; onClose: () => void }) {
+  const { t } = useI18n();
+  return (
+    <Sheet open onOpenChange={(open) => !open && onClose()} title={t("marketing.campaigns")}>
+      <ErrorState error={error} />
+    </Sheet>
+  );
+}
+
 export const campaignFields = (c: CampaignDraft): CampaignDraft => ({
   name: c.name,
   channel: c.channel,
@@ -87,7 +100,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
   const [saved, setSaved] = useState(false);
   const queries = useQueryClient();
   const query = useQuery({
-    queryKey: ["marketing", "campaigns", term, status, page],
+    queryKey: ["marketing", "campaigns", viewerId, term, status, page],
     queryFn: () =>
       api().marketing.list({
         bookingInvitations: "1",
@@ -100,6 +113,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
     refetchInterval: 15000,
   });
   const refresh = () => void queries.invalidateQueries({ queryKey: ["marketing"] });
+  if (lostMarketingAccess(query.error)) return <ErrorState error={query.error} />;
   return (
     <section aria-label={t("marketing.campaigns")} className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -234,6 +248,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
           initial={editing.initial}
           copy={editing.copy}
           contacts={editing.contacts}
+          viewerId={viewerId}
           onClose={() => setEditing(null)}
           onSaved={(c, shouldReview) => {
             setEditing(null);
@@ -259,6 +274,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
       {detail && (
         <CampaignHistory
           initial={detail}
+          viewerId={viewerId}
           onClose={() => setDetail(null)}
           onDuplicate={(c) => {
             setDetail(null);
@@ -280,12 +296,14 @@ function CampaignEditor({
   initial,
   copy,
   contacts,
+  viewerId,
   onClose,
   onSaved,
 }: {
   initial: Campaign | null;
   copy?: CampaignDraft;
   contacts?: Campaign["selectedContacts"];
+  viewerId: string;
   onClose: () => void;
   onSaved: (c: Campaign, review: boolean) => void;
 }) {
@@ -378,6 +396,9 @@ function CampaignEditor({
     invalid && candidate.error?.issues.some((i) => i.path.join(".") === key)
       ? t("pos.invalidField")
       : undefined;
+  if (lostMarketingAccess(save.error)) {
+    return <MarketingAccessError error={save.error} onClose={onClose} />;
+  }
   return (
     <>
       <UnsavedGuard dirty={dirty || uncertain} />
@@ -527,6 +548,7 @@ function CampaignEditor({
               <InvitationContacts
                 selected={selected}
                 contacts={initial?.selectedContacts ?? contacts}
+                viewerId={viewerId}
                 feedback={
                   invalid && !selected.length ? t("marketing.invitationRequired") : undefined
                 }
@@ -648,7 +670,7 @@ function CampaignReview({
   const [date, setDate] = useState("");
   const [discard, setDiscard] = useState(false);
   const audience = useQuery({
-    queryKey: ["marketing", "preview", campaign.id, campaign.version],
+    queryKey: ["marketing", "preview", viewerId, campaign.id, campaign.version],
     queryFn: () => api().marketing.preview(campaign.id),
     staleTime: 0,
     refetchOnWindowFocus: false,
@@ -714,6 +736,10 @@ function CampaignReview({
     if (uncertain) setDiscard(true);
     else onClose();
   };
+  const accessError = [audience.error, capabilities.error, queue.error, testEmail.error].find(
+    lostMarketingAccess,
+  );
+  if (accessError) return <MarketingAccessError error={accessError} onClose={onClose} />;
   return (
     <>
       <UnsavedGuard dirty={uncertain} />
@@ -900,10 +926,12 @@ function CampaignReview({
 }
 function CampaignHistory({
   initial,
+  viewerId,
   onClose,
   onDuplicate,
 }: {
   initial: Campaign;
+  viewerId: string;
   onClose: () => void;
   onDuplicate: (c: Campaign) => void;
 }) {
@@ -913,14 +941,14 @@ function CampaignHistory({
   const [page, setPage] = useState(1);
   const [confirm, setConfirm] = useState(false);
   const query = useQuery({
-    queryKey: ["marketing", "campaign", initial.id],
+    queryKey: ["marketing", "campaign", viewerId, initial.id],
     queryFn: () => api().marketing.get(initial.id),
     initialData: initial,
     refetchInterval: 5000,
   });
   const c = query.data;
   const deliveries = useQuery({
-    queryKey: ["marketing", "deliveries", c.id, page],
+    queryKey: ["marketing", "deliveries", viewerId, c.id, page],
     queryFn: () => api().marketing.deliveries(c.id, { page }),
     refetchInterval: 5000,
   });
@@ -931,6 +959,8 @@ function CampaignHistory({
       void queries.invalidateQueries({ queryKey: ["marketing"] });
     },
   });
+  const accessError = [query.error, deliveries.error, cancel.error].find(lostMarketingAccess);
+  if (accessError) return <MarketingAccessError error={accessError} onClose={onClose} />;
   return (
     <>
       <Sheet

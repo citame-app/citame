@@ -93,6 +93,8 @@ export function useAuth() {
       await api().auth.signOut();
       queryClient.removeQueries({ queryKey: ["appointments"] });
       queryClient.removeQueries({ queryKey: ["rewards", "stamps"] });
+      queryClient.removeQueries({ queryKey: ["marketing"] });
+      queryClient.removeQueries({ queryKey: ["admin", "clients", "booking-invitation"] });
       await refreshSession();
       await navigate({ to: "/" });
     },

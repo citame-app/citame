@@ -1,12 +1,73 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { Campaign, CampaignCreate, CampaignTestEmail } from "@sob/contracts";
 import { fireEvent, screen } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../test/render";
 import { CampaignsView } from "./campaigns";
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
   globalThis.fetch = originalFetch;
+});
+
+function Viewer({ onSwitch }: { onSwitch: () => void }) {
+  const [viewerId, setViewerId] = useState("first");
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          onSwitch();
+          setViewerId("second");
+        }}
+      >
+        Switch viewer
+      </button>
+      <CampaignsView key={viewerId} viewerId={viewerId} isOwner={viewerId === "first"} />
+    </>
+  );
+}
+
+test("another signed-in viewer never renders campaigns cached for the previous viewer", async () => {
+  const name = "Private campaign from the previous session";
+  const campaign: Campaign = {
+    id: "0198f5a0-7b1c-7000-8000-000000000201",
+    name,
+    channel: "email",
+    subject: "Hi",
+    emailBody: "Hello",
+    smsBody: "",
+    audience: { tags: [], inactiveDays: null, noFutureAppointments: false },
+    trigger: "manual",
+    delayMinutes: 0,
+    birthdayLeadDays: 0,
+    status: "draft",
+    version: 1,
+    counts: { pending: 0, processing: 0, sent: 0, skipped: 0, failed: 0, unknown: 0, cancelled: 0 },
+    scheduledFor: null,
+    activatedAt: null,
+    createdAt: "2026-11-22T08:00:00.000Z",
+    updatedAt: "2026-11-22T08:00:00.000Z",
+  };
+  let firstViewer = true;
+  globalThis.fetch = mock(async () =>
+    firstViewer
+      ? Response.json({
+          campaigns: [campaign],
+          pagination: { total: 1, page: 1, pageSize: 20 },
+        })
+      : Response.json({ error: { code: "forbidden", message: "Access changed" } }, { status: 403 }),
+  ) as unknown as typeof fetch;
+  renderApp(
+    <Viewer
+      onSwitch={() => {
+        firstViewer = false;
+      }}
+    />,
+  );
+  expect(await screen.findByText(name)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Switch viewer" }));
+  expect(screen.queryByText(name)).toBeNull();
 });
 
 test("booking invitations require selected contacts before opening the recipient review", async () => {
