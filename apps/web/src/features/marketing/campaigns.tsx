@@ -20,7 +20,7 @@ import { UnsavedGuard } from "~/features/admin/unsaved-guard";
 import { useDebounced } from "~/features/admin/use-debounced";
 import type { Translator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
-import { ApiError } from "~/lib/api/client";
+import { ApiError, NetworkError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { localDateOf } from "~/lib/format";
 import { zonedInstant } from "~/lib/zoned";
@@ -383,12 +383,14 @@ function CampaignComparison({
   return (
     <Sheet
       open
-      size="lg"
+      size="xl"
       onOpenChange={(open) => !open && onClose()}
       title={t("marketing.compare")}
     >
       <p className="mb-4 text-sm text-muted">{t("marketing.comparisonHelp")}</p>
-      {result.isError ? (
+      {result.isPaused ? (
+        <ErrorState error={new NetworkError()} />
+      ) : result.isError ? (
         <ErrorState error={result.error} onRetry={() => void result.refetch()} />
       ) : result.isPending || (result.isFetching && !result.isFetchedAfterMount) ? (
         <Skeleton className="h-56" />

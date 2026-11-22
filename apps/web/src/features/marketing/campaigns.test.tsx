@@ -1,5 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import type { Campaign, CampaignCreate, CampaignTestEmail } from "@sob/contracts";
+import { onlineManager } from "@tanstack/react-query";
 import { fireEvent, screen } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../test/render";
@@ -300,4 +301,15 @@ test("campaign comparison keeps selections across pages and shows separate deliv
   fireEvent.click(screen.getByRole("button", { name: "Compare campaigns" }));
   expect(await screen.findByRole("cell", { name: "14" })).toBeVisible();
   expect(requests).toEqual([expectedIds, expectedIds]);
+
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  onlineManager.setOnline(false);
+  try {
+    fireEvent.click(screen.getByRole("button", { name: "Compare campaigns" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.queryByRole("table")).toBeNull();
+    expect(requests).toEqual([expectedIds, expectedIds]);
+  } finally {
+    onlineManager.setOnline(true);
+  }
 });

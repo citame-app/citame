@@ -13,8 +13,8 @@ export interface SheetProps {
   children: ReactNode;
   /** Sticky footer, e.g. the primary actions. */
   footer?: ReactNode;
-  /** Wider panel for forms with a side-by-side layout. */
-  size?: "md" | "lg";
+  /** Panel width on larger screens. */
+  size?: "md" | "lg" | "xl";
   /** Keep the schedule readable for contextual inboxes. Focus remains inside the dialog. */
   dimBackground?: boolean;
 }
@@ -51,7 +51,11 @@ export function Sheet({
               "sob-rise flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-xl border border-line bg-surface shadow-lg",
               "transition-[transform,opacity] duration-200 data-ending-style:translate-y-4 data-ending-style:opacity-0",
               "sm:max-h-none sm:h-dvh sm:rounded-none sm:rounded-l-xl sm:border-y-0 sm:border-r-0 sm:data-ending-style:translate-x-4 sm:data-ending-style:translate-y-0",
-              size === "lg" ? "sm:max-w-2xl" : "sm:max-w-md",
+              {
+                md: "sm:max-w-md",
+                lg: "sm:max-w-2xl",
+                xl: "sm:max-w-4xl",
+              }[size],
             )}
           >
             <header className="flex items-start justify-between gap-3 border-b border-line px-5 py-4">
