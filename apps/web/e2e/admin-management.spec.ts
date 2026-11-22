@@ -1,7 +1,158 @@
 import { expect, test } from "@playwright/test";
+import { type BusinessProfileChanges, desktopSalonSettingsSchema } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
-import { expectNoHorizontalScroll } from "./admin-helpers";
+import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
+
+test("the owner can draft, publish, revise and withdraw the public business profile", async ({
+  page,
+  browser,
+}) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/settings?section=profile");
+  await expect(page).toHaveURL(/\/admin\/settings\?section=profile$/);
+  const settingsPath = "/api/admin/settings";
+  async function reviewedSettings() {
+    const response = await page.request.get(`${settingsPath}/desktop`);
+    expect(response.status(), await response.text()).toBe(200);
+    return desktopSalonSettingsSchema.parse(await response.json());
+  }
+  const initial = await reviewedSettings();
+  if (!initial.businessProfile) throw new Error("Missing business profile fixture");
+  const original = {
+    ...initial.businessProfile,
+    openingSchedule: initial.openingSchedule,
+  };
+  const visitor = await browser.newPage({ viewport: page.viewportSize() });
+  const headers = { Origin: fixture.baseURL };
+  const profilePath = `${settingsPath}/profile`;
+  async function writeProfile(changes: BusinessProfileChanges) {
+    const { generation, revision } = await reviewedSettings();
+    return page.request.put(profilePath, {
+      headers,
+      data: { generation, expectedRevision: revision, changes },
+    });
+  }
+  const form = page.getByRole("form", { name: "Public business profile" });
+  const description = form.getByLabel("Short description");
+  const publish = form.getByRole("checkbox", {
+    name: "Publish on the booking site",
+  });
+  const save = form.getByRole("button", { name: "Save settings" });
+  const label = `Studio overview ${crypto.randomUUID()}`;
+  const publicPage = () => visitor.goto(fixture.baseURL);
+  async function saveAndWait() {
+    const saved = page.waitForResponse(
+      (result) => result.url().endsWith(profilePath) && result.request().method() === "PUT",
+    );
+    await save.click();
+    const result = await saved;
+    expect(result.status(), await result.text()).toBe(200);
+    await expect(page.getByText("Settings saved", { exact: true }).first()).toBeVisible();
+  }
+  try {
+    await description.fill(label);
+    await form.getByLabel("Public address").fill("9 Synthetic Street");
+    await form.getByLabel("Website (HTTPS)").fill("https://example.test/studio");
+    await form.getByRole("checkbox", { name: "Wi-Fi", exact: true }).check();
+    const monday = form.getByRole("group", { name: "Monday", exact: true });
+    await form.getByRole("checkbox", { name: "Set regular opening hours" }).check();
+    await monday.getByRole("button", { name: "Add opening period" }).click();
+    await monday.getByLabel("Opens", { exact: true }).fill("09:00");
+    await monday.getByLabel("Closes", { exact: true }).fill("12:00");
+    await monday.getByRole("button", { name: "Add opening period" }).click();
+    await monday.getByLabel("Opens", { exact: true }).nth(1).fill("14:00");
+    await monday.getByLabel("Closes", { exact: true }).nth(1).fill("18:00");
+    if (test.info().project.name === "mobile") {
+      const opens = await monday.getByLabel("Opens", { exact: true }).first().boundingBox();
+      const closes = await monday.getByLabel("Closes", { exact: true }).first().boundingBox();
+      const remove = await monday
+        .getByRole("button", { name: "Remove period" })
+        .first()
+        .boundingBox();
+      if (!opens || !closes || !remove) throw new Error("Missing a visible opening-period control");
+      expect(Math.min(opens.width, closes.width)).toBeGreaterThanOrEqual(128);
+      expect(remove.y).toBeGreaterThanOrEqual(closes.y + closes.height);
+    }
+    const closure = salonDate(14);
+    await form.getByRole("button", { name: "Add special date" }).click();
+    await form.getByLabel("Special date", { exact: true }).fill(closure);
+    const viewport = page.viewportSize();
+    if (test.info().project.name === "mobile" && viewport) {
+      await page.setViewportSize({ width: 320, height: viewport.height });
+      const specialHours = form.getByRole("group", { name: "Special hours and closures" });
+      await specialHours.getByRole("button", { name: "Add opening period" }).click();
+      await specialHours.getByLabel("Opens", { exact: true }).fill("09:00");
+      await specialHours.getByLabel("Closes", { exact: true }).fill("17:00");
+      const opens = await specialHours.getByLabel("Opens", { exact: true }).boundingBox();
+      const closes = await specialHours.getByLabel("Closes", { exact: true }).boundingBox();
+      if (!opens || !closes) throw new Error("Missing a visible special-period control");
+      expect(Math.min(opens.width, closes.width)).toBeGreaterThanOrEqual(128);
+      expect(closes.y).toBeGreaterThanOrEqual(opens.y + opens.height);
+      await expectNoHorizontalScroll(page);
+      await specialHours.getByRole("button", { name: "Remove period" }).click();
+      await page.setViewportSize(viewport);
+    }
+    await expectNoHorizontalScroll(page);
+    await saveAndWait();
+    await publicPage();
+    await expect(visitor.getByText(label)).toHaveCount(0);
+    await expect(visitor.getByRole("heading", { name: "Opening hours", exact: true })).toHaveCount(
+      0,
+    );
+
+    await publish.check();
+    await saveAndWait();
+    await publicPage();
+    const profile = visitor.getByRole("region", { name: "About the centre" });
+    await expect(profile.getByText(label)).toBeVisible();
+    await expect(profile.getByText("9 Synthetic Street")).toBeVisible();
+    await expect(
+      profile.getByText("9:00 AM–12:00 PM, 2:00 PM–6:00 PM", { exact: true }).first(),
+    ).toBeVisible();
+    const special = profile.locator(`time[datetime="${closure}"]`);
+    await expect(special).toBeVisible();
+    await expect(special.locator("../..").getByText("Closed", { exact: true })).toBeVisible();
+    await expect(profile.getByRole("link", { name: "Website" })).toHaveAttribute(
+      "href",
+      "https://example.test/studio",
+    );
+    await expectNoHorizontalScroll(visitor);
+
+    await description.fill(`${label} updated`);
+    await monday.getByLabel("Opens", { exact: true }).first().fill("09:30");
+    const remoteClosure = salonDate(15);
+    const remote = await writeProfile({
+      phone: "+34 555 010 123",
+      openingScheduleEdits: { exceptions: { [remoteClosure]: [] } },
+    });
+    expect(remote.status(), await remote.text()).toBe(200);
+    if (await save.isEnabled()) await save.click();
+    await form.getByRole("button", { name: "Load latest and review draft" }).click();
+    await expect(description).toHaveValue(`${label} updated`);
+    await expect(form.getByLabel("Public phone")).toHaveValue("+34 555 010 123");
+    await expect(monday.getByLabel("Opens", { exact: true }).first()).toHaveValue("09:30");
+    await expect(form.getByLabel("Special date", { exact: true }).nth(1)).toHaveValue(
+      remoteClosure,
+    );
+    await visitor.locator('main a[href="/book"]').first().click();
+    await expect(visitor).toHaveURL(/\/book$/);
+    await publish.uncheck();
+    await saveAndWait();
+    const reviewed = await reviewedSettings();
+    expect(reviewed.openingSchedule?.weekly?.[1]?.[0]?.startTime).toBe("09:30");
+    expect(reviewed.openingSchedule?.exceptions.map(({ date }) => date)).toEqual([
+      closure,
+      remoteClosure,
+    ]);
+    await visitor.goBack();
+    await expect(visitor).toHaveURL(`${fixture.baseURL}/`);
+    await expect(profile).toHaveCount(0);
+  } finally {
+    const restored = await writeProfile(original);
+    expect(restored.status()).toBe(200);
+    await visitor.close();
+  }
+});
 
 test("settings search finds fields and linked pages without discarding drafts", async ({
   page,
@@ -192,7 +343,7 @@ for (const scheme of ["light", "dark"] as const) {
       ).toBeDisabled();
       await expectNoSeriousA11yViolations(page, `Marketing review ${scheme}`);
       await page.screenshot({
-        path: `/tmp/citame-marketing-${scheme}-${info.project.name}.png`,
+        path: info.outputPath("marketing.png"),
         fullPage: true,
       });
       await review.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -210,7 +361,7 @@ for (const scheme of ["light", "dark"] as const) {
       await expect(notice).toHaveValue("180");
       await expectNoSeriousA11yViolations(page, `Settings ${scheme}`);
       await page.screenshot({
-        path: `/tmp/citame-management-${scheme}-${info.project.name}.png`,
+        path: info.outputPath("management.png"),
         fullPage: true,
       });
     });

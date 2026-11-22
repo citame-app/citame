@@ -84,7 +84,15 @@ The client profile opens a scoped financial report in Cloud and Desktop. The exi
 
 ### Team occupancy
 
-Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
+Cloud and Desktop use the same report snapshot for the selected salon-local dates and team member. Effective shifts use the current weekly schedule and dated overrides. The report counts overlapping blocks once and clips them to the shift. Reserved staff work includes active bookings and completed visits inside the remaining shift. Simultaneous reservations count once, and processing gaps are taken from each appointment's frozen work plan. Completed and missed time sums each visit's calendar duration within the report dates, including concurrent visits. Occupancy uses all currencies and is blank when no shift time remains. Schedule changes refresh open reports. A period with no appointments remains exportable when it has scheduled capacity. A period with neither appointments nor occupancy minutes has no CSV action. The report and its CSV measure planned time from the calendar. Attendance records would be required to report hours actually worked.
+
+### Public business profile
+
+The owner can prepare a private profile in Web or Desktop with a description, category, address, public contact details, HTTPS links, amenities, home visits and house rules. The booking homepage fetches the current published profile on entry, including client-side navigation. The separate profile endpoint disables HTTP caching, and the sync feed exposes unpublished details only to the owner.
+
+Both editors use the salon settings revision and replica generation. The native editor queues changed fields while offline. A stale revision or generation requires review against the current settings before saving again. Review merges only the fields edited in the draft, including explicit clears, so unrelated remote updates are retained.
+
+Public opening hours use salon-local times. A weekly schedule is optional, can include separate periods for breaks and labels an empty day as closed. Special dates override that day's published hours, including full closures. Opening hours belong to the profile draft and use the same publication control and revision. Review applies changes by weekday and special date, retaining unrelated hours saved from another device. Read responses carry the schedule alongside the profile so earlier clients can still read the profile. Team schedules and the booking engine continue to determine bookable slots.
 
 ## Consequences
 

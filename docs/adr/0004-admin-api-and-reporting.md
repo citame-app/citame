@@ -69,7 +69,7 @@ Clients can only cancel; marking an outcome is 403 for them even on their own ap
 
 ### Client directory
 
-Staff see every client (front-desk need); only the owner soft-deletes. `GET /admin/clients` is offset-paged (`page`, `pageSize` max 100), searches name, email and phone (LIKE wildcards are escaped; phone also matches by digits so `(11) 5555` finds `+54 9 11 5555-0000`) and sorts by name, creation date or last visit (never-visited last). Each row carries `appointmentCount` and `lastVisitAt` over non-cancelled appointments. `PATCH` accepts only name, phone and notes; email and the login link are not editable here. Audit entries list changed field names, never values (notes can be private).
+Staff see every client (front-desk need); only the owner soft-deletes. `GET /admin/clients` is offset-paged (`page`, `pageSize` max 100), searches name, email and phone, and sorts by name, creation date or last visit (never-visited last). LIKE wildcards are escaped. A phone-formatted query also matches by digits, so `(11) 5555` finds `+54 9 11 5555-0000`. Text such as `Cliente 5555` searches the text of the customer record. The native local directory makes the same distinction for current and merged contact records. Each row carries `appointmentCount` and `lastVisitAt` over non-cancelled appointments. `PATCH` accepts only name, phone and notes; email and the login link are not editable here. Audit entries list changed field names, never values (notes can be private).
 
 ### Reports
 

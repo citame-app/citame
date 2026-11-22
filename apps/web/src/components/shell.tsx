@@ -50,8 +50,13 @@ export function LocaleSwitch({
   onChange: (locale: Locale) => void;
 }) {
   const { t } = useI18n();
+  // The controlled radios need their change handler before accepting input.
+  const [ready, setReady] = useState(false);
+  const [selected, setSelected] = useState(locale);
+  useEffect(() => setReady(true), []);
+  useEffect(() => setSelected(locale), [locale]);
   return (
-    <fieldset className="inline-flex rounded-md border border-line p-0.5">
+    <fieldset disabled={!ready} className="inline-flex rounded-md border border-line p-0.5">
       <legend className="sr-only">{t("locale.label")}</legend>
       {LOCALES.map((option) => (
         <span key={option} className="relative">
@@ -60,8 +65,9 @@ export function LocaleSwitch({
             type="radio"
             name="locale"
             className="peer absolute inset-0 z-10 m-0 size-full cursor-pointer opacity-0"
-            checked={locale === option}
+            checked={selected === option}
             onChange={() => {
+              setSelected(option);
               document.cookie = localeCookieValue(option);
               onChange(option);
             }}

@@ -5,20 +5,33 @@ import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
 import { ChevronRightIcon, ClockIcon } from "~/components/ui/icons";
 import { Skeleton } from "~/components/ui/states";
+import { PublicBusinessProfile } from "~/features/booking/public-business-profile";
 import { priceLabel } from "~/features/booking/service-price";
 import { createTranslator } from "~/i18n";
 import { useI18n } from "~/i18n/react";
-import { formatDuration } from "~/lib/format";
+import { api } from "~/lib/api/instance";
+import { formatDuration, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 
 export const Route = createFileRoute("/")({
-  loader: async ({ context }) => {
-    await Promise.all([
-      context.queryClient.ensureQueryData(servicesQuery),
-      context.queryClient.ensureQueryData(staffQuery),
-      context.queryClient.ensureQueryData(salonQuery),
-    ]);
+  preloadStaleTime: 0,
+  loader: {
+    staleReloadMode: "blocking",
+    handler: async ({ context }) => {
+      const [, , salon, published] = await Promise.all([
+        context.queryClient.ensureQueryData(servicesQuery),
+        context.queryClient.ensureQueryData(staffQuery),
+        context.queryClient.ensureQueryData(salonQuery),
+        api()
+          .businessProfile()
+          .catch(() => ({ profile: null, openingSchedule: undefined })),
+      ]);
+      return {
+        ...published,
+        localDate: localDateOf(new Date().toISOString(), salon.timezone),
+      };
+    },
   },
   head: ({ match }) => {
     const { locale, salon } = match.context;
@@ -50,6 +63,7 @@ function HomeSkeleton() {
 }
 
 function Home() {
+  const { profile, openingSchedule, localDate } = Route.useLoaderData();
   const { t, locale } = useI18n();
   const { data: salon } = useSuspenseQuery(salonQuery);
   const { data: services } = useSuspenseQuery(servicesQuery);
@@ -182,6 +196,14 @@ function Home() {
         </div>
       </section>
 
+      {profile && (
+        <PublicBusinessProfile
+          profile={profile}
+          openingSchedule={openingSchedule}
+          initialDate={localDate}
+          timezone={salon.timezone}
+        />
+      )}
       <section aria-labelledby="how-title" className="salon-close editorial-section">
         <div className="wrap editorial-wrap">
           <header className="editorial-section-heading">

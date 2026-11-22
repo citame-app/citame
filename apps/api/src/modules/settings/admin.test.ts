@@ -1,5 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { errorResponseSchema, salonResponseSchema } from "@sob/contracts";
+import {
+  availabilityResponseSchema,
+  desktopSalonSettingsSchema,
+  errorResponseSchema,
+  publicBusinessProfileSchema,
+  salonResponseSchema,
+} from "@sob/contracts";
 import { auditLog } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -7,6 +13,7 @@ import {
   actor,
   type Fixtures,
   json,
+  MONDAY,
   MONDAY_0900,
   seedFixtures,
   setupApiTest,
@@ -37,6 +44,170 @@ beforeEach(async () => {
 const call = (who: Actor | null, method: string, body?: unknown) =>
   json(t.app, "/admin/settings", method, body, who?.cookie);
 const code = async (res: Response) => errorResponseSchema.parse(await res.json()).error.code;
+
+test("split opening hours and dated closures are published without changing bookable slots", async () => {
+  const available = async () => {
+    const result = await json(
+      t.app,
+      `/availability?serviceIds=${f.haircutId}&date=${MONDAY}`,
+      "GET",
+    );
+    expect(result.status).toBe(200);
+    return availabilityResponseSchema.parse(await result.json());
+  };
+  const before = await available();
+  expect(before.slots.length).toBeGreaterThan(0);
+  const latest = desktopSalonSettingsSchema.parse(
+    await (await json(t.app, "/admin/settings/desktop", "GET", undefined, owner.cookie)).json(),
+  );
+  const morning = { startTime: "09:00", endTime: "12:00" };
+  const afternoon = { startTime: "14:00", endTime: "18:00" };
+  const weekly = [[], [afternoon, morning], [], [], [], [], []];
+  const exception = { date: MONDAY, ranges: [] };
+  const update = (expectedRevision: string, changes: unknown) =>
+    json(
+      t.app,
+      "/admin/settings/profile",
+      "PUT",
+      {
+        generation: latest.generation,
+        expectedRevision,
+        changes,
+      },
+      owner.cookie,
+    );
+  const save = (openingSchedule: unknown, published: boolean) =>
+    update(latest.revision, { openingSchedule, published });
+  expect((await save({ weekly, exceptions: [exception, exception] }, true)).status).toBe(400);
+  expect(
+    (
+      await save(
+        {
+          weekly: [[], [morning, { startTime: "11:00", endTime: "13:00" }], [], [], [], [], []],
+          exceptions: [],
+        },
+        true,
+      )
+    ).status,
+  ).toBe(400);
+  const result = await save({ weekly, exceptions: [exception] }, true);
+  expect(result.status, await result.clone().text()).toBe(200);
+  const publicData = publicBusinessProfileSchema.parse(
+    await (await json(t.app, "/salon/profile", "GET")).json(),
+  );
+  expect(publicData.profile).not.toHaveProperty("openingSchedule");
+  expect(publicData.openingSchedule).toEqual({
+    weekly: [[], [morning, afternoon], [], [], [], [], []],
+    exceptions: [exception],
+  });
+  const first = desktopSalonSettingsSchema.parse(await result.json());
+  expect(first.businessProfile).not.toHaveProperty("openingSchedule");
+  const closeLater = { openingScheduleEdits: { exceptions: { "2026-12-25": [] } } };
+  const changeMonday = { openingScheduleEdits: { days: { "1": [morning] } } };
+  const remote = await update(first.revision, closeLater);
+  expect(remote.status, await remote.clone().text()).toBe(200);
+  expect((await update(first.revision, changeMonday)).status).toBe(409);
+  const rebased = await update(
+    desktopSalonSettingsSchema.parse(await remote.json()).revision,
+    changeMonday,
+  );
+  expect(rebased.status, await rebased.clone().text()).toBe(200);
+  expect(desktopSalonSettingsSchema.parse(await rebased.json()).openingSchedule).toEqual({
+    weekly: [[], [morning], [], [], [], [], []],
+    exceptions: [exception, { date: "2026-12-25", ranges: [] }].sort((a, b) =>
+      a.date.localeCompare(b.date),
+    ),
+  });
+  expect(await available()).toEqual(before);
+});
+
+test("keeps the public profile draft private and publishes only reviewed owner changes", async () => {
+  const read = (who: Actor) => json(t.app, "/admin/settings/desktop", "GET", undefined, who.cookie);
+  const write = (who: Actor, body: unknown) =>
+    json(t.app, "/admin/settings/profile", "PUT", body, who.cookie);
+  const publicProfile = async () => {
+    const response = await json(t.app, "/salon/profile", "GET");
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    return publicBusinessProfileSchema.parse(await response.json()).profile;
+  };
+  const initial = desktopSalonSettingsSchema.parse(await (await read(owner)).json());
+  expect(initial.businessProfile).toMatchObject({ published: false, address: null });
+  expect(await publicProfile()).toBeNull();
+  expect((await read(ana)).status).toBe(403);
+  expect((await write(ana, {})).status).toBe(403);
+  expect((await call(client, "PATCH", { businessProfile: { published: true } })).status).toBe(403);
+  expect((await call(owner, "PATCH", { businessProfile: { published: true } })).status).toBe(400);
+  expect(
+    (
+      await json(
+        t.app,
+        "/admin/settings/desktop",
+        "PUT",
+        {
+          expectedRevision: initial.revision,
+          changes: { businessProfile: { published: true } },
+        },
+        owner.cookie,
+      )
+    ).status,
+  ).toBe(409);
+
+  const fence = { generation: initial.generation, expectedRevision: initial.revision };
+  expect(
+    (await write(owner, { ...fence, generation: "older-generation", changes: { published: true } }))
+      .status,
+  ).toBe(409);
+  for (const website of [
+    "javascript:alert(1)",
+    "http://example.test",
+    "https://user@example.test",
+  ]) {
+    expect((await write(owner, { ...fence, changes: { website } })).status).toBe(400);
+  }
+  const description = "Synthetic salon profile";
+  const draft = await write(owner, {
+    ...fence,
+    changes: { description, amenities: ["wifi", "wifi"], website: "https://example.test" },
+  });
+  expect(draft.status, await draft.clone().text()).toBe(200);
+  expect(await draft.json()).toMatchObject({
+    businessProfile: { published: false, description, amenities: ["wifi"] },
+  });
+  expect(await publicProfile()).toBeNull();
+  const staffSync = await json(t.app, "/sync/pull?since=0&limit=200", "GET", undefined, ana.cookie);
+  expect(staffSync.status).toBe(200);
+  expect(await staffSync.text()).not.toContain(description);
+  expect((await write(owner, { ...fence, changes: { published: true } })).status).toBe(409);
+  const latest = desktopSalonSettingsSchema.parse(await (await read(owner)).json());
+  expect(
+    (
+      await write(owner, {
+        ...fence,
+        expectedRevision: latest.revision,
+        changes: { published: true, address: "7 Test Street" },
+      })
+    ).status,
+  ).toBe(200);
+  expect(await publicProfile()).toMatchObject({
+    description,
+    address: "7 Test Street",
+    amenities: ["wifi"],
+    website: "https://example.test",
+  });
+  expect(await publicProfile()).not.toHaveProperty("published");
+  const published = desktopSalonSettingsSchema.parse(await (await read(owner)).json());
+  expect(
+    (
+      await write(owner, {
+        ...fence,
+        expectedRevision: published.revision,
+        changes: { published: false },
+      })
+    ).status,
+  ).toBe(200);
+  expect(await publicProfile()).toBeNull();
+  expect(await (await read(owner)).json()).toMatchObject({ businessProfile: { description } });
+});
 
 describe("access control", () => {
   test("anonymous is 401; staff and clients are 403 and nothing changes", async () => {

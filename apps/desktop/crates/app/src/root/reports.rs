@@ -380,7 +380,11 @@ impl Root {
                 (report.csv_filename(), report.to_csv())
             }
             ReportMode::Overview => {
-                let Some(report) = desk.summary.as_ref() else {
+                let Some(report) = desk
+                    .summary
+                    .as_ref()
+                    .filter(|report| report.has_overview_data())
+                else {
                     return;
                 };
                 (
@@ -661,11 +665,7 @@ impl Root {
                         !desk.export_pending
                             && desk.request.is_none()
                             && desk.mode == ReportMode::Overview
-                            && (report.totals.appointments > 0
-                                || report
-                                    .per_staff
-                                    .iter()
-                                    .any(|entry| entry.occupancy.is_some())),
+                            && report.has_overview_data(),
                         |view| {
                             view.child(self.button(
                                 "reports-export",
@@ -699,19 +699,25 @@ impl Root {
         } else {
             &[Group::Day, Group::Staff]
         };
-        let is_breakdown = !desk.group.shows_revenue();
-        let report_breakdown =
-            report
-                .appointment_breakdown
-                .as_ref()
-                .map(|breakdown| match desk.group {
-                    Group::Hour => breakdown.hour.as_slice(),
-                    Group::Service => breakdown.service.as_slice(),
-                    Group::Category => breakdown.category.as_slice(),
-                    Group::Addon => breakdown.addon.as_slice(),
-                    Group::Day | Group::Staff => &[],
-                });
-        let total = match desk.group {
+        let has_appointments = report.totals.appointments > 0;
+        let has_occupancy = report.has_occupancy_minutes();
+        let group = if has_appointments {
+            desk.group
+        } else {
+            Group::Staff
+        };
+        let is_breakdown = !group.shows_revenue();
+        let report_breakdown = report
+            .appointment_breakdown
+            .as_ref()
+            .map(|breakdown| match group {
+                Group::Hour => breakdown.hour.as_slice(),
+                Group::Service => breakdown.service.as_slice(),
+                Group::Category => breakdown.category.as_slice(),
+                Group::Addon => breakdown.addon.as_slice(),
+                Group::Day | Group::Staff => &[],
+            });
+        let total = match group {
             Group::Day => report.series.len(),
             Group::Staff => report.per_staff.len(),
             _ => report_breakdown.unwrap_or_default().len(),
@@ -734,8 +740,8 @@ impl Root {
                 false,
             )
         };
-        let rows: Vec<_> = match desk.group {
-            Group::Day => report
+        let rows: Vec<_> = match has_appointments.then_some(group) {
+            Some(Group::Day) => report
                 .series
                 .iter()
                 .skip(start)
@@ -749,7 +755,7 @@ impl Root {
                     )
                 })
                 .collect(),
-            Group::Staff => report
+            Some(Group::Staff) => report
                 .per_staff
                 .iter()
                 .skip(start)
@@ -763,7 +769,7 @@ impl Root {
                     )
                 })
                 .collect(),
-            _ => report_breakdown
+            Some(_) => report_breakdown
                 .unwrap_or_default()
                 .iter()
                 .skip(start)
@@ -780,6 +786,7 @@ impl Root {
                     )
                 })
                 .collect(),
+            None => Vec::new(),
         };
         div()
             .flex()
@@ -840,21 +847,28 @@ impl Root {
                         ),
                 )
             })
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(groups.iter().enumerate().map(|(index, &group)| {
+            .when(has_appointments, |view| {
+                view.child(div().flex().flex_wrap().gap_2().children(
+                    groups.iter().enumerate().map(|(index, &option)| {
                         self.chip(
                             ("report-group", index),
-                            self.t(group.label()),
-                            desk.group == group,
-                            cx.listener(move |root, _, _, cx| root.report_group(group, cx)),
+                            self.t(option.label()),
+                            group == option,
+                            cx.listener(move |root, _, _, cx| root.report_group(option, cx)),
                         )
-                    })),
-            )
-            .when(total == 0, |view| {
+                    }),
+                ))
+            })
+            .when(!has_appointments, |view| {
+                view.child(
+                    div()
+                        .debug_selector(|| "report-empty-period".to_string())
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::ReportNoAppointments)),
+                )
+            })
+            .when(has_appointments && total == 0, |view| {
                 view.child(
                     div()
                         .text_sm()
@@ -862,7 +876,7 @@ impl Root {
                         .child(self.t(Key::ReportNoRows)),
                 )
             })
-            .when(total > 0, |view| {
+            .when(has_appointments && total > 0, |view| {
                 view.child(
                     div()
                         .id("report-table")
@@ -875,7 +889,7 @@ impl Root {
                             div()
                                 .min_w(px(if is_breakdown { 560. } else { 680. }))
                                 .child(report_table_row(
-                                    self.t(desk.group.label()).to_string(),
+                                    self.t(group.label()).to_string(),
                                     [
                                         Key::ReportAppointments,
                                         Key::ReportBooked,
@@ -891,10 +905,10 @@ impl Root {
                         ),
                 )
             })
-            .when(pages > 1, |view| {
+            .when((has_appointments || has_occupancy) && pages > 1, |view| {
                 view.child(self.render_report_pager(page, pages, cx))
             })
-            .when(desk.group == Group::Staff, |view| {
+            .when(group == Group::Staff && has_occupancy, |view| {
                 view.children(self.render_staff_occupancy(report, start))
             })
     }
@@ -1047,6 +1061,68 @@ fn report_date_field(date: &str, cx: &mut Context<TextField>) -> TextField {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn an_empty_report_exposes_capacity_and_csv_only_if_there_are_scheduled_minutes(
+        cx: &mut TestAppContext,
+    ) {
+        let (dir, mut config) = super::super::tests::desk();
+        config.start_view = Some("reports".into());
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| {
+            let Overlay::Reports(desk) = &mut root.overlay else {
+                panic!("Missing report desk")
+            };
+            desk.request = None;
+            desk.error = None;
+            let counts = serde_json::json!({
+                "booked": 0, "completed": 0, "cancelled": 0, "no_show": 0,
+            });
+            let empty = serde_json::json!({
+                "date": "2026-11-18", "appointments": 0, "byStatus": counts, "revenueCents": 0,
+            });
+            desk.summary = Some(serde_json::from_value(serde_json::json!({
+                "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",
+                "totals": empty, "series": [empty], "topServices": [],
+                "perStaff": [{
+                    "displayName": "Ana", "appointments": 0, "byStatus": counts, "revenueCents": 0,
+                    "occupancy": { "scheduledMinutes": 0, "blockedMinutes": 0,
+                        "reservedMinutes": 0, "completedMinutes": 0, "noShowMinutes": 0,
+                        "occupancyRate": null },
+                }],
+            })).unwrap());
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("report-empty-period").is_some());
+        assert!(cx.debug_bounds("report-table").is_none());
+        assert!(cx.debug_bounds("staff-occupancy").is_none());
+        root.update(cx, |root, cx| {
+            root.save_report(cx);
+            let Overlay::Reports(desk) = &mut root.overlay else {
+                panic!("Missing report desk")
+            };
+            assert!(!desk.export_pending);
+            let occupancy = desk.summary.as_mut().unwrap().per_staff[0]
+                .occupancy
+                .as_mut()
+                .unwrap();
+            occupancy.scheduled_minutes = 240;
+            occupancy.occupancy_rate = Some(0.);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("staff-occupancy").is_some());
+        let export = dir.path().join("capacity.csv");
+        root.update(cx, |root, cx| root.save_report(cx));
+        cx.simulate_new_path_selection(|_| Some(export.clone()));
+        cx.run_until_parked();
+        assert!(
+            std::fs::read_to_string(export)
+                .unwrap()
+                .contains("Ana,240,0,0,0,0,0.0000")
+        );
+    }
 
     #[gpui::test]
     async fn report_filters_open_with_dates_and_the_panel_scrolls_in_a_short_window(

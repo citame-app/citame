@@ -4,6 +4,8 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub const MAX_DATE_SHIFT_RANGES: usize = 8;
+
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DatedShiftDay {
@@ -25,7 +27,7 @@ impl DatedShiftEdit {
         input: impl Iterator<Item = (&'a str, &'a str)>,
     ) -> Option<Vec<DateShiftRange>> {
         let ranges = parse_wall_ranges(input)?;
-        (!ranges.is_empty() && ranges.len() <= 8).then_some(ranges)
+        (!ranges.is_empty() && ranges.len() <= MAX_DATE_SHIFT_RANGES).then_some(ranges)
     }
 
     pub fn has_nonexistent_time(&self, timezone: Tz) -> bool {

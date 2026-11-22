@@ -5,9 +5,10 @@ import { scheduleConflictSchema, timeOfDaySchema } from "./staff";
 export const dateShiftRangeSchema = z
   .object({ startTime: timeOfDaySchema, endTime: timeOfDaySchema })
   .strict();
+export const MAX_DATE_SHIFT_RANGES = 8;
 export const dateShiftRangesSchema = z
   .array(dateShiftRangeSchema)
-  .max(8)
+  .max(MAX_DATE_SHIFT_RANGES)
   .superRefine((ranges, ctx) => {
     const sorted = ranges
       .map((range, index) => ({ ...range, index }))

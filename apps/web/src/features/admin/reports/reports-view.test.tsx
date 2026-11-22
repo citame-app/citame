@@ -354,15 +354,32 @@ describe("ReportsView", () => {
   });
 
   test("an empty period is a clear empty state and the export is disabled", async () => {
+    const [member] = report.perStaff;
+    if (!member) throw new Error("Missing staff fixture");
     report = {
       ...report,
       totals: { ...slice(0, 0, 0), noShowRate: null },
       series: [],
       topServices: [],
-      perStaff: [],
+      perStaff: [
+        {
+          ...member,
+          ...slice(0, 0, 0),
+          noShowRate: null,
+          occupancy: {
+            scheduledMinutes: 0,
+            blockedMinutes: 0,
+            reservedMinutes: 0,
+            completedMinutes: 0,
+            noShowMinutes: 0,
+            occupancyRate: null,
+          },
+        },
+      ],
     };
     open();
     expect(await screen.findByText("No appointments in this period")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Team occupancy" })).toBeNull();
     expect(screen.getByRole("button", { name: "Export CSV" })).toBeDisabled();
   });
 });

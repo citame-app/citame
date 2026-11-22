@@ -642,6 +642,29 @@ fn report_transport_reads_the_filtered_summary_and_exports_safe_csv() {
 }
 
 #[test]
+fn report_export_uses_scheduled_minutes_when_the_period_has_no_appointments() {
+    let mut report: crate::reports::ReportSummary = serde_json::from_value(serde_json::json!({
+        "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",
+        "totals": {"appointments": 0, "revenueCents": 0,
+            "byStatus": {"booked": 0, "completed": 0, "cancelled": 0, "no_show": 0}},
+        "series": [], "topServices": [], "perStaff": [{
+            "displayName": "Ana", "appointments": 0, "revenueCents": 0,
+            "byStatus": {"booked": 0, "completed": 0, "cancelled": 0, "no_show": 0},
+            "occupancy": {"scheduledMinutes": 0, "blockedMinutes": 0, "reservedMinutes": 0,
+                "completedMinutes": 0, "noShowMinutes": 0, "occupancyRate": null},
+        }],
+    }))
+    .unwrap();
+    assert!(!report.has_overview_data());
+    report.per_staff[0]
+        .occupancy
+        .as_mut()
+        .unwrap()
+        .scheduled_minutes = 240;
+    assert!(report.has_overview_data());
+}
+
+#[test]
 fn report_csv_distinguishes_unknown_amounts_from_free_services() {
     let report: crate::reports::ReportSummary = serde_json::from_value(serde_json::json!({
         "from": "2026-11-18", "to": "2026-11-18", "currency": "EUR",

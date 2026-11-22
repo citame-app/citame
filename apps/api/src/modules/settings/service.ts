@@ -1,8 +1,14 @@
-import type {
-  OwnerSalonSettings,
-  ReviewedSalonSettings,
-  SalonResponse,
-  UpdateSalonSettingsRequest,
+import { isDeepStrictEqual } from "node:util";
+import {
+  applyOpeningScheduleEdits,
+  businessProfileSchema,
+  EMPTY_BUSINESS_PROFILE,
+  EMPTY_OPENING_SCHEDULE,
+  type OwnerSalonSettings,
+  type ReviewedSalonChanges,
+  type ReviewedSalonSettings,
+  type SalonResponse,
+  type UpdateSalonSettingsRequest,
 } from "@sob/contracts";
 import { type Database, salonSettings } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -20,6 +26,9 @@ export async function getSalonSettings(db: Pick<Database, "select">, lock?: "sha
 
 type Row = Awaited<ReturnType<typeof getSalonSettings>>;
 
+const businessProfile = (settings: Row) =>
+  businessProfileSchema.parse({ ...EMPTY_BUSINESS_PROFILE, ...settings.businessProfile });
+
 export function toSalonResponse(settings: Row): SalonResponse {
   return {
     name: settings.name,
@@ -29,6 +38,11 @@ export function toSalonResponse(settings: Row): SalonResponse {
     maxDaysAhead: settings.maxDaysAhead,
     onlineBookingEnabled: settings.onlineBookingEnabled,
   };
+}
+
+export function toPublicBusinessProfile(settings: Row) {
+  const { published, openingSchedule, ...profile } = businessProfile(settings);
+  return published ? { profile, openingSchedule } : { profile: null };
 }
 
 export function assertOnlineBookingEnabled(settings: Row, role?: string) {
@@ -45,10 +59,13 @@ export function toOwnerSettings(settings: Row): OwnerSalonSettings {
 }
 
 export function toReviewedSettings(settings: Row): ReviewedSalonSettings {
+  const { openingSchedule, ...profile } = businessProfile(settings);
   return {
     ...toOwnerSettings(settings),
     onlineBookingEnabled: settings.onlineBookingEnabled,
     revision: settings.updatedAt.toISOString(),
+    businessProfile: profile,
+    openingSchedule,
   };
 }
 
@@ -74,7 +91,7 @@ export async function updateSalonSettings(
 
 export async function updateReviewedSettings(
   db: Database,
-  input: UpdateSalonSettingsRequest,
+  input: ReviewedSalonChanges,
   actor: { userId: string },
   expectedRevision: string,
 ): Promise<ReviewedSalonSettings> {
@@ -83,21 +100,40 @@ export async function updateReviewedSettings(
 
 async function writeSettings(
   db: Database,
-  input: UpdateSalonSettingsRequest,
+  input: ReviewedSalonChanges,
   actor: { userId: string },
   expectedRevision?: string,
 ) {
   return db.transaction(async (tx) => {
     const current = await getSalonSettings(tx, "update");
-    const changes = Object.fromEntries(
+    const stale =
+      expectedRevision !== undefined &&
+      Date.parse(expectedRevision) !== current.updatedAt.getTime();
+    const changes: Partial<typeof salonSettings.$inferInsert> = Object.fromEntries(
       EDITABLE.filter((key) => input[key] !== undefined && input[key] !== current[key]).map(
         (key) => [key, input[key]],
       ),
     );
+    if (input.businessProfile !== undefined) {
+      const original = businessProfile(current);
+      const { openingScheduleEdits, ...profileChanges } = input.businessProfile;
+      const proposed = { ...original, ...profileChanges };
+      if (openingScheduleEdits) {
+        proposed.openingSchedule = applyOpeningScheduleEdits(
+          original.openingSchedule ?? EMPTY_OPENING_SCHEDULE,
+          openingScheduleEdits,
+        );
+      }
+      const next = businessProfileSchema.safeParse(proposed);
+      if (!next.success) {
+        if (stale) throw new DomainError("version_conflict", "The reviewed settings changed");
+        throw new DomainError("validation_error", "The resulting opening hours are invalid");
+      }
+      if (!isDeepStrictEqual(next.data, original)) changes.businessProfile = next.data;
+    }
     const fields = Object.keys(changes);
     if (fields.length === 0) return current;
-    if (expectedRevision && Date.parse(expectedRevision) !== current.updatedAt.getTime())
-      throw new DomainError("version_conflict", "The reviewed settings changed");
+    if (stale) throw new DomainError("version_conflict", "The reviewed settings changed");
     const [updated] = await tx
       .update(salonSettings)
       .set({

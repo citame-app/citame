@@ -66,7 +66,7 @@ const escapeLike = (value: string) => value.replace(/[\\%_]/g, (char) => `\\${ch
 export function searchFilter(term: string | undefined) {
   if (!term) return undefined;
   const like = `%${escapeLike(term)}%`;
-  const digits = term.replace(/\D/g, "");
+  const digits = /^\+?[\d\s().-]+$/.test(term) ? term.replace(/\D/g, "") : "";
   return or(
     ilike(clientProfile.name, like),
     ilike(clientProfile.email, like),

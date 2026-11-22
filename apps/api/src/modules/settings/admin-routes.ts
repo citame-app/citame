@@ -2,6 +2,7 @@ import {
   bookingPolicyInputSchema,
   initialSyncGeneration,
   reviewedBookingPolicyInputSchema,
+  reviewedBusinessProfileRequestSchema,
   reviewedSalonSettingsRequestSchema,
   updateSalonSettingsRequestSchema,
 } from "@sob/contracts";
@@ -9,6 +10,7 @@ import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { requireRole } from "../../auth/policy";
 import type { AppEnv } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { getBookingPolicy, publishBookingPolicy } from "../booking-protection/policy";
 import {
@@ -66,6 +68,26 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
         generation: config.syncReplicaGeneration,
       });
     })
+    .put("/profile", async (c) => {
+      const principal = c.get("principal");
+      requireRole(principal, "owner");
+      const { generation, expectedRevision, changes } = parseOrThrow(
+        reviewedBusinessProfileRequestSchema,
+        await readJson(c),
+      );
+      if (generation !== config.syncReplicaGeneration)
+        throw new DomainError(
+          "version_conflict",
+          "The salon settings were restored; review them again",
+        );
+      const saved = await updateReviewedSettings(
+        db,
+        { businessProfile: changes },
+        principal,
+        expectedRevision,
+      );
+      return c.json({ ...saved, generation }, 200, { "Cache-Control": "private, no-store" });
+    })
     .put("/desktop", async (c) => {
       const principal = c.get("principal");
       requireRole(principal, "owner");
@@ -73,6 +95,11 @@ export function settingsAdminRoutes({ db, config }: AppDeps) {
         reviewedSalonSettingsRequestSchema,
         await readJson(c),
       );
+      if (changes.businessProfile !== undefined)
+        throw new DomainError(
+          "version_conflict",
+          "The business profile requires a reviewed generation",
+        );
       return c.json(await updateReviewedSettings(db, changes, principal, expectedRevision));
     })
     .patch("/", async (c) => {

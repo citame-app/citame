@@ -29,7 +29,7 @@ import {
   clientGroupReportCsv,
   clientReportCsv,
 } from "./client-report";
-import { formatRate, REPORT_PRESETS, reportToCsv, sortBy } from "./logic";
+import { formatRate, hasOccupancyMinutes, REPORT_PRESETS, reportToCsv, sortBy } from "./logic";
 import { type ReportsSearch, rangeError, resolveRange } from "./range";
 import { StaffOccupancy } from "./staff-occupancy";
 
@@ -110,9 +110,8 @@ export function ReportsView({
   const [staffSort, setStaffSort] = useState<SortingState>([{ id: "revenue", desc: true }]);
 
   const report = showClients ? undefined : query.data;
-  const canExportSummary =
-    report &&
-    (report.totals.appointments > 0 || report.perStaff.some(({ occupancy }) => occupancy));
+  const hasOccupancy = report ? hasOccupancyMinutes(report.perStaff) : false;
+  const canExportSummary = report && (report.totals.appointments > 0 || hasOccupancy);
   const currency = report?.currency ?? "ARS";
   const money = (cents: number) => formatMoney(cents, currency, locale);
   const day = (date: string) => formatDateWithYear(date, locale);
@@ -517,7 +516,7 @@ export function ReportsView({
               </section>
             </>
           )}
-          <StaffOccupancy staff={report.perStaff} />
+          {hasOccupancy && <StaffOccupancy staff={report.perStaff} />}
         </>
       )}
     </div>
