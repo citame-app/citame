@@ -204,7 +204,7 @@ export POSTGRES_PASSWORD="$(openssl rand -hex 32)" BETTER_AUTH_SECRET="$(openssl
 docker compose -f compose.prod.yaml up -d --build --wait
 OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase' \
   docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
-SITE_ADDRESS=salon.example docker compose -f compose.prod.yaml --profile tls up -d   # optional HTTPS
+SITE_ADDRESS=salon.example docker compose -f compose.prod.yaml --profile tls up -d --wait --wait-timeout 90   # optional HTTPS
 ```
 
 See [docs/operations.md](docs/operations.md).

@@ -21,10 +21,14 @@ OWNER_EMAIL=you@salon.example OWNER_PASSWORD='a long passphrase' \
 
 # 4. Automatic HTTPS (optional): point DNS at the host, then
 WEB_TRUST_PROXY=true SITE_ADDRESS=salon.example \
-  docker compose -f compose.prod.yaml --profile tls up -d
+  docker compose -f compose.prod.yaml --profile tls up -d --wait --wait-timeout 90
+curl --proto '=https' --max-time 5 --retry 12 --retry-delay 5 --retry-max-time 75 \
+  --retry-all-errors -fsSi "$PUBLIC_URL/api/ready"
 ```
 
 The web service trusts no forwarded address by default (`WEB_TRUST_PROXY=false`), because anyone who can reach its port directly could spoof the address the rate limiter uses. Enable it (`WEB_TRUST_PROXY=true`) together with the `tls` profile or your own proxy. Without the `tls` profile the web service listens on `127.0.0.1:4173`; put nginx, Traefik or a cloud load balancer in front, and keep `WEB_TRUST_PROXY=true` only when that proxy appends the visitor's address to `X-Forwarded-For` (Caddy and nginx `$proxy_add_x_forwarded_for` do). `docker/Caddyfile` is a working example; its comments explain each line.
+
+Compose waits for Caddy to load its HTTP listeners through the admin API on container loopback. The public probe allows time for the first TLS certificate. Require HTTP 200 and a JSON response with `"status":"ready"` before accepting traffic. [Caddy admin API](https://caddyserver.com/docs/api)
 
 The bundled Caddy proxy probes the web process every two seconds with a one-second timeout. A single web instance can return temporary errors during a restart. The production smoke test verifies that the proxy routes requests within five seconds of the restarted process responding directly, then opens a new staff event stream.
 

@@ -192,6 +192,8 @@ step "services"
 "${COMPOSE[@]}" ps -a --format '{{.Service}} {{.State}} exit={{.ExitCode}}' | grep -E '^migrate ' || true
 worker_health=$("${COMPOSE[@]}" ps --format '{{.Health}}' worker)
 [ "$worker_health" = healthy ] || fail "worker is not healthy after Compose startup"
+caddy_health=$("${COMPOSE[@]}" ps --format '{{.Health}}' caddy)
+[ "$caddy_health" = healthy ] || fail "Caddy has not loaded its listener configuration"
 
 step "web runtime excludes globs and plugins used by the build"
 build_packages="$("${COMPOSE[@]}" exec -T web find /app -type f \( \

@@ -97,6 +97,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Production Compose waits for Caddy to load its listener configuration before reporting the gateway healthy.
+
 - Database recovery restores the exact archive verified by checksum, including when a newer backup replaces the input file during validation.
 
 - Screen readers can identify the appointment reschedule form once the form and its heading are visible.

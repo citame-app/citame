@@ -8,6 +8,7 @@
 # `/reset-password/<token>` in the reset link). Both the access log (site block) and Caddy's own
 # default log (which records failed requests, for example an unreachable upstream) redact them.
 {
+	admin 127.0.0.1:2019
 	log {
 		output stdout
 		format filter {

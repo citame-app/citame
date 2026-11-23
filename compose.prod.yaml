@@ -4,7 +4,7 @@
 #   write a .env next to this file (docs/env-reference.md has a minimal one)
 #   docker compose -f compose.prod.yaml up -d --build --wait
 #   docker compose -f compose.prod.yaml --profile setup run --rm bootstrap-owner
-#   docker compose -f compose.prod.yaml --profile tls up -d     # optional: automatic HTTPS
+#   docker compose -f compose.prod.yaml --profile tls up -d --wait --wait-timeout 90     # optional: automatic HTTPS
 name: sistersofbeauty-prod
 
 x-api-image: &api-image
@@ -235,7 +235,7 @@ services:
       resources:
         limits: { cpus: "1", memory: 384m }
 
-  # Optional automatic HTTPS: `docker compose -f compose.prod.yaml --profile tls up -d`.
+  # Optional automatic HTTPS: `docker compose -f compose.prod.yaml --profile tls up -d --wait --wait-timeout 90`.
   caddy:
     profiles: ["tls"]
     restart: unless-stopped
@@ -260,6 +260,15 @@ services:
     depends_on:
       web:
         condition: service_healthy
+    healthcheck:
+      # Wait until Caddy loads the HTTP listeners. The admin endpoint stays on container loopback.
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1:2019/config/apps/http/servers | grep -q '"listen"'
+      interval: 5s
+      timeout: 3s
+      retries: 6
     deploy:
       resources:
         limits: { cpus: "1", memory: 128m }
