@@ -6,7 +6,7 @@ import { recordAudit } from "../audit";
 import type { Auth } from "../auth/auth";
 import { rootLogger } from "../observability/logger";
 
-async function readBody(request: {
+export async function readOAuthBody(request: {
   headers: { get(name: string): string | null };
   json(): Promise<unknown>;
   text(): Promise<string>;
@@ -52,7 +52,7 @@ export function oauthAudit(auth: Auth, db: Database): MiddlewareHandler {
     const response = c.res;
     if (response.status >= 300) return;
     try {
-      const body = await readBody(request);
+      const body = await readOAuthBody(request);
       if (kind === "consent") {
         const session = await auth.api.getSession({ headers: c.req.raw.headers });
         const query = new URLSearchParams(str(body.oauth_query) ?? "");

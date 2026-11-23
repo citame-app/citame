@@ -70,6 +70,7 @@ import { notificationAdminRoutes, optOutRoutes } from "./notifications/routes";
 import { whatsappAdminRoutes, whatsappWebhookRoutes } from "./notifications/whatsapp/routes";
 import { oauthAudit } from "./oauth/audit";
 import { ensureOAuthSeeds } from "./oauth/clients";
+import { oauthConsentScopePolicy } from "./oauth/consent";
 import { desktopResource } from "./oauth/desktop";
 import { createDesktopDevices } from "./oauth/desktop-devices";
 import {
@@ -345,6 +346,7 @@ export function createApp(input: AppDeps): App {
   ]) {
     app.use(path, publicCors);
   }
+  app.use("/api/auth/oauth2/consent", oauthConsentScopePolicy(auth, deps.db));
   app.use("/api/auth/oauth2/*", oauthAudit(auth, deps.db));
 
   // MCP server (Streamable HTTP, stateless) and its RFC 9728 protected-resource metadata. The

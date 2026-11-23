@@ -20,7 +20,16 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../test/helpers";
-import { callTool, listTools, rpc, tokenFor, tokenRequest } from "../../test/oauth";
+import {
+  authorizeFlow,
+  callTool,
+  listTools,
+  obtainTokens,
+  registerClient,
+  rpc,
+  tokenFor,
+  tokenRequest,
+} from "../../test/oauth";
 import { createApp } from "../app";
 import { runWaitlist } from "../modules/waitlist/matching";
 
@@ -562,8 +571,7 @@ test("imported price review requires the owner and explicit write consent", asyn
     .tokens.access_token;
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
   const salesToken = (await tokenFor(t, owner, "sales:write")).tokens.access_token;
-  const staffToken = (await tokenFor(t, staff, "operations:read billing:write")).tokens
-    .access_token;
+  const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
   const booked = await callTool(t.app, ownerToken, "create_appointment", {
     clientId: f.clientId,
     serviceIds: [f.haircutId],
@@ -627,8 +635,7 @@ test.each([
       await tokenFor(t, owner, "schedule:write operations:read billing:write sales:write")
     ).tokens.access_token;
     const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
-    const staffToken = (await tokenFor(t, staff, "operations:read billing:write")).tokens
-      .access_token;
+    const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
     const booked = await callTool(t.app, writeToken, "create_appointment", {
       clientId: f.clientId,
       serviceIds: [f.haircutId],
@@ -889,8 +896,18 @@ test("staff capacity uses current versions and unpaid lookup accepts staff filte
 
 test("clients cannot elevate by requesting management scopes and reduced consent takes effect on the same token", async () => {
   const client = await actor(t, "client", "client@example.com");
-  const clientGrant = await tokenFor(t, client, "mcp:read operations:read schedule:write");
-  expect(await listTools(t.app, clientGrant.tokens.access_token)).not.toContain("list_clients");
+  const scope = "mcp:read schedule:read operations:read schedule:write";
+  const registration = await registerClient(t.app, { scope });
+  const clientId = registration.client.client_id;
+  const requested = { clientId, cookie: client.cookie, scope };
+  const refused = await authorizeFlow(t.app, requested);
+  expect(refused.code).toBeNull();
+  expect(await t.db.select().from(oauthConsent).where(eq(oauthConsent.clientId, clientId))).toEqual(
+    [],
+  );
+  const { tokens } = await obtainTokens(t.app, { ...requested, acceptedScope: "mcp:read" });
+  expect(tokens.scope).toBe("mcp:read");
+  expect(await listTools(t.app, tokens.access_token)).not.toContain("list_clients");
   const owner = await actor(t, "owner", "owner@example.com");
   const grant = await tokenFor(t, owner, "mcp:read operations:read schedule:write");
   expect(await listTools(t.app, grant.tokens.access_token)).toContain("create_time_off");

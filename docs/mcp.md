@@ -37,7 +37,7 @@ A token's powers are the intersection of its scopes, the current consent, the re
 
 ## Centre management
 
-Management permissions must be selected explicitly in the consent screen. They are unavailable to customer accounts. If a client was previously registered only with booking scopes, register it with the additional scopes and connect it again. A browser session cookie cannot call MCP.
+Management permissions must be selected explicitly in the consent screen. The OAuth server rejects management and staff schedule scopes for customer accounts at consent and token issuance. If a client was previously registered only with booking scopes, register it with the additional scopes and connect it again. A browser session cookie cannot call MCP.
 
 | Scope | Operations |
 | --- | --- |

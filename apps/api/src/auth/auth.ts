@@ -3,7 +3,9 @@ import {
   DESKTOP_SIGN_IN_SCOPE,
   MCP_MANAGEMENT_SCOPES,
   MCP_SCOPES,
+  mcpScopeAllowedForRole,
   OAUTH_SCOPES,
+  parseScopes,
 } from "@sob/contracts";
 import {
   account,
@@ -23,6 +25,7 @@ import {
 } from "@sob/db";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { APIError } from "better-auth/api";
 import { jwt } from "better-auth/plugins";
 import type { RedisClient } from "bun";
 import { eq } from "drizzle-orm";
@@ -209,14 +212,29 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         extensions: [
           {
             claims: {
-              accessToken: async ({ client, user, resources }) => {
-                if (!user) return {};
+              accessToken: async ({ client, user: account, resources, scopes }) => {
+                if (!account) return {};
                 const desktop =
                   client.clientId === "sob-desktop" &&
                   resources?.includes(desktopResource(config.auth.baseURL));
                 if (!desktop && !resources?.includes(config.oauth.mcpResource)) return {};
                 if (desktop && resources?.length !== 1) return {};
-                const grant = await currentOAuthGrant(db, client.clientId, user.id);
+                const [current] = await db
+                  .select({ role: user.role })
+                  .from(user)
+                  .where(eq(user.id, account.id));
+                if (
+                  !current ||
+                  parseScopes(scopes.join(" ")).some(
+                    (scope) => !mcpScopeAllowedForRole(current.role, scope),
+                  )
+                ) {
+                  throw new APIError("BAD_REQUEST", {
+                    error: "invalid_scope",
+                    error_description: "This account cannot grant one or more requested scopes",
+                  });
+                }
+                const grant = await currentOAuthGrant(db, client.clientId, account.id);
                 return { citame_grant: grant?.id ?? null };
               },
             },

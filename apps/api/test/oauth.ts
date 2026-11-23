@@ -52,6 +52,7 @@ export interface FlowOptions {
   resource?: string | null;
   redirectUri?: string;
   approve?: boolean;
+  acceptedScope?: string;
   codeChallenge?: string;
   challengeMethod?: string;
 }
@@ -95,6 +96,7 @@ export async function authorizeFlow(app: Hono, options: FlowOptions): Promise<Fl
       headers: { "content-type": "application/json", cookie: options.cookie, origin: ORIGIN },
       body: JSON.stringify({
         accept: options.approve ?? true,
+        scope: options.acceptedScope,
         oauth_query: url.search.slice(1),
       }),
     });
