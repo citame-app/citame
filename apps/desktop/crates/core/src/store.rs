@@ -1485,10 +1485,11 @@ impl Store {
         date: chrono::NaiveDate,
         generation: &str,
         snapshot: &crate::resource_calendar::CachedResourceDay,
+        session_active: impl FnOnce() -> bool,
     ) -> Result<bool> {
         self.write_transaction(|store| {
             Self::ensure_generation(&store.conn, Some(generation))?;
-            if store.get_meta("calendar_scope")?.as_deref() != Some("all")
+            if !session_active() || store.get_meta("calendar_scope")?.as_deref() != Some("all")
                 || store.get_meta(REBUILD_KEY)?.is_some()
             {
                 return Ok(false);
@@ -1508,10 +1509,14 @@ impl Store {
         })
     }
 
-    pub fn clear_resource_days(&self) -> Result<()> {
-        self.conn
-            .execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
-        Ok(())
+    pub(crate) fn clear_resource_days(&mut self, generation: &str) -> Result<()> {
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            store
+                .conn
+                .execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+            Ok(())
+        })
     }
 
     pub fn booking_notice_head(&self) -> Result<i64> {

@@ -1,5 +1,12 @@
 //! Confirmed room and equipment occupancy for one local day.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+use std::time::Duration;
+
+use crate::auth::SessionHandle;
+use crate::http::HttpTransport;
+use crate::store::Store;
+use crate::sync::TransportError;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,6 +17,15 @@ pub struct ResourceDay {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
     pub resource_occupancy: Option<ResourceOccupancy>,
+    #[serde(default)]
+    pub appointments: Vec<ResourceAppointmentLabel>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResourceAppointmentLabel {
+    pub id: String,
+    pub client_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -47,8 +63,21 @@ pub struct CachedResourceDay {
 }
 
 impl CachedResourceDay {
-    pub fn new(day: ResourceDay, received_at: DateTime<Utc>) -> Self {
+    pub fn new(mut day: ResourceDay, received_at: DateTime<Utc>) -> Self {
+        let linked: BTreeSet<_> = day
+            .resource_occupancy
+            .iter()
+            .flat_map(|snapshot| &snapshot.pools)
+            .flat_map(|pool| &pool.windows)
+            .filter_map(|window| window.appointment_id.as_deref())
+            .collect();
+        day.appointments
+            .retain(|booking| linked.contains(booking.id.as_str()));
         Self { day, received_at }
+    }
+
+    pub fn appointment_labels(&self) -> &[ResourceAppointmentLabel] {
+        &self.day.appointments
     }
 
     pub fn occupancy(&self) -> Option<&ResourceOccupancy> {
@@ -168,6 +197,49 @@ pub struct OccupancyCell {
     pub appointment_ids: Vec<String>,
 }
 
+pub enum Refresh {
+    Loaded(CachedResourceDay),
+    Denied,
+    Unavailable,
+    RetryAfter(Duration),
+}
+
+pub fn refresh(
+    transport: &HttpTransport,
+    replica: &Path,
+    session: &SessionHandle,
+    date: chrono::NaiveDate,
+    timezone: chrono_tz::Tz,
+    generation: &str,
+) -> Refresh {
+    const RETRY: Duration = Duration::from_secs(15);
+    match transport.resource_day(date, timezone) {
+        Ok(day) if day.resource_occupancy.is_some() => {
+            let snapshot = CachedResourceDay::new(day, Utc::now());
+            let Ok(mut store) = Store::open(replica) else {
+                return Refresh::RetryAfter(RETRY);
+            };
+            // Check the session after acquiring the SQLite write lock.
+            match store.cache_resource_day(date, generation, &snapshot, || {
+                session.read().expect("session lock").is_some()
+            }) {
+                Ok(true) => Refresh::Loaded(snapshot),
+                Ok(false) => Refresh::Unavailable,
+                Err(_) => Refresh::RetryAfter(RETRY),
+            }
+        }
+        Ok(_) => Refresh::Unavailable,
+        Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
+            if let Ok(mut store) = Store::open(replica) {
+                let _ = store.clear_resource_days(generation);
+            }
+            Refresh::Denied
+        }
+        Err(TransportError::RateLimited(Some(delay))) => Refresh::RetryAfter(delay.max(RETRY)),
+        Err(_) => Refresh::RetryAfter(RETRY),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
@@ -181,6 +253,7 @@ mod tests {
             ResourceDay {
                 from: at(0),
                 to: at(23),
+                appointments: Vec::new(),
                 resource_occupancy: Some(ResourceOccupancy {
                     captured_at: at(8),
                     pools: vec![ResourceColumn {

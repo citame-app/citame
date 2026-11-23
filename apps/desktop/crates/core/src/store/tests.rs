@@ -1498,6 +1498,7 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
         ResourceDay {
             from,
             to,
+            appointments: Vec::new(),
             resource_occupancy: Some(ResourceOccupancy {
                 captured_at: now,
                 pools: Vec::new(),
@@ -1509,7 +1510,7 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
         let mut store = Store::open(&path).unwrap();
         assert!(
             !store
-                .cache_resource_day(date, INITIAL_GENERATION, &snapshot)
+                .cache_resource_day(date, INITIAL_GENERATION, &snapshot, || true)
                 .unwrap()
         );
         store
@@ -1517,7 +1518,7 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
             .unwrap();
         assert!(
             store
-                .cache_resource_day(date, INITIAL_GENERATION, &snapshot)
+                .cache_resource_day(date, INITIAL_GENERATION, &snapshot, || true)
                 .unwrap()
         );
     }

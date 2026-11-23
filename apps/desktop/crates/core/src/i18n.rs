@@ -467,6 +467,7 @@ keys! {
     ResourceCalendarEmpty => ("No rooms or equipment configured", "Añade salas o equipos para ver su ocupación"),
     ResourceCalendarUnavailable => ("Resource occupancy is unavailable", "La ocupación por recurso no está disponible"),
     ResourceCalendarCached => ("Last confirmed occupancy · {time}", "Última ocupación confirmada · {time}"),
+    ResourceAppointmentPending => ("Opening the appointment once it syncs…", "La cita se abrirá al sincronizarse…"),
     ResourceCalendarLoading => ("Checking resource occupancy…", "Consultando la ocupación…"),
     ResourceInactive => ("Inactive", "Inactivo"),
     CalendarAllResources => ("All resources", "Todos los recursos"),

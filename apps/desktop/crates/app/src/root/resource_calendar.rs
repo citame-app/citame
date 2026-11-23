@@ -1,8 +1,5 @@
 use super::*;
-use sob_core::resource_calendar::{CachedResourceDay, OccupancyRow};
-use sob_core::sync::TransportError;
-
-const RETRY_DELAY: Duration = Duration::from_secs(15);
+use sob_core::resource_calendar::{self as occupancy_model, CachedResourceDay, OccupancyRow};
 
 #[derive(Default)]
 pub(super) struct Desk {
@@ -12,6 +9,7 @@ pub(super) struct Desk {
     observed_cursor: Option<i64>,
     retry_at: Option<Instant>,
     error: bool,
+    pending_open: Option<String>,
     horizontal_scroll: gpui::ScrollHandle,
 }
 
@@ -48,7 +46,7 @@ impl ConfirmedDay {
 
 impl Root {
     pub(super) fn can_view_resource_calendar(&self) -> bool {
-        self.calendar_scope.as_deref() == Some("all")
+        self.calendar_scope.as_deref() == Some("all") && !self.resource_access_denied
     }
 
     pub(super) fn reset_resource_calendar(&mut self) {
@@ -65,7 +63,7 @@ impl Root {
     pub(super) fn refresh_resource_calendar(
         &mut self,
         connectivity: Connectivity,
-        reconnected: bool,
+        force: bool,
         cx: &mut Context<Self>,
     ) {
         if self.calendar_mode != CalendarMode::Resources || !self.can_view_resource_calendar() {
@@ -89,7 +87,17 @@ impl Root {
             };
             cx.notify();
         }
+        if matches!(self.overlay, Overlay::None)
+            && let Some(id) = self.resource_calendar.pending_open.as_deref()
+            && let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id)
+        {
+            self.resource_calendar.pending_open = None;
+            self.show_appointment_details(appointment, None, cx);
+        }
         let desk = &mut self.resource_calendar;
+        if force {
+            desk.observed_cursor = None;
+        }
         if desk.day.as_mut().is_some_and(ConfirmedDay::expire_holds) {
             cx.notify();
         }
@@ -101,7 +109,7 @@ impl Root {
             if Instant::now() < retry {
                 return;
             }
-        } else if !reconnected && desk.observed_cursor == Some(cursor) {
+        } else if desk.observed_cursor == Some(cursor) {
             return;
         }
         let (Some(transport), Ok(generation)) = (
@@ -110,7 +118,12 @@ impl Root {
         ) else {
             return;
         };
+        let Some(current) = self.svc.current_session() else {
+            return;
+        };
+        let replica = self.svc.config.db_path(&current);
         let session = self.svc.session.clone();
+        let request_session = session.clone();
         let request = Arc::new(());
         desk.request = Some(request.clone());
         desk.observed_cursor = Some(cursor);
@@ -120,11 +133,32 @@ impl Root {
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.resource_day(date, tz) })
+                .spawn(async move {
+                    occupancy_model::refresh(
+                        &transport,
+                        &replica,
+                        &request_session,
+                        date,
+                        tz,
+                        &generation,
+                    )
+                })
                 .await;
             let _ = root.update(cx, |root, cx| {
-                if !Arc::ptr_eq(&session, &root.svc.session)
-                    || root.calendar_mode != CalendarMode::Resources
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
+                {
+                    return;
+                }
+                if matches!(result, occupancy_model::Refresh::Denied) {
+                    root.resource_access_denied = true;
+                    root.reset_resource_calendar();
+                    if root.calendar_mode == CalendarMode::Resources {
+                        root.set_calendar_mode(CalendarMode::Day, cx);
+                    }
+                    cx.notify();
+                    return;
+                }
+                if root.calendar_mode != CalendarMode::Resources
                     || !root.can_view_resource_calendar()
                     || root.date != date
                     || root.tz != tz
@@ -138,37 +172,19 @@ impl Root {
                 }
                 root.resource_calendar.request = None;
                 match result {
-                    Ok(day) if day.resource_occupancy.is_some() => {
-                        let snapshot = CachedResourceDay::new(day, Utc::now());
-                        if root
-                            .svc
-                            .store
-                            .cache_resource_day(date, &generation, &snapshot)
-                            .unwrap_or(false)
-                        {
-                            root.resource_calendar.day = Some(ConfirmedDay::new(snapshot));
-                        } else {
-                            root.resource_calendar.day = None;
-                            root.resource_calendar.error = true;
-                            root.resource_calendar.retry_at = Some(Instant::now() + RETRY_DELAY);
-                        }
+                    occupancy_model::Refresh::Loaded(day) => {
+                        root.resource_calendar.day = Some(ConfirmedDay::new(day))
                     }
-                    Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
-                        let _ = root.svc.store.clear_resource_days();
+                    occupancy_model::Refresh::Unavailable => {
                         root.resource_calendar.day = None;
                         root.resource_calendar.error = true;
                     }
-                    Ok(_) => {
-                        root.resource_calendar.day = None;
-                        root.resource_calendar.error = true;
-                    }
-                    Err(error) => {
-                        let delay = match error {
-                            TransportError::RateLimited(Some(delay)) => delay.max(RETRY_DELAY),
-                            _ => RETRY_DELAY,
-                        };
+                    occupancy_model::Refresh::RetryAfter(delay) => {
                         root.resource_calendar.error = true;
                         root.resource_calendar.retry_at = Instant::now().checked_add(delay);
+                    }
+                    occupancy_model::Refresh::Denied => {
+                        unreachable!("handled for the entire session")
                     }
                 }
                 cx.notify();
@@ -207,6 +223,7 @@ impl Root {
             return base;
         };
         let stale = self.status.connectivity != Connectivity::Online
+            || !self.status.stream_live
             || desk.error
             || desk.request.is_some()
             || self.summary.pending > 0;
@@ -296,7 +313,13 @@ impl Root {
                         })
                 })),
             ));
-        let names: HashMap<_, _> = self
+        let names: HashMap<_, _> = day
+            .snapshot
+            .appointment_labels()
+            .iter()
+            .map(|label| (label.id.as_str(), label.client_name.as_str()))
+            .collect();
+        let local_names: HashMap<_, _> = self
             .view
             .iter()
             .flat_map(|view| &view.columns)
@@ -356,7 +379,10 @@ impl Root {
                                         )
                                     })
                                     .children(cell.appointment_ids.iter().filter_map(|id| {
-                                        let name = names.get(id.as_str())?.to_string();
+                                        let name = names
+                                            .get(id.as_str())
+                                            .or_else(|| local_names.get(id.as_str()))?
+                                            .to_string();
                                         let appointment_id = id.clone();
                                         Some(
                                             self.button(
@@ -368,7 +394,23 @@ impl Root {
                                                 Kind::Ghost,
                                                 cx.listener(move |root, _, _, cx| {
                                                     if matches!(root.overlay, Overlay::None) {
-                                                        root.open_details(&appointment_id, cx);
+                                                        if let Ok(Some(appointment)) =
+                                                            calendar::effective_appointment(
+                                                                &root.svc.store,
+                                                                &appointment_id,
+                                                            )
+                                                        {
+                                                            root.show_appointment_details(
+                                                                appointment,
+                                                                None,
+                                                                cx,
+                                                            );
+                                                        } else {
+                                                            root.resource_calendar.pending_open =
+                                                                Some(appointment_id.clone());
+                                                            root.svc.wake(Wake::Manual);
+                                                            cx.notify();
+                                                        }
                                                     }
                                                 }),
                                             )
@@ -394,7 +436,18 @@ impl Root {
                             .child(scroll_row(("resource-calendar-row", index).into(), cells))
                     })),
             );
-        base.child(heading).child(rows)
+        base.when(desk.pending_open.is_some(), |body| {
+            body.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::ResourceAppointmentPending)),
+            )
+        })
+        .child(heading)
+        .child(rows)
     }
 }
 
@@ -424,6 +477,7 @@ mod tests {
                 ResourceDay {
                     from,
                     to,
+                    appointments: Vec::new(),
                     resource_occupancy: Some(ResourceOccupancy {
                         captured_at: now,
                         pools: vec![ResourceColumn {
@@ -447,7 +501,7 @@ mod tests {
             assert!(
                 root.svc
                     .store
-                    .cache_resource_day(date, &generation, &snapshot)
+                    .cache_resource_day(date, &generation, &snapshot, || true)
                     .unwrap()
             );
             root.set_calendar_mode(CalendarMode::Resources, cx);

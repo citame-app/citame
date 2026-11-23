@@ -363,6 +363,7 @@ pub struct Root {
     overview_show_cancelled: bool,
     calendar_resource: Option<(String, String)>,
     resource_calendar: resource_calendar::Desk,
+    resource_access_denied: bool,
     calendar_resources: OnceCell<Vec<calendar_overview::ResourceOption>>,
 
     calendar_layout: OnceCell<CalendarLayout>,
@@ -452,6 +453,7 @@ impl Root {
             overview_staff: BTreeSet::new(),
             calendar_resource: None,
             resource_calendar: Default::default(),
+            resource_access_denied: false,
             calendar_resources: OnceCell::new(),
             overview_search,
             overview_status: None,
@@ -647,6 +649,7 @@ impl Root {
             .start_date
             .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
         self.calendar_mode = CalendarMode::Day;
+        self.resource_access_denied = false;
         self.reset_resource_calendar();
         self.week_staff_id.clear();
         self.week_layout = team_calendar::WeekLayout::Timeline;
@@ -733,6 +736,7 @@ impl Root {
                 .detach();
         }
         self.screen = Screen::Login;
+        self.reset_resource_calendar();
         self.disconnecting = false;
         self.disconnect_failed = false;
         self.overlay = Overlay::None;
@@ -771,6 +775,7 @@ impl Root {
             });
             return;
         }
+        let resource_reconnected = reconnected || (status.stream_live && !self.status.stream_live);
         self.update_inbox_connectivity(&status, cx);
         self.refresh_open_report(&status, cx);
         self.refresh_commissions(&status, cx);
@@ -802,7 +807,7 @@ impl Root {
         self.refresh_open_service_catalog(reconnected, cx);
         self.refresh_service_resources(reconnected, cx);
         self.refresh_resource_pools(cx);
-        self.refresh_resource_calendar(self.status.connectivity, reconnected, cx);
+        self.refresh_resource_calendar(self.status.connectivity, resource_reconnected, cx);
         self.refresh_combinations(cx);
         self.refresh_email_delivery(reconnected, cx);
         self.refresh_marketing(reconnected, cx);
@@ -831,6 +836,7 @@ impl Root {
             || self.replica_generation != generation
         {
             self.calendar_resource = None;
+            self.resource_access_denied = false;
             self.reset_resource_calendar();
             if !self.preserve_open_salon_draft(cx)
                 && !self.preserve_open_booking_policy_draft(cx)
