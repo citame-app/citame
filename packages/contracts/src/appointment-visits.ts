@@ -3,14 +3,17 @@ import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { peakPriceReviewSchema } from "./peak-prices";
 
-const visitPartSchema = createAppointmentBaseSchema.omit({
-  id: true,
-  startsAt: true,
-  client: true,
-  clientId: true,
-  notes: true,
-  override: true,
-});
+const visitPartSchema = createAppointmentBaseSchema
+  .omit({
+    combination: true,
+    id: true,
+    startsAt: true,
+    client: true,
+    clientId: true,
+    notes: true,
+    override: true,
+  })
+  .extend({ combination: z.never().optional() });
 export const visitCreateSchema = z
   .object({
     id: idSchema,

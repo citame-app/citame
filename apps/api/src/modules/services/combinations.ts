@@ -63,6 +63,11 @@ async function validate(
     }
   }
   if (fixed) {
+    if (fixed.pricesCents.reduce((sum, cents) => sum + cents, 0) > 999_999_999)
+      throw new DomainError(
+        "validation_error",
+        "The combination total exceeds the supported amount",
+      );
     if (fixed.pricesCents.length !== services.length)
       throw new DomainError("validation_error", "Enter one price for each treatment in order");
     const members = await db
@@ -87,7 +92,11 @@ async function validate(
 }
 function fixedTerms(row: Row): FixedCombinationTerms | null {
   return row.fixedPricesCents && row.fixedStaffIds
-    ? { pricesCents: Array.from(row.fixedPricesCents), staffIds: row.fixedStaffIds }
+    ? {
+        pricesCents: Array.from(row.fixedPricesCents),
+        staffIds: row.fixedStaffIds,
+        ...(!row.fixedOnlineBooking ? { onlineBooking: false } : {}),
+      }
     : null;
 }
 async function writtenView(db: Connection, row: Row) {
@@ -115,7 +124,7 @@ function view(row: Row, bookable: boolean) {
     updatedAt: row.updatedAt.toISOString(),
   };
 }
-export async function listCombinations(db: Database, principal?: Principal) {
+export async function listCombinations(db: Database, principal?: Principal, supportsFixed = false) {
   if (principal) requirePermission(principal, "editCatalog");
   return db.transaction(async (tx) => {
     await tx.execute(sql`set transaction isolation level repeatable read read only`);
@@ -129,9 +138,30 @@ export async function listCombinations(db: Database, principal?: Principal) {
     const ids = [...new Set(rows.flatMap((row) => row.serviceIds))];
     const services = new Map((await onlineServicesByIds(tx, ids)).map((row) => [row.id, row]));
     const assignments = await activeAssignments(tx, ids);
+    const fixedStaffIds = supportsFixed
+      ? [...new Set(rows.flatMap((row) => row.fixedStaffIds ?? []))]
+      : [];
+    const fixedStaff = new Set(
+      fixedStaffIds.length
+        ? (
+            await tx
+              .select({ id: staffProfile.id })
+              .from(staffProfile)
+              .where(
+                and(
+                  inArray(staffProfile.id, fixedStaffIds),
+                  eq(staffProfile.active, true),
+                  isNull(staffProfile.deletedAt),
+                ),
+              )
+          ).map(({ id }) => id)
+        : [],
+    );
     return {
       combinations: rows.flatMap((row) => {
-        if (row.fixedPricesCents) return principal ? [view(row, false)] : [];
+        const fixed = fixedTerms(row);
+        if (fixed && !supportsFixed) return principal ? [view(row, false)] : [];
+        if (fixed?.onlineBooking === false && !principal) return [];
         const selected: Service[] = [];
         for (const id of row.serviceIds) {
           const service = services.get(id);
@@ -141,7 +171,9 @@ export async function listCombinations(db: Database, principal?: Principal) {
         let bookable = false;
         try {
           assertCatalogSelection(selected);
-          bookable = hasQualifiedTeam(selected, assignments);
+          bookable = fixed
+            ? row.active && fixed.staffIds.some((id) => fixedStaff.has(id))
+            : hasQualifiedTeam(selected, assignments);
         } catch (error) {
           if (!(error instanceof DomainError)) throw error;
         }
@@ -150,14 +182,6 @@ export async function listCombinations(db: Database, principal?: Principal) {
     };
   });
 }
-function requireDraft(active: boolean, fixed: FixedCombinationTerms | null | undefined) {
-  if (active && fixed)
-    throw new DomainError(
-      "validation_error",
-      "A fixed-price combination can only be stored as a draft",
-    );
-}
-
 export async function saveCombination(
   db: Database,
   input: CombinationCreate | CombinationUpdate,
@@ -196,15 +220,25 @@ export async function saveCombination(
           "Review the price and staff after changing the treatment order",
         );
       const fixed = input.fixedTerms === undefined ? stored : input.fixedTerms;
-      requireDraft(input.active, fixed);
+      if (!row.active && input.active && fixed && input.fixedTerms === undefined)
+        throw new DomainError(
+          "version_conflict",
+          "Review the fixed terms before publishing the combination",
+        );
       if (input.active || selectionChanged || input.fixedTerms)
-        await validate(tx, input.serviceIds, target?.reviewOnline && !fixed, fixed);
+        await validate(
+          tx,
+          input.serviceIds,
+          !!target?.reviewOnline && (!fixed || input.active),
+          fixed,
+        );
       [row] = await tx
         .update(serviceCombination)
         .set({
           ...fields,
           fixedPricesCents: fixed?.pricesCents ?? null,
           fixedStaffIds: fixed?.staffIds ?? null,
+          fixedOnlineBooking: fixed?.onlineBooking ?? true,
           version: row.version + 1,
           updatedAt: now,
         })
@@ -214,7 +248,6 @@ export async function saveCombination(
       if (!("idempotencyKey" in input))
         throw new DomainError("validation_error", "A creation identifier is required");
       const fixed = input.fixedTerms;
-      requireDraft(input.active, fixed);
       const fingerprint = createHash("sha256")
         .update(JSON.stringify(fixed ? { ...fields, fixedTerms: fixed } : fields))
         .digest("hex");
@@ -243,13 +276,19 @@ export async function saveCombination(
       const [total] = await tx.select({ total: count() }).from(serviceCombination);
       if ((total?.total ?? 0) >= 100)
         throw new DomainError("storage_limit", "The salon combination limit has been reached");
-      await validate(tx, input.serviceIds, target?.reviewOnline && !fixed, fixed);
+      await validate(
+        tx,
+        input.serviceIds,
+        !!target?.reviewOnline && (!fixed || input.active),
+        fixed,
+      );
       [row] = await tx
         .insert(serviceCombination)
         .values({
           ...fields,
           fixedPricesCents: fixed?.pricesCents ?? null,
           fixedStaffIds: fixed?.staffIds ?? null,
+          fixedOnlineBooking: fixed?.onlineBooking ?? true,
           ...(target ? { id: target.id } : {}),
           createdBy: p.userId,
           idempotencyKey: input.idempotencyKey,

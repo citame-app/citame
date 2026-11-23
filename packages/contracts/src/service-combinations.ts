@@ -1,8 +1,18 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
 
+export const fixedCombinationReviewSchema = z
+  .object({
+    id: idSchema,
+    version: z.number().int().positive(),
+    reviewHash: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+export type FixedCombinationReview = z.infer<typeof fixedCombinationReviewSchema>;
+
 export const fixedCombinationTermsSchema = z
   .object({
+    onlineBooking: z.boolean().optional(),
     pricesCents: z.array(z.number().int().min(0).max(999_999_999)).min(2).max(24),
     staffIds: z
       .array(idSchema)

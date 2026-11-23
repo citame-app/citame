@@ -37,6 +37,7 @@ export function peakPricePreviewRoute({ db }: AppDeps, publicOnly: boolean) {
         query.serviceIds,
         query.startsAt,
         publicOnly || principal?.role === "client",
+        query.combinationId,
       ),
       200,
       { "Cache-Control": "no-store" },

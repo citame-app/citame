@@ -8,7 +8,8 @@ import { assertStaffPerforms } from "../appointments/service";
 import { createCheckoutInTransaction } from "../commerce/service";
 import { membershipDiscounts } from "../passes/value";
 import { quotePeakSlot } from "../peak-prices/service";
-import { getBookableServices } from "../services/service";
+import { assertCombinationStaff, resolveBookingSelection } from "../services/combination-booking";
+import { assertOnlineServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { assertStaffExists } from "../staff/service";
 import { rewardHash } from "./accounts";
@@ -25,7 +26,12 @@ async function quoteInTransaction(
   const p = await loadPrincipal(tx, principal.userId);
   if (p?.role !== "client" || !p.clientId)
     throw new DomainError("forbidden", "A customer booking account is required");
-  const services = await getBookableServices(tx, input.serviceIds, input.serviceQuotes);
+  const { services, fixed } = await resolveBookingSelection(tx, input);
+  if (fixed) {
+    if (!fixed.onlineBooking)
+      throw new DomainError("not_found", "Combination unavailable for online booking");
+    await assertOnlineServices(tx, input.serviceIds, principal.userId);
+  }
   if (services.some((s) => needsFinalPrice(s.priceType)))
     throw new DomainError(
       "invalid_state",
@@ -34,14 +40,16 @@ async function quoteInTransaction(
   if (services.some((s) => s.currency !== "EUR"))
     throw new DomainError("validation_error", "Booking promotions require EUR services");
   await assertStaffExists(tx, input.staffId);
-  await assertStaffPerforms(
-    tx,
-    input.staffId,
-    services.map((s) => s.id),
-    lock,
-  );
+  if (fixed) await assertCombinationStaff(tx, input.staffId, fixed.staffIds);
+  else
+    await assertStaffPerforms(
+      tx,
+      input.staffId,
+      services.map((s) => s.id),
+      lock,
+    );
   const { timezone } = await getSalonSettings(tx);
-  const peak = await quotePeakSlot(tx, services, new Date(input.startsAt), timezone);
+  const peak = await quotePeakSlot(tx, services, new Date(input.startsAt), timezone, fixed?.review);
   const prices = new Map(peak.services.map((line) => [line.serviceId, line.priceCents]));
   const source = services.map((s) => ({
     kind: "service",
@@ -91,6 +99,7 @@ async function quoteInTransaction(
     staffId: input.staffId,
     startsAt: new Date(input.startsAt).toISOString(),
     services: services.map((s) => [s.id, s.quoteHash]),
+    ...(fixed ? { combination: fixed.review } : {}),
     promotionId: priced.promo.id,
     promotionVersion: priced.promo.version,
     timezone,
@@ -144,6 +153,7 @@ export async function applyBookingPromotion(
       code: input.promotion.code,
       staffId: input.staffId,
       serviceIds: input.serviceIds,
+      combination: input.combination,
       serviceQuotes: input.serviceQuotes,
       startsAt: input.startsAt,
     },

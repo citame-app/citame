@@ -56,7 +56,7 @@ export function serviceAdminRoutes({ db, config, now = () => new Date() }: AppDe
       ),
     )
     .get("/combinations", ownerOnly, async (c) =>
-      c.json(await listCombinations(db, c.get("principal"))),
+      c.json(await listCombinations(db, c.get("principal"), c.req.query("fixedTerms") === "1")),
     )
     .post("/combinations", ownerOnly, async (c) =>
       c.json(

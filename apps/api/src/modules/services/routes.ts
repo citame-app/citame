@@ -17,6 +17,8 @@ export function servicesRoutes({ db, now = () => new Date() }: AppDeps) {
         ),
       ),
     )
-    .get("/combinations", async (c) => c.json(await listCombinations(db)))
+    .get("/combinations", async (c) =>
+      c.json(await listCombinations(db, undefined, c.req.query("fixedTerms") === "1")),
+    )
     .get("/", async (c) => c.json({ services: await listServices(db) }));
 }

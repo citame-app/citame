@@ -16,6 +16,7 @@ import {
   desktopVisitCreateSchema,
   desktopVisitInputSchema,
   idSchema,
+  permissionsFor,
   updateAppointmentRequestSchema,
   visitCreateSchema,
 } from "@sob/contracts";
@@ -32,6 +33,7 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
+import { findAvailability } from "../availability/service";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { listServices } from "../services/service";
@@ -317,6 +319,19 @@ export function appointmentsRoutes({
       })
       .post("/", create(false))
       .post("/desktop-booking", create(true))
+      .get("/combination-availability", async (c) => {
+        const principal = c.get("principal");
+        requirePermission(principal, "editCalendar");
+        const query = parseOrThrow(availabilityQuerySchema, c.req.query());
+        if (!query.combinationId)
+          throw new DomainError("validation_error", "Choose a fixed-price combination");
+        if (!permissionsFor(principal.role, principal.accessPreset).allCalendars) {
+          if (!principal.staffId || (query.staffId && query.staffId !== principal.staffId))
+            throw new DomainError("forbidden", "Choose your own calendar");
+          query.staffId = principal.staffId;
+        }
+        return c.json(await findAvailability(db, query, now()));
+      })
       .get("/:id/availability", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));
         const query = parseOrThrow(availabilityQuerySchema, c.req.query());

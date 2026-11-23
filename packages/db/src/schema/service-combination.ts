@@ -11,6 +11,7 @@ export const serviceCombination = pgTable(
     serviceIds: uuid().array().notNull(),
     fixedPricesCents: integer().array(),
     fixedStaffIds: uuid().array(),
+    fixedOnlineBooking: boolean().notNull().default(true),
     active: boolean().notNull().default(true),
     version: integer().notNull().default(1),
     createdBy: text()

@@ -12,6 +12,7 @@ import {
 } from "./common";
 import { intakeBookingShape } from "./intake";
 import { peakPriceReviewSchema } from "./peak-prices";
+import { fixedCombinationReviewSchema } from "./service-combinations";
 import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema, workWindowSchema } from "./staff-capacity";
 
@@ -58,6 +59,7 @@ export const appointmentSchema = z.object({
   id: idSchema,
   visitGroupId: idSchema.optional(),
   itineraryId: idSchema.optional(),
+  combinationId: idSchema.optional(),
   staffId: idSchema,
   clientId: idSchema,
   startsAt: instantSchema,
@@ -98,6 +100,7 @@ export const createAppointmentBaseSchema = z.object({
   id: idSchema.optional(),
   staffId: idSchema,
   professionalPreference: z.enum(["specific", "any"]).optional(),
+  combination: fixedCombinationReviewSchema.optional(),
   serviceIds: z.array(idSchema).min(1).max(24),
   /** Optional compatibility fence: reject changed reviewed catalog terms before creating a visit. */
   serviceQuotes: z

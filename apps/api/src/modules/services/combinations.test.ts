@@ -1,12 +1,19 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { serviceCombinationSchema } from "@sob/contracts";
+import {
+  appointmentSchema,
+  availabilityResponseSchema,
+  checkoutSchema,
+  peakPriceQuoteSchema,
+  serviceCombinationSchema,
+} from "@sob/contracts";
 import { service, serviceStaff, staffProfile } from "@sob/db";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import {
   type Actor,
   actor,
   type Fixtures,
   json,
+  MONDAY_0900,
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
@@ -264,10 +271,149 @@ test("rejects incorrect price allocations and validates the combination's explic
     const response = await call("/admin/services/combinations", "POST", { ...draft, fixedTerms });
     expect([400, 404]).toContain(response.status);
   }
-  const active = await call("/admin/services/combinations", "POST", {
-    ...draft,
-    active: true,
+});
+
+test("a priced combination quotes and charges its frozen amounts with booking-specific staff", async () => {
+  const serviceIds = [f.haircutId, f.colorId];
+  await t.db.update(service).set({ currency: "EUR" }).where(inArray(service.id, serviceIds));
+  await t.db
+    .delete(serviceStaff)
+    .where(and(eq(serviceStaff.staffId, f.anaId), eq(serviceStaff.serviceId, f.colorId)));
+  const published = await call("/admin/services/combinations", "POST", {
+    ...input(),
     fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId] },
   });
-  expect(active.status).toBe(400);
+  expect(published.status).toBe(201);
+  const combo = serviceCombinationSchema.parse(await published.json());
+  expect(await (await call("/services/combinations")).json()).toEqual({ combinations: [] });
+  expect(await (await call("/services/combinations?fixedTerms=1")).json()).toMatchObject({
+    combinations: [{ id: combo.id, bookable: true }],
+  });
+  const selection = new URLSearchParams({
+    serviceIds: serviceIds.join(","),
+    combinationId: combo.id,
+  });
+  const get = (path: string, params: Record<string, string>) =>
+    t.app.request(`${path}?${new URLSearchParams([...selection, ...Object.entries(params)])}`);
+  const availability = await get("/availability", { date: "2026-03-09" });
+  expect(availability.status).toBe(200);
+  const slots = availabilityResponseSchema.parse(await availability.json()).slots;
+  expect(slots.some((slot) => slot.staffId === f.anaId && slot.startsAt === MONDAY_0900)).toBe(
+    true,
+  );
+  expect(slots.every((slot) => slot.staffId === f.anaId)).toBe(true);
+
+  const quoteReply = await get("/availability/peak-price", { startsAt: MONDAY_0900 });
+  expect(quoteReply.status).toBe(200);
+  const quote = peakPriceQuoteSchema.parse(await quoteReply.json());
+  expect(quote.services.map((row) => row.priceCents)).toEqual([1200, 3400]);
+  const combination = quote.combination;
+  if (!combination) throw new Error("Missing combination review");
+
+  const body = {
+    id: crypto.randomUUID(),
+    staffId: f.anaId,
+    clientId: f.clientId,
+    serviceIds,
+    startsAt: MONDAY_0900,
+  };
+  expect((await call("/appointments", "POST", body)).status).toBe(400);
+  expect(
+    (await call("/appointments", "POST", { ...body, staffId: f.beaId, combination })).status,
+  ).toBe(400);
+  const bookingReply = await call("/appointments", "POST", { ...body, combination });
+  expect(bookingReply.status, await bookingReply.clone().text()).toBe(201);
+  const appointment = appointmentSchema.parse(await bookingReply.json());
+  expect(appointment.combinationId).toBe(combo.id);
+  expect(appointment.services.map((line) => line.priceCents)).toEqual([1200, 3400]);
+
+  const { idempotencyKey: _key, ...fields } = input();
+  expect(
+    (
+      await call(`/admin/services/combinations/${combo.id}`, "PUT", {
+        ...fields,
+        version: combo.version,
+        fixedTerms: { pricesCents: [1500, 3600], staffIds: [f.anaId] },
+      })
+    ).status,
+  ).toBe(200);
+  const replay = await call("/appointments", "POST", { ...body, combination });
+  expect(replay.headers.get("x-idempotent-replay")).toBe("true");
+  expect(
+    (await call("/appointments", "POST", { ...body, id: crypto.randomUUID(), combination })).status,
+  ).toBe(409);
+  expect(
+    (
+      await call(`/appointments/${body.id}`, "PATCH", {
+        version: appointment.version,
+        staffId: f.beaId,
+      })
+    ).status,
+  ).toBe(400);
+  const moveQuery = new URLSearchParams({ date: "2026-03-09", serviceIds: serviceIds.join(",") });
+  const reschedule = await call(`/appointments/${body.id}/availability?${moveQuery}`);
+  expect(reschedule.status).toBe(200);
+  const rescheduleSlots = availabilityResponseSchema.parse(await reschedule.json()).slots;
+  expect(rescheduleSlots.length).toBeGreaterThan(0);
+  expect(rescheduleSlots.every((slot) => slot.staffId === f.anaId)).toBe(true);
+  const moved = await call(`/appointments/${body.id}`, "PATCH", {
+    version: appointment.version,
+    startsAt: "2026-03-09T15:00:00.000Z",
+  });
+  expect(moved.status, await moved.clone().text()).toBe(200);
+  expect(appointmentSchema.parse(await moved.json()).services.map((row) => row.priceCents)).toEqual(
+    [1200, 3400],
+  );
+
+  const receipt = await call("/admin/commerce/checkouts", "POST", {
+    appointmentId: body.id,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(receipt.status, await receipt.clone().text()).toBe(201);
+  expect(checkoutSchema.parse(await receipt.json())).toMatchObject({
+    totalCents: 4600,
+    lines: [{ unitAmountCents: 1200 }, { unitAmountCents: 3400 }],
+  });
+});
+
+test("staff-only fixed terms stay private while the owner can quote and book them", async () => {
+  const serviceIds = [f.haircutId, f.colorId];
+  const saved = await call("/admin/services/combinations", "POST", {
+    ...input(),
+    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId], onlineBooking: false },
+  });
+  expect(saved.status).toBe(201);
+  const combo = serviceCombinationSchema.parse(await saved.json());
+  const query = new URLSearchParams({
+    combinationId: combo.id,
+    startsAt: MONDAY_0900,
+    date: "2026-03-09",
+    serviceIds: serviceIds.join(","),
+  });
+  expect(await (await call("/services/combinations?fixedTerms=1")).json()).toEqual({
+    combinations: [],
+  });
+  expect((await call(`/availability?${query}`)).status).toBe(404);
+  expect((await call(`/availability/peak-price?${query}`)).status).toBe(404);
+  const internalSlots = await call(`/appointments/combination-availability?${query}`);
+  expect(internalSlots.status).toBe(200);
+  expect(
+    availabilityResponseSchema
+      .parse(await internalSlots.json())
+      .slots.some((slot) => slot.staffId === f.anaId),
+  ).toBe(true);
+  const quote = await call(`/appointments/peak-price?${query}`);
+  expect(quote.status).toBe(200);
+  const combination = peakPriceQuoteSchema.parse(await quote.json()).combination;
+  if (!combination) throw new Error("Missing internal review");
+  const client = await actor(t, "client", "client-for-private-combo@example.com");
+  expect(
+    (await call(`/appointments/combination-availability?${query}`, "GET", undefined, client))
+      .status,
+  ).toBe(403);
+  const booking = { combination, serviceIds, staffId: f.anaId, startsAt: MONDAY_0900 };
+  expect((await call("/appointments", "POST", booking, client)).status).toBe(404);
+  expect((await call("/appointments", "POST", { ...booking, clientId: f.clientId })).status).toBe(
+    201,
+  );
 });

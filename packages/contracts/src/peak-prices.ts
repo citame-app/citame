@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { idSchema, instantSchema, syncGenerationSchema } from "./common";
+import { fixedCombinationReviewSchema } from "./service-combinations";
 
 export const MAX_PEAK_PRICE_RULES = 100;
 export const MAX_PEAK_PRICE_SERVICES = 200;
@@ -35,11 +36,13 @@ export const peakPriceQuerySchema = z.object({
     .transform((value) => value.split(","))
     .pipe(z.array(idSchema).min(1).max(24)),
   startsAt: instantSchema,
+  combinationId: idSchema.optional(),
 });
 
 export const peakPriceQuoteSchema = z.object({
   startsAt: instantSchema,
   review: peakPriceReviewSchema.nullable(),
+  combination: fixedCombinationReviewSchema.optional(),
   services: z.array(
     z.object({
       serviceId: idSchema,

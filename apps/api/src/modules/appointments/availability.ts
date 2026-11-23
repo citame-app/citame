@@ -29,7 +29,8 @@ export async function getRescheduleAvailability(
   )
     throw new DomainError("validation_error", "Rescheduling must retain the booked services");
 
-  return findAvailability(db, { ...query, staffId }, now, {
+  return findAvailability(db, { ...query, staffId, combinationId: undefined }, now, {
+    staffIds: ownership.combinationStaffIds ?? undefined,
     excludeAppointmentId: id,
     services: snapshots.map((line) => ({
       id: line.serviceId ?? line.id,

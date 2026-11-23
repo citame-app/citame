@@ -204,6 +204,15 @@ catalogue write. A write from an older client preserves the terms unless the tre
 order changes, which requires a review.
 The review leaves the combination's publication status and appointments intact.
 
+Clients that support fixed-price combinations request `fixedTerms=1` from the
+combination catalogue. A published combination selects a single assigned professional,
+preserves the component order, and has an explicit online-visibility setting. For a public
+combination, use its ID on availability and price queries. Centre accounts use
+`/appointments/combination-availability` and `/appointments/peak-price` for internal options.
+The price response carries the version and review hash required when submitting a booking.
+Fixed prices exclude catalogue peak surcharges. Checkout uses the component amounts frozen on
+the appointment. A move uses the booked professional list and the original service amounts.
+
 #### Conciliación de una candidata ya cargada
 
 El informe vuelve a comprobar la copia persistente dentro de una transacción de solo lectura. Coteja la identidad y los horarios de cada línea, los grupos, los importes congelados y sus indicadores, los comentarios, las franjas de capacidad reservadas, las asignaciones de recursos, los bloqueos y la lista de espera con el snapshot seleccionado. También comprueba los SHA-256 del archivo y coteja los identificadores, recuentos y huellas de los perfiles, el catálogo, las asignaciones profesionales y los horarios materializados. Verifica que la candidata no tenga recibos, recordatorios, ofertas ni lista de espera activa. Solo devuelve recuentos y estados de evidencias.

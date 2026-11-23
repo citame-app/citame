@@ -25,6 +25,7 @@ export function booksyCombinationDrafts(model: Pick<BooksySourceReadModel, "base
         sourceUuid(model.businessId, "services", serviceRef),
       ),
       fixedTerms: {
+        ...(!source.publiclyAvailable ? { onlineBooking: false } : {}),
         pricesCents: source.terms.components.map(({ priceCents }) => priceCents),
         staffIds: source.terms.staffRefs.map((ref) => sourceUuid(model.businessId, "staff", ref)),
       },
