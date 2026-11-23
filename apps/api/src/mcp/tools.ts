@@ -27,6 +27,7 @@ import {
 } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import type { z } from "zod";
+import type { McpAuditSource } from "../audit";
 import {
   authorizeAppointmentChange,
   authorizeAppointmentCreate,
@@ -63,7 +64,7 @@ export interface ToolContext {
   /** Optional booking-outcome counter (`sob_booking_total`). */
   onBooking?: (outcome: string) => void;
   /** Recorded in the audit log of every write, so a booking made by an agent says so. */
-  via: { channel: "mcp"; clientId: string };
+  via: McpAuditSource;
 }
 
 const DAY_MS = 86_400_000;

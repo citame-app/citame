@@ -29,7 +29,9 @@ import { recordMcpWriteRequested } from "./audit";
 import { errorResult, toolFailure } from "./errors";
 import type { ToolContext } from "./tools";
 
-type InternalEnv = AppEnv & { Bindings: { principal: Principal } };
+type InternalEnv = AppEnv & {
+  Bindings: { principal: Principal; mcpAuditSource: ToolContext["via"] };
+};
 type Scope = (typeof C.MCP_MANAGEMENT_SCOPES)[number];
 type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 type Operation = {
@@ -60,6 +62,7 @@ export function createManagementRouter(deps: AppDeps) {
   });
   app.use("*", async (c, next) => {
     c.set("principal", c.env.principal);
+    c.set("mcpAuditSource", c.env.mcpAuditSource);
     await next();
   });
   return app
@@ -301,7 +304,7 @@ export function registerManagementTools(
                   }
                 : {}),
             },
-            { principal: ctx.principal },
+            { principal: ctx.principal, mcpAuditSource: ctx.via },
           );
           const payload: unknown = await response.json();
           if (!response.ok) {

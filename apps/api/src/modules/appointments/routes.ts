@@ -122,7 +122,7 @@ export function appointmentsRoutes({
           { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
           principal,
           now(),
-          { appointmentIds },
+          { appointmentIds, via: c.get("mcpAuditSource") },
         ),
         201,
       );
@@ -368,7 +368,7 @@ export function appointmentsRoutes({
             db,
             id,
             body,
-            { userId: principal.userId, role: principal.role },
+            { userId: principal.userId, role: principal.role, via: c.get("mcpAuditSource") },
             { now: now() },
           ),
         );

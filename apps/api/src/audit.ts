@@ -3,6 +3,9 @@ import { auditLog, type Database } from "@sob/db";
 /** A database handle or a transaction: the recorder only needs `insert`. */
 export type AuditExecutor = Pick<Database, "insert">;
 
+/** Verified OAuth client making a request on behalf of an account. */
+export type McpAuditSource = { channel: "mcp"; clientId: string };
+
 export interface AuditEntry {
   actorUserId: string | null;
   /** Dotted verb, for example `appointment.create`. */

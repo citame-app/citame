@@ -16,7 +16,7 @@ import {
   serviceStaff,
 } from "@sob/db";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { recordAudit } from "../../audit";
+import { type McpAuditSource, recordAudit } from "../../audit";
 import { authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
@@ -214,11 +214,11 @@ export async function createAppointmentSeries(
   request: AppointmentSeriesCreate,
   principal: Principal,
   now: Date,
-  options: { appointmentIds?: readonly string[] } = {},
+  options: { appointmentIds?: readonly string[]; via?: McpAuditSource } = {},
 ) {
   const { reviewHash, idempotencyKey, peakPriceReviews, ...fields } = request;
   const input = appointmentSeriesInputSchema.parse(fields);
-  const { appointmentIds } = options;
+  const { appointmentIds, via } = options;
   const requestHash = hash({
     input,
     reviewHash,
@@ -291,7 +291,7 @@ export async function createAppointmentSeries(
           startsAt: occurrence.startsAt,
           peakPriceReview: occurrence.peakPriceReview,
         },
-        { userId: principal.userId, role: principal.role },
+        { userId: principal.userId, role: principal.role, via },
         { now, desktopReviewed: Boolean(appointmentIds) },
       );
       appointments.push(next);
@@ -331,6 +331,7 @@ export async function createAppointmentSeries(
         cadence: input.cadence,
         interval: input.interval,
         timezone: preview.timezone,
+        ...(via ? { via } : {}),
       },
     });
     return {

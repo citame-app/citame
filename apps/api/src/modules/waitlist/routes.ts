@@ -54,6 +54,7 @@ function entryActions(app: Hono<AppEnv>, { db, now = () => new Date() }: AppDeps
           parseOrThrow(waitlistAcceptSchema, await readJson(c)),
           c.get("principal"),
           now(),
+          c.get("mcpAuditSource"),
         ),
         201,
       ),

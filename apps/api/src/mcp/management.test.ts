@@ -10,7 +10,7 @@ import {
   staffProfile,
   timeOff,
 } from "@sob/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   actor,
   json,
@@ -356,8 +356,12 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
     staffProfileId: f.beaId,
   });
   const other = await actor(t, "client", "offer-client@example.com");
-  const ownerToken = (await tokenFor(t, owner, "operations:read schedule:write settings:write"))
-    .tokens.access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(
+    t,
+    owner,
+    "operations:read schedule:write settings:write",
+  );
+  const ownerToken = tokens.access_token;
   const staffToken = (await tokenFor(t, bea, "operations:read schedule:write")).tokens.access_token;
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
   expect(
@@ -435,6 +439,20 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
   expect(booked.data?.data.appointment).not.toHaveProperty("notes");
   expect((await accept(body)).data?.data.appointment.id).toBe(booked.data?.data.appointment.id);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(inArray(auditLog.action, ["appointment.create", "waitlist.offer_accepted"]));
+  expect(events.map(({ action }) => action).sort()).toEqual([
+    "appointment.create",
+    "waitlist.offer_accepted",
+  ]);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      actorUserId: owner.userId,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    });
+  }
   const pending = (await callTool(t.app, readToken, "review_waitlist_offer", { id: second })).data
     ?.data.entry;
   const requeued = await callTool(t.app, ownerToken, "requeue_waitlist_offer", {
@@ -447,7 +465,8 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
 test("recurring appointments use a reviewed schedule and create each occurrence once", async () => {
   const owner = await actor(t, "owner", "series-owner@example.com");
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
-  const writeToken = (await tokenFor(t, owner, "schedule:write")).tokens.access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(t, owner, "schedule:write");
+  const writeToken = tokens.access_token;
   expect(await listTools(t.app, readToken)).not.toContain("create_appointment_series");
   const input = {
     staffId: f.anaId,
@@ -483,6 +502,21 @@ test("recurring appointments use a reviewed schedule and create each occurrence 
   expect(series.data?.data.appointments).toHaveLength(2);
   expect(series.data?.data.appointments[0]).not.toHaveProperty("notes");
   expect(await t.db.select().from(appointment)).toHaveLength(2);
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(inArray(auditLog.action, ["appointment.create", "appointment.series_created"]));
+  expect(events.map(({ action }) => action).sort()).toEqual([
+    "appointment.create",
+    "appointment.create",
+    "appointment.series_created",
+  ]);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      actorUserId: owner.userId,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    });
+  }
 });
 
 test("rescheduling uses the appointment's saved services and calendar permissions", async () => {
@@ -493,8 +527,12 @@ test("rescheduling uses the appointment's saved services and calendar permission
   const assigned = await actor(t, "staff", "reschedule-assigned@example.com", {
     staffProfileId: f.anaId,
   });
-  const ownerToken = (await tokenFor(t, owner, "mcp:book operations:read schedule:write")).tokens
-    .access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(
+    t,
+    owner,
+    "mcp:book operations:read schedule:write",
+  );
+  const ownerToken = tokens.access_token;
   const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
   const assignedToken = (await tokenFor(t, assigned, "operations:read")).tokens.access_token;
   const booked = await callTool(t.app, ownerToken, "create_appointment", {
@@ -560,6 +598,17 @@ test("rescheduling uses the appointment's saved services and calendar permission
   });
   expect(moved.isError, moved.text).toBe(false);
   expect(moved.data?.data).toMatchObject({ startsAt: "2026-03-09T13:00:00.000Z" });
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "appointment.reschedule"));
+  expect(events).toMatchObject([
+    {
+      actorUserId: owner.userId,
+      entityId: original.id,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    },
+  ]);
 });
 
 test("imported price review requires the owner and explicit write consent", async () => {
