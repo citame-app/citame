@@ -51,7 +51,7 @@ for (const scheme of ["light", "dark"] as const) {
         });
         await signInThroughUi(page, fixture.clientEmail, "/account/rewards");
         await expect(page).toHaveURL(/\/account\/rewards$/);
-        await page.getByRole("button", { name: "Packages & memberships", exact: true }).click();
+        await page.getByRole("button", { name: "Memberships", exact: true }).click();
         const card = page
           .locator("div.rounded-xl")
           .filter({ has: page.getByRole("heading", { name, exact: true }) });
@@ -86,7 +86,7 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(page).toHaveURL(/\/payments\//);
         expect(intercepted).toBe(1);
         await page.goto("/account/rewards");
-        await page.getByRole("button", { name: "Packages & memberships", exact: true }).click();
+        await page.getByRole("button", { name: "Memberships", exact: true }).click();
         await page.getByLabel("Search pass name", { exact: true }).fill(name);
         await page.getByRole("button", { name: "View pass", exact: true }).click();
         await expect(
@@ -103,7 +103,7 @@ for (const scheme of ["light", "dark"] as const) {
         expect(renewed.status()).toBe(200);
         expect(await renewed.json()).toMatchObject({ claimed: 1, succeeded: 1, uncertain: 0 });
         await page.reload();
-        await page.getByRole("button", { name: "Packages & memberships", exact: true }).click();
+        await page.getByRole("button", { name: "Memberships", exact: true }).click();
         await page.getByLabel("Search pass name", { exact: true }).fill(name);
         await page.getByRole("button", { name: "View pass", exact: true }).click();
         await detail.getByRole("button", { name: "Purchase receipt", exact: true }).first().click();

@@ -81,7 +81,7 @@ export function PassesView({ mode, role, accessPreset, kind, clientId }: Props) 
       {unavailable && capabilities.isSuccess && (
         <p className="text-sm text-muted">{t("passes.unavailable")}</p>
       )}
-      {!clientId && (
+      {(mode === "client" || !clientId) && (
         <>
           <h3 className="font-semibold">{t("passes.catalog")}</h3>
           {plans.isPending ? (

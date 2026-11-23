@@ -137,7 +137,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 async function open() {
-  const view = renderApp(<PassesView mode="client" role="client" />);
+  const view = renderApp(<PassesView mode="client" role="client" clientId={id} />);
   await screen.findByRole("button", { name: "Purchase plan" });
   await screen.findByText("Haircut");
   fireEvent.click(screen.getByRole("button", { name: "Purchase plan" }));

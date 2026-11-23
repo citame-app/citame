@@ -45,7 +45,7 @@ Publication requires all of these to succeed:
 
 1. Fresh migrations and seed, bootstrap idempotency, lint, types, tests and production builds.
 2. Real backup/restore checks and an isolated production Compose smoke test with SMTP, upgrade, restore and native integration enabled. The Rust client exercises offline replay through the production proxy. For review invitations and moderation it uses a linked device restored from disk, renews its expired OAuth credential, and verifies that revocation rejects its bearer. The invitation replay check verifies one persisted delivery and one message in the private SMTP sink.
-3. Mobile/desktop Playwright coverage, local SMTP account flows and booking contention checks.
+3. Mobile/desktop Playwright coverage, local SMTP account flows and booking contention checks. The isolated browser fixtures cover publishing flash offers, rechecking booking discounts and approving membership renewal with simulated bank responses.
 4. Rust formatting, Clippy, core/GPUI tests and headless sync against the direct API.
 5. Native tests and optimized desktop packages for Linux x86_64, macOS Intel and macOS Apple Silicon, with uploaded checksums.
 
