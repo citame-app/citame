@@ -468,6 +468,26 @@ test("rescheduling uses the appointment's saved services and calendar permission
   expect(slots.data?.data.slots).toContainEqual(
     expect.objectContaining({ startsAt: MONDAY_0900, staffId: f.anaId }),
   );
+  const nearStart = createApp({
+    db: t.db,
+    valkey: t.valkey.client,
+    config: t.config,
+    now: () => new Date("2026-03-09T12:50:00.000Z"),
+  });
+  try {
+    const unreviewedMove = await callTool(nearStart, ownerToken, "update_appointment", {
+      id: original.id,
+      body: { startsAt: "2026-03-09T13:00:00.000Z", version: original.version, override: true },
+    });
+    expect(unreviewedMove.data?.error?.code).toBe("slot_unavailable");
+    const [unchanged] = await t.db
+      .select()
+      .from(appointment)
+      .where(eq(appointment.id, original.id));
+    expect(unchanged?.version).toBe(original.version);
+  } finally {
+    await nearStart.shutdown();
+  }
   const moved = await callTool(t.app, ownerToken, "update_appointment", {
     id: original.id,
     body: { startsAt: "2026-03-09T13:00:00.000Z", version: original.version },
@@ -925,6 +945,11 @@ test("cash and stock mutations keep the web rules and replay keys", async () => 
   expect(replay.data?.data?.payment?.id).toBe(paid.data?.data?.payment?.id);
   const paidVoid = await callTool(t.app, token, "void_checkout_draft", { id });
   expect(paidVoid.data?.error?.code).toBe("invalid_state");
+  const unreviewedCash = await callTool(t.app, token, "close_cash_session", {
+    id: sessionId,
+    body: { countedCents: 1700 },
+  });
+  expect(unreviewedCash.isError || unreviewedCash.rpcError !== null).toBe(true);
   const staleCash = await callTool(t.app, token, "close_cash_session", {
     id: sessionId,
     body: { countedCents: 1700, reviewedExpectedCents: 1500 },

@@ -224,7 +224,6 @@ const campaigns = C.campaignListSchema.extend({
     }),
   ),
 });
-const appointmentWrite = C.updateAppointmentRequestSchema;
 const promotionWrite = C.promotionInputSchema.safeExtend({
   active: z.boolean(),
 });
@@ -396,7 +395,7 @@ export function registerManagementTools(
       external: true,
     },
     "PATCH",
-    withBody(appointmentWrite),
+    withBody(C.mcpUpdateAppointmentInput),
     appointment,
     ({ id, body }) => ({ path: `/appointments/${id}`, body }),
   );
@@ -945,7 +944,7 @@ export function registerManagementTools(
     "Close the cash session with the physical count. Confirm the session and amount, and pass its reviewed expected balance to detect intervening movements.",
     cashWrite,
     "POST",
-    withBody(C.cashCloseSchema),
+    withBody(C.mcpCloseCashSessionInput),
     cash,
     ({ id, body }) => ({ path: `/commerce/cash-sessions/${id}/close`, body }),
   );
