@@ -1,8 +1,9 @@
 import {
   type BookingPromotionQuoteRequest,
   bookingPromotionQuoteRequestSchema,
+  type Service,
 } from "@sob/contracts";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
@@ -11,6 +12,7 @@ import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatMoney } from "~/lib/format";
 import { promotionTimingConditions } from "~/lib/promotion-timing";
+import { FlashOfferDetails } from "./flash-storefront";
 
 export function useBookingPromotion(
   selection: Omit<BookingPromotionQuoteRequest, "code"> | null,
@@ -20,12 +22,14 @@ export function useBookingPromotion(
   const input = selection
     ? bookingPromotionQuoteRequestSchema.safeParse({ ...selection, code })
     : null;
-  const signature = JSON.stringify({ selection, subjectKey, code: code.trim().toUpperCase() });
+  const signatureFor = (value: string) =>
+    JSON.stringify({ selection, subjectKey, code: value.trim().toUpperCase() });
+  const signature = signatureFor(code);
   const preview = useMutation({
-    mutationFn: async () => {
-      if (!input?.success) throw new Error("Review a valid booking code and selection");
-      return { signature, quote: await api().rewards.bookingQuote(input.data) };
-    },
+    mutationFn: async (request: { input: BookingPromotionQuoteRequest; signature: string }) => ({
+      signature: request.signature,
+      quote: await api().rewards.bookingQuote(request.input),
+    }),
   });
   const quote =
     !preview.isPending && preview.data?.signature === signature ? preview.data.quote : null;
@@ -38,7 +42,17 @@ export function useBookingPromotion(
     pending: preview.isPending,
     error: preview.error,
     payload: quote ? { code: code.trim().toUpperCase(), reviewHash: quote.reviewHash } : undefined,
-    review: () => preview.mutate(),
+    canReview: selection !== null,
+    review: (offerCode = code) => {
+      if (!selection) return;
+      const request = bookingPromotionQuoteRequestSchema.safeParse({
+        ...selection,
+        code: offerCode,
+      });
+      if (!request.success) return;
+      setCode(offerCode);
+      preview.mutate({ input: request.data, signature: signatureFor(offerCode) });
+    },
     resetReview: () => preview.reset(),
     clear: () => {
       setCode("");
@@ -48,13 +62,32 @@ export function useBookingPromotion(
 }
 export function BookingPromotionReview({
   state,
+  services,
   disabled = false,
 }: {
   state: ReturnType<typeof useBookingPromotion>;
+  services: Pick<Service, "id" | "priceCents" | "currency">[];
   disabled?: boolean;
 }) {
   const { t, locale } = useI18n();
   const online = useOnline();
+  const offerServiceIds = services.every(({ currency }) => currency === "EUR")
+    ? services.filter(({ priceCents }) => priceCents > 0).map(({ id }) => id)
+    : [];
+  const canShowOffers = state.canReview && online && offerServiceIds.length > 0;
+  const flash = useQuery({
+    queryKey: ["public-flash-offers"],
+    queryFn: ({ signal }) => api().rewards.flashOffers(signal),
+    refetchInterval: 30000,
+    enabled: canShowOffers,
+  });
+  const offers =
+    flash.isSuccess && canShowOffers
+      ? flash.data.offers.filter(
+          (offer) =>
+            offer.allServices || offer.services.some(({ id }) => offerServiceIds.includes(id)),
+        )
+      : [];
   return (
     <section
       aria-label={t("bookingPromotion.title")}
@@ -62,6 +95,27 @@ export function BookingPromotionReview({
     >
       <h2 className="text-heading">{t("bookingPromotion.title")}</h2>
       <p className="text-sm text-muted">{t("bookingPromotion.help")}</p>
+      {!!offers.length && (
+        <ul className="space-y-2" aria-label={t("flashOffers.title")}>
+          {offers.map((offer) => (
+            <li key={offer.id} className="rounded-lg border border-line bg-sunken p-3">
+              <article className="space-y-2">
+                <h3 className="break-words font-semibold">{offer.name}</h3>
+                <FlashOfferDetails offer={offer} />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={disabled || state.pending}
+                  aria-label={t("flashOffers.reviewNamed", { name: offer.name })}
+                  onClick={() => state.review(offer.code)}
+                >
+                  {t("bookingPromotion.review")}
+                </Button>
+              </article>
+            </li>
+          ))}
+        </ul>
+      )}
       <form
         onSubmit={(e) => {
           e.preventDefault();

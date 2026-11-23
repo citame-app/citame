@@ -85,6 +85,10 @@ export const loyaltyEn = {
   "promotions.start": "Starts at (salon time, optional)",
   "promotions.end": "Ends at (salon time, optional)",
   "promotions.active": "Available for new redemptions",
+  "promotions.onlineConfigured": "Flash offer configured",
+  "promotions.showOnline": "Show as a flash offer on the website",
+  "promotions.showOnlineHelp":
+    "Choose only services and set a start and end date. Leave the appointment time restriction off.",
   "promotions.services": "Services",
   "promotions.products": "Retail products",
   "promotions.custom": "Manually priced items",
@@ -186,6 +190,10 @@ export const loyaltyEsAR: Record<keyof typeof loyaltyEn, string> = {
   "promotions.start": "Inicio (hora del salón, opcional)",
   "promotions.end": "Fin (hora del salón, opcional)",
   "promotions.active": "Disponible para nuevos canjes",
+  "promotions.onlineConfigured": "Oferta flash configurada",
+  "promotions.showOnline": "Mostrar como oferta flash en la web",
+  "promotions.showOnlineHelp":
+    "Selecciona solo servicios, indica el inicio y el fin y deja desactivada la restricción de horario de la cita.",
   "promotions.services": "Servicios",
   "promotions.products": "Productos de venta",
   "promotions.custom": "Artículos de precio manual",

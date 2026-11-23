@@ -95,6 +95,7 @@ export type PromotionTerms = {
   eligibleKinds: ("service" | "product" | "custom")[];
   serviceIds: string[];
   active: boolean;
+  showOnline?: boolean;
   timing?: {
     weekdays: number[];
     startMinute: number;

@@ -25,7 +25,7 @@ import {
   setLoyaltyPolicy,
 } from "./accounts";
 import { applyCheckoutReward, quoteCheckoutReward } from "./discounts";
-import { listPromotions, savePromotion } from "./promotions";
+import { listPromotions, publicFlashOffers, savePromotion } from "./promotions";
 import { returnCheckoutPoints } from "./value";
 
 const pageSchema = z.coerce.number().int().min(1).max(100000).default(1);
@@ -38,6 +38,14 @@ function reviewedGeneration(c: Context<AppEnv>, current: string, required = fals
     );
   return generation !== undefined;
 }
+export function publicFlashOfferRoutes(deps: AppDeps) {
+  return new Hono<AppEnv>().get("/", async (c) =>
+    c.json(await publicFlashOffers(deps.db, deps.now?.() ?? new Date()), 200, {
+      "Cache-Control": "no-store",
+    }),
+  );
+}
+
 export function rewardsAdminRoutes({ db, config }: AppDeps) {
   return new Hono<AppEnv>()
     .use("*", async (c, next) => {

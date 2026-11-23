@@ -66,6 +66,7 @@ struct Editor {
     fields: [Entity<TextField>; 12],
     kind: Discount,
     active: bool,
+    show_online: bool,
     timed: bool,
     kinds: BTreeSet<Eligible>,
     weekdays: BTreeSet<u8>,
@@ -143,6 +144,7 @@ impl Editor {
             fields: values.map(|value: String| input(&value, "", cx)),
             kind: terms.map_or(Discount::Percent, |t| t.kind),
             active: terms.is_none_or(|t| t.active),
+            show_online: terms.is_some_and(|t| t.show_online == Some(true)),
             timed: timing.is_some(),
             kinds: terms.map_or_else(
                 || BTreeSet::from([Eligible::Service, Eligible::Product, Eligible::Custom]),
@@ -201,6 +203,9 @@ impl Editor {
             eligible_kinds: self.kinds.iter().copied().collect(),
             service_ids: self.service_ids.iter().copied().collect(),
             active: self.active,
+            show_online: (self.show_online
+                || initial.is_some_and(|p| p.terms.show_online == Some(true)))
+            .then_some(self.show_online),
             timing,
         };
         terms.valid().then_some(SavePromotion {
@@ -610,6 +615,9 @@ impl Root {
                     promotion.used_count,
                     terms.usage_limit.map_or("∞".into(), |v| v.to_string())
                 ))
+                .when(terms.show_online == Some(true), |card| {
+                    card.child(self.t(Key::PromoOnlineConfigured))
+                })
                 .when(!terms.active, |card| card.child(self.t(Key::PromoInactive)))
                 .when_some(terms.timing.as_ref(), |card, timing| {
                     card.child(i18n::promotion_timing_label(
@@ -864,6 +872,19 @@ impl Root {
                 |editor| editor.active = !editor.active,
                 cx,
             ))
+            .child(self.promo_toggle(
+                "promo-show-online",
+                self.t(Key::PromoShowOnline),
+                editor.show_online,
+                |editor| editor.show_online = !editor.show_online,
+                cx,
+            ))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::PromoShowOnlineHelp)),
+            )
             .when(ready && !editor.stale, |view| {
                 view.child(self.marketing_button(
                     "save-promotion",

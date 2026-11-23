@@ -73,9 +73,11 @@ export function ServiceChoice({
           {selected && <CheckIcon width={16} height={16} strokeWidth={2.5} />}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block font-medium text-fg">{label ?? service.name}</span>
+          <span className="block font-medium text-fg wrap-anywhere">{label ?? service.name}</span>
           {service.description && (
-            <span className="mt-0.5 block text-sm text-muted">{service.description}</span>
+            <span className="mt-0.5 block text-sm text-muted wrap-anywhere">
+              {service.description}
+            </span>
           )}
           <span
             id={`${inputId}-meta`}

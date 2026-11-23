@@ -24,6 +24,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Cloud and Desktop group appointment outcomes by the promotion reviewed at booking, with the same filters and CSV export as the appointment report.
 
+- Publish dated service promotions as flash offers from Cloud Web and Desktop. Clients see published offers on the public profile and review the applicable discount before confirming a booking.
+
 - The Booksy recovery verifier checks trusted operational copy and bidirectional write receipts against the selected snapshot, encrypted backup, rehearsal date and full release migration ledger.
 - The isolated Booksy restore rehearsal verifies Web-to-Desktop and Desktop-to-Web appointment moves, live updates, retry idempotency and stale-version rejection while preserving appointment details, resource assignments and existing mutation receipts. [Migration protocol](docs/booksy-import-protocol.md#ensayar-la-separación-de-la-base-operativa)
 

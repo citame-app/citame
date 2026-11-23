@@ -363,6 +363,7 @@
   align-items: start;
 }
 .service-menu {
+  min-width: 0;
   border-top: 1px solid var(--border);
 }
 .service-menu li {
@@ -374,6 +375,9 @@
   justify-content: space-between;
   gap: 1.25rem;
   padding: 1.5rem 0;
+}
+.service-menu-row > :first-child {
+  overflow-wrap: anywhere;
 }
 .service-menu-name {
   font-weight: 650;

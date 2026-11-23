@@ -329,7 +329,7 @@ function SingleReviewStep() {
               .filter((s) => s.clientInstructions)
               .map((s) => (
                 <div key={s.id}>
-                  <h3 className="text-sm font-semibold">{s.name}</h3>
+                  <h3 className="text-sm font-semibold wrap-anywhere">{s.name}</h3>
                   <p className="whitespace-pre-wrap text-sm text-muted">{s.clientInstructions}</p>
                 </div>
               ))}
@@ -364,7 +364,11 @@ function SingleReviewStep() {
           <p className="text-sm text-muted">{t("services.price.promotionLater")}</p>
         )}
         {isClient && !finalPricePending && (
-          <BookingPromotionReview state={promotion} disabled={confirm.isPending || uncertain} />
+          <BookingPromotionReview
+            state={promotion}
+            services={selectedServices}
+            disabled={confirm.isPending || uncertain}
+          />
         )}
         {policy.isError && (
           <ErrorState error={policy.error} onRetry={() => void policy.refetch()} />

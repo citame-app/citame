@@ -46,7 +46,10 @@ function Harness({
       <button type="button" onClick={() => setChangedStart("2026-11-17T10:00:00Z")}>
         Change booking time
       </button>
-      <BookingPromotionReview state={state} />
+      <BookingPromotionReview
+        state={state}
+        services={[{ id, priceCents: 10000, currency: "EUR" }]}
+      />
       <output aria-label="Booking can confirm">{String(state.ready)}</output>
       <output aria-label="Reviewed booking hash">{state.payload?.reviewHash ?? "none"}</output>
     </>
@@ -54,7 +57,8 @@ function Harness({
 }
 test("an optional code requires a current server quote and explicitly shows the net price and saved conditions", async () => {
   const packets: unknown[] = [];
-  globalThis.fetch = mock(async (_input, init) => {
+  globalThis.fetch = mock(async (input, init) => {
+    if (String(input).endsWith("/flash-offers")) return Response.json({ offers: [] });
     packets.push(JSON.parse(String(init?.body)));
     return Response.json(quote);
   }) as unknown as typeof fetch;
@@ -79,11 +83,12 @@ test("an optional code requires a current server quote and explicitly shows the 
 });
 test("a quote arriving after the appointment selection changed cannot approve the new booking", async () => {
   let resolve!: (r: Response) => void;
-  globalThis.fetch = mock(
-    () =>
-      new Promise<Response>((r) => {
-        resolve = r;
-      }),
+  globalThis.fetch = mock((input) =>
+    String(input).endsWith("/flash-offers")
+      ? Promise.resolve(Response.json({ offers: [] }))
+      : new Promise<Response>((r) => {
+          resolve = r;
+        }),
   ) as unknown as typeof fetch;
   renderApp(<Harness />);
   fireEvent.change(screen.getByLabelText("Promotion code (optional)"), {
@@ -100,4 +105,36 @@ test("a quote arriving after the appointment selection changed cannot approve th
   );
   expect(screen.getByLabelText("Reviewed booking hash")).toHaveTextContent("none");
   expect(screen.getByLabelText("Booking can confirm")).toHaveTextContent("false");
+});
+
+test("selecting a public offer requests the booking quote immediately", async () => {
+  const packets: unknown[] = [];
+  globalThis.fetch = mock(async (input, init) => {
+    if (String(input).endsWith("/flash-offers")) {
+      return Response.json({
+        offers: [
+          {
+            id,
+            name: "Flash fixture",
+            code: "FLASH10",
+            kind: "percent",
+            value: 1000,
+            minimumSpendCents: 0,
+            maximumDiscountCents: null,
+            perClientLimit: 1,
+            endsAt: "2026-11-17T19:00:00Z",
+            allServices: false,
+            services: [{ id, name: "Fixture service" }],
+          },
+        ],
+      });
+    }
+    packets.push(JSON.parse(String(init?.body)));
+    return Response.json(quote);
+  }) as unknown as typeof fetch;
+  renderApp(<Harness />);
+  fireEvent.click(await screen.findByRole("button", { name: "Review offer Flash fixture" }));
+  expect(await screen.findByText("Save €10 · Booking total €90")).toBeVisible();
+  expect(screen.getByLabelText("Promotion code (optional)")).toHaveValue("FLASH10");
+  expect(packets).toEqual([{ ...selection, code: "FLASH10" }]);
 });

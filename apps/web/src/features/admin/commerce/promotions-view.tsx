@@ -1,6 +1,6 @@
 import { type Promotion, promotionInputSchema } from "@sob/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -91,6 +91,7 @@ export function PromotionsView() {
                     limit: p.usageLimit ?? t("promotions.unlimited"),
                   })}
                 </p>
+                {p.showOnline && <p className="text-sm">{t("promotions.onlineConfigured")}</p>}
                 {p.timing &&
                   promotionTimingConditions(p.timing, timeZone, locale).map((text) => (
                     <p key={text} className="text-sm text-muted">
@@ -158,6 +159,7 @@ function PromotionEditor({
 }) {
   const { t, timeZone, locale } = useI18n();
   const initial = useRef(initialProp).current;
+  const publicationHelpId = useId();
   const online = useOnline();
   const queries = useQueryClient();
   const initialForm = {
@@ -172,6 +174,7 @@ function PromotionEditor({
     start: localInput(initial?.startsAt ?? null, timeZone),
     end: localInput(initial?.endsAt ?? null, timeZone),
     active: initial?.active ?? true,
+    showOnline: initial?.showOnline ?? false,
     kinds:
       initial?.eligibleKinds ??
       (["service", "product", "custom"] as ("service" | "product" | "custom")[]),
@@ -214,6 +217,7 @@ function PromotionEditor({
       eligibleKinds: form.kinds,
       serviceIds: form.services,
       active: form.active,
+      ...(form.showOnline || initial?.showOnline ? { showOnline: form.showOnline } : {}),
       version: initial?.version ?? null,
       ...(form.timed
         ? {
@@ -480,6 +484,24 @@ function PromotionEditor({
           />
           {t("promotions.active")}
         </label>
+        <label className="flex min-h-11 items-center gap-3">
+          <input
+            type="checkbox"
+            className="size-6 shrink-0 accent-accent"
+            checked={form.showOnline}
+            aria-describedby={publicationHelpId}
+            aria-invalid={
+              invalid &&
+              !candidate?.success &&
+              candidate?.error.issues.some(({ path }) => path[0] === "showOnline")
+            }
+            onChange={(e) => setForm({ ...form, showOnline: e.target.checked })}
+          />
+          {t("promotions.showOnline")}
+        </label>
+        <p id={publicationHelpId} className="text-sm text-muted">
+          {t("promotions.showOnlineHelp")}
+        </p>
       </fieldset>
       {uncertain && <p role="alert">{t("timing.uncertain")}</p>}
       {(invalid || save.isError) && <p role="alert">{t("loyalty.error")}</p>}
