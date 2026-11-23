@@ -183,9 +183,7 @@ impl Store {
                             .is_some_and(|draft| draft.lacked_fixed_terms(&row.draft))
                     })
                 {
-                    return Err(CoreError::Invalid(
-                        "Save the reviewed pricing before removing it".into(),
-                    ));
+                    return Err(CoreError::CombinationPricingNeedsReview);
                 }
                 let selection_changed =
                     current.is_none_or(|row| row.draft.service_ids != proposed.service_ids);

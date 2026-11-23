@@ -1110,7 +1110,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
             Some(&outdated.mutation_id),
             None,
         ),
-        Err(sob_core::error::CoreError::Invalid(_))
+        Err(sob_core::error::CoreError::CombinationPricingNeedsReview)
     ));
     assert_eq!(
         sync::sync_cycle(&mut store, &*device.transport)

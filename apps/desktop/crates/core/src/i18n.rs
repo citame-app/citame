@@ -732,6 +732,7 @@ keys! {
     CombinationVisibilityUnreviewed => ("Visibility pending review", "Visibilidad pendiente de revisar"),
     CombinationFixedProfessionals => ("Professionals for this combination", "Profesionales para esta combinación"),
     CombinationArchiveBeforeRemovingPrice => ("Archive the staff-only combination before using catalogue prices.", "Archiva la combinación interna antes de usar precios del catálogo."),
+    CombinationSaveReviewedPricing => ("Save the reviewed prices before switching to catalogue prices.", "Guarda los precios revisados antes de usar los precios del catálogo."),
     CombinationPriceUnreviewed => ("Price pending review", "Precio pendiente de revisar"),
     CombinationLive => ("Available online", "Disponible para reserva online"),
     CombinationArchived => ("Archived", "Archivada"),
