@@ -32,6 +32,6 @@
     "@types/bun": "1.4.5",
     "@types/nodemailer": "8.0.2",
     "@types/smtp-server": "3.5.13",
-    "smtp-server": "3.21.6"
+    "smtp-server": "3.21.7"
   }
 }
