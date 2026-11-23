@@ -1,7 +1,7 @@
 import type { CalendarAppointment, Slot, UserRole } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
@@ -113,6 +113,7 @@ function DrawerBody({
   } | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [moving, setMoving] = useState(false);
+  const moveHeadingId = useId();
   const [days, setDays] = useState(PAGE);
   const [date, setDate] = useState<string | undefined>();
   const [slot, setSlot] = useState<Slot | undefined>();
@@ -471,7 +472,10 @@ function DrawerBody({
       />
 
       {actions.reschedule && (
-        <section aria-labelledby="drawer-move" className="border-t border-line pt-5">
+        <section
+          aria-labelledby={moving && reschedulable ? moveHeadingId : undefined}
+          className="border-t border-line pt-5"
+        >
           {!moving ? (
             <Button variant="secondary" onClick={() => setMoving(true)}>
               {t("drawer.reschedule.open")}
@@ -481,7 +485,7 @@ function DrawerBody({
           ) : (
             <div className="space-y-4">
               <div>
-                <h3 id="drawer-move" className="text-heading">
+                <h3 id={moveHeadingId} className="text-heading">
                   {t("drawer.reschedule.title")}
                 </h3>
                 <p className="text-sm text-muted">{t("drawer.reschedule.hint")}</p>
