@@ -222,6 +222,11 @@ combination, choose it in **Calendar → New appointment**. A fixed combination 
 allocated price through checkout and appears only on the booking surfaces allowed by its
 visibility.
 
+Desktop can select the same options in **Calendar → New appointment** after syncing its
+scoped booking catalogue. Online and queued offline bookings send the same reviewed price
+and professional allocation. If the offer changes before delivery, the proposal remains
+in **Sync conflicts** for review.
+
 #### Conciliación de una candidata ya cargada
 
 El informe vuelve a comprobar la copia persistente dentro de una transacción de solo lectura. Coteja la identidad y los horarios de cada línea, los grupos, los importes congelados y sus indicadores, los comentarios, las franjas de capacidad reservadas, las asignaciones de recursos, los bloqueos y la lista de espera con el snapshot seleccionado. También comprueba los SHA-256 del archivo y coteja los identificadores, recuentos y huellas de los perfiles, el catálogo, las asignaciones profesionales y los horarios materializados. Verifica que la candidata no tenga recibos, recordatorios, ofertas ni lista de espera activa. Solo devuelve recuentos y estados de evidencias.

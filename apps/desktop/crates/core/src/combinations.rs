@@ -21,6 +21,14 @@ pub struct FixedCombinationTerms {
     pub online_booking: Option<bool>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedCombinationReview {
+    pub id: String,
+    pub version: u64,
+    pub review_hash: String,
+}
+
 impl FixedCombinationTerms {
     pub fn can_remove(&self, active: bool) -> bool {
         !active || self.online_booking != Some(false)
@@ -235,6 +243,54 @@ pub struct ManagedCombination {
 }
 
 impl ManagedCombination {
+    pub fn booking_review(&self, services: &[Service]) -> Result<FixedCombinationReview> {
+        let changed = || CoreError::CombinationBookingChanged;
+        let terms = self.draft.fixed_terms.as_ref().ok_or_else(changed)?;
+        let online = terms.online_booking.ok_or_else(changed)?;
+        if !self.bookable
+            || !self.draft.active
+            || terms.prices_cents.len() != self.draft.service_ids.len()
+        {
+            return Err(changed());
+        }
+        let lines = self
+            .draft
+            .service_ids
+            .iter()
+            .zip(&terms.prices_cents)
+            .map(|(id, cents)| {
+                let service = services
+                    .iter()
+                    .find(|service| {
+                        service.id == *id && service.active && service.currency == "EUR"
+                    })
+                    .ok_or_else(changed)?;
+                let quote = service
+                    .quote_hash
+                    .as_deref()
+                    .filter(|quote| {
+                        quote.len() == 64 && quote.bytes().all(|byte| byte.is_ascii_hexdigit())
+                    })
+                    .ok_or_else(changed)?;
+                Ok((id, quote, cents))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // Match resolveFixedCombination's JSON tuple, including the order of staff and treatments.
+        let input = serde_json::to_vec(&(&self.id, self.version, online, &terms.staff_ids, lines))?;
+        Ok(FixedCombinationReview {
+            id: self.id.clone(),
+            version: self.version,
+            review_hash: crate::booking::price_review_hash(&input),
+        })
+    }
+
+    pub fn permits_staff(&self, staff_id: &str) -> bool {
+        self.draft
+            .fixed_terms
+            .as_ref()
+            .is_some_and(|terms| terms.staff_ids.iter().any(|id| id == staff_id))
+    }
+
     pub fn can_review_rejected_version(
         &self,
         version: u64,

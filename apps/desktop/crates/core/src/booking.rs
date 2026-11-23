@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
+use crate::combinations::FixedCombinationReview;
 use crate::error::{CoreError, Result};
 use crate::intake::IntakeResponse;
 use crate::intake::IntakeSelection;
@@ -31,6 +32,8 @@ struct BookingFields {
     staff_id: String,
     service_ids: Vec<String>,
     service_quotes: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    combination: Option<FixedCombinationReview>,
     starts_at: DateTime<Utc>,
     #[serde(flatten)]
     client: BookingClient,
@@ -223,31 +226,36 @@ impl PeakPriceSnapshot {
                 canonical,
                 quotes,
             ))?;
-            const HEX: &[u8; 16] = b"0123456789abcdef";
-            let token = Sha256::digest(encoded)
-                .iter()
-                .flat_map(|byte| {
-                    [
-                        char::from(HEX[usize::from(byte >> 4)]),
-                        char::from(HEX[usize::from(byte & 15)]),
-                    ]
-                })
-                .collect();
-            Some(token)
+            Some(price_review_hash(&encoded))
         } else {
             None
         };
         Ok(PeakPriceQuote {
+            combination: None,
             review,
             services: lines,
         })
     }
 }
 
+pub(crate) fn price_review_hash(encoded: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    Sha256::digest(encoded)
+        .iter()
+        .flat_map(|byte| {
+            [
+                char::from(HEX[usize::from(byte >> 4)]),
+                char::from(HEX[usize::from(byte & 15)]),
+            ]
+        })
+        .collect()
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PeakPriceQuote {
     pub review: Option<String>,
+    pub combination: Option<FixedCombinationReview>,
     pub services: Vec<PeakPriceLine>,
 }
 
@@ -367,6 +375,15 @@ impl BookingTerms {
         new: NewAppointment,
         inline: Option<(&str, Option<&str>)>,
     ) -> Result<Self> {
+        Self::prepare_reviewed(store, new, inline, None)
+    }
+
+    pub fn prepare_reviewed(
+        store: &Store,
+        new: NewAppointment,
+        inline: Option<(&str, Option<&str>)>,
+        combination: Option<&FixedCombinationReview>,
+    ) -> Result<Self> {
         let generation = store.verified_reviewed_generation()?;
         let client = match inline {
             Some((name, phone)) => {
@@ -387,18 +404,19 @@ impl BookingTerms {
                 }
             }
         };
-        let (service_quotes, reviewed_services) = reviewed_service_terms(store, &new)?;
+        let reviewed = reviewed_service_terms(store, &new, combination)?;
         if store.verified_reviewed_generation()? != generation {
             return Err(CoreError::CalendarGenerationChanged);
         }
         Ok(Self {
             generation,
             id: uuid::Uuid::now_v7().to_string(),
-            reviewed_services,
+            reviewed_services: reviewed.services,
             fields: BookingFields {
                 staff_id: new.staff_id,
                 service_ids: new.service_ids,
-                service_quotes,
+                service_quotes: reviewed.quotes,
+                combination: combination.cloned(),
                 starts_at: new.starts_at,
                 client,
                 notes: new.notes,
@@ -409,6 +427,29 @@ impl BookingTerms {
 
     pub fn service_ids(&self) -> &[String] {
         &self.fields.service_ids
+    }
+
+    pub fn combination(&self) -> Option<&FixedCombinationReview> {
+        self.fields.combination.as_ref()
+    }
+
+    pub fn matches_price_quote(&self, quote: &PeakPriceQuote) -> bool {
+        if self.combination() != quote.combination.as_ref() {
+            return false;
+        }
+        self.combination().is_none()
+            || (quote.review.is_none()
+                && self.reviewed_services.len() == quote.services.len()
+                && self
+                    .reviewed_services
+                    .iter()
+                    .zip(&quote.services)
+                    .all(|(service, line)| {
+                        service.service_id.as_deref() == Some(line.service_id.as_str())
+                            && line.currency == service.currency
+                            && line.surcharge_cents == 0
+                            && line.price_cents == service.price_cents
+                    }))
     }
 
     pub fn staff_id(&self) -> &str {

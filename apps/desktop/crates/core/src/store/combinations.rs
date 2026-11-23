@@ -7,6 +7,7 @@ use crate::combinations::{
 use std::collections::BTreeSet;
 
 const LEGACY_CACHE: &str = "service_combinations";
+const BOOKING_CACHE: &str = "booking_combination_catalogue";
 
 impl Store {
     pub(crate) fn reserve_combination_payloads(
@@ -50,6 +51,37 @@ impl Store {
         combinations: &[ManagedCombination],
         generation: &str,
     ) -> Result<()> {
+        conn.execute("DELETE FROM meta WHERE key = ?1", [LEGACY_CACHE])?;
+        Self::cache_combination_view_at(conn, CACHE, combinations, generation)
+    }
+
+    pub(super) fn cache_booking_combinations_at(
+        conn: &Connection,
+        combinations: &[ManagedCombination],
+        generation: &str,
+    ) -> Result<()> {
+        if combinations.iter().any(|row| {
+            !row.bookable
+                || !row.draft.active
+                || row
+                    .draft
+                    .fixed_terms
+                    .as_ref()
+                    .is_none_or(|fixed| fixed.online_booking.is_none())
+        }) {
+            return Err(CoreError::Protocol(
+                "Invalid booking combination catalogue".into(),
+            ));
+        }
+        Self::cache_combination_view_at(conn, BOOKING_CACHE, combinations, generation)
+    }
+
+    fn cache_combination_view_at(
+        conn: &Connection,
+        key: &str,
+        combinations: &[ManagedCombination],
+        generation: &str,
+    ) -> Result<()> {
         let ids: BTreeSet<_> = combinations.iter().map(|row| &row.id).collect();
         if combinations.len() > LIMIT
             || ids.len() != combinations.len()
@@ -65,8 +97,7 @@ impl Store {
             generation: generation.into(),
             combinations: combinations.to_vec(),
         };
-        conn.execute("DELETE FROM meta WHERE key = ?1", [LEGACY_CACHE])?;
-        Self::set_meta_at(conn, CACHE, &serde_json::to_string(&view)?)
+        Self::set_meta_at(conn, key, &serde_json::to_string(&view)?)
     }
 
     pub(crate) fn needs_combination_snapshot(&self) -> Result<bool> {
@@ -82,9 +113,26 @@ impl Store {
     }
 
     pub fn managed_combinations(&self) -> Result<Option<CombinationCatalogue>> {
+        self.combination_view(CACHE)
+    }
+
+    pub(crate) fn needs_booking_combination_snapshot(&self) -> Result<bool> {
+        Ok(self.get_meta(BOOKING_CACHE)?.is_none())
+    }
+
+    pub(super) fn forget_booking_combinations_at(conn: &Connection) -> Result<()> {
+        conn.execute("DELETE FROM meta WHERE key = ?1", [BOOKING_CACHE])?;
+        Ok(())
+    }
+
+    pub fn booking_combinations(&self) -> Result<Option<CombinationCatalogue>> {
+        self.combination_view(BOOKING_CACHE)
+    }
+
+    fn combination_view(&self, key: &str) -> Result<Option<CombinationCatalogue>> {
         let generation = self.verified_reviewed_generation()?;
         Ok(self
-            .get_meta(CACHE)?
+            .get_meta(key)?
             .map(|raw| serde_json::from_str::<CombinationCatalogue>(&raw))
             .transpose()?
             .filter(|view| view.generation == generation))

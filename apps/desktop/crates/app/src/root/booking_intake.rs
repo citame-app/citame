@@ -216,6 +216,7 @@ impl Root {
 
     pub(super) fn start_booking_intake(&mut self, terms: BookingTerms, cx: &mut Context<Self>) {
         let waiver_label = self.t(Key::WaitlistWaiverReason);
+        let requires_explicit_confirmation = terms.combination().is_some();
         let service_summary = terms
             .services()
             .iter()
@@ -238,7 +239,7 @@ impl Root {
             forms: Vec::new(),
             review_hash: None,
             peak_price: None,
-            requires_explicit_confirmation: false,
+            requires_explicit_confirmation,
             submitted: None,
             series: None,
             can_waive: false,
@@ -311,6 +312,15 @@ impl Root {
                 review.busy = false;
                 match result {
                     Ok((requirements, can_waive, peak_price)) => {
+                        if peak_price
+                            .as_ref()
+                            .is_some_and(|quote| !review.terms.matches_price_quote(quote))
+                        {
+                            form.error = Some(Key::CombinationBookingChanged);
+                            root.svc.wake(Wake::Manual);
+                            cx.notify();
+                            return;
+                        }
                         let Some(generation) = requirements.desktop_generation.clone() else {
                             form.error = Some(Key::BookingIntakeUnavailable);
                             cx.notify();

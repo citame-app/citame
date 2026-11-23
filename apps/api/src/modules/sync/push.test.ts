@@ -3,10 +3,12 @@ import {
   adminServiceSchema,
   desktopSalonSettingsSchema,
   listAdminServicesResponseSchema,
+  peakPriceQuoteSchema,
   serviceSchema,
 } from "@sob/contracts";
 import {
   appointment,
+  appointmentService,
   clientProfile,
   salonSettings,
   service,
@@ -537,6 +539,80 @@ test("native fixed-price combinations preserve private visibility and reviewed a
     status: "applied",
   });
   expect((await catalogue(owner)).combinations?.[0]).not.toHaveProperty("fixedTerms");
+});
+
+test("offline combo bookings use the exact reviewed allocation and the operator's calendar scope", async () => {
+  await t.db.update(service).set({ currency: "EUR" });
+  const id = uuid();
+  const serviceIds = [f.haircutId, f.colorId];
+  const fixedTerms = { pricesCents: [1790, 1210], staffIds: [f.beaId], onlineBooking: false };
+  const fields = { id, name: "Team combination", description: null, serviceIds, active: true };
+  const cursor = (await pull(t, bea, { bookingCombinations: "full" })).headSeq;
+  const save = (terms: typeof fixedTerms, version?: number) => {
+    const payload = { ...fields, fixedTerms: terms };
+    return version
+      ? mutation("combination.update", { ...payload, version })
+      : mutation("combination.create", payload);
+  };
+  expect((await push(t, owner, [save(fixedTerms)])).body.results[0]).toMatchObject({
+    status: "applied",
+  });
+  expect(await pull(t, bea, { since: cursor, bookingCombinations: "delta" })).toMatchObject({
+    bookingCombinationAccess: true,
+    bookingCombinations: [{ ...fields, fixedTerms, version: 1 }],
+  });
+  expect(await pull(t, ana, { bookingCombinations: "full" })).toMatchObject({
+    bookingCombinationAccess: true,
+    bookingCombinations: [],
+  });
+  const ownerView = await pull(t, owner, { bookingCombinations: "full" });
+  expect(ownerView.bookingCombinations).toMatchObject([{ id }]);
+  expect(
+    await pull(t, owner, { since: ownerView.headSeq, bookingCombinations: "delta" }),
+  ).not.toHaveProperty("bookingCombinations");
+  const query = new URLSearchParams({
+    serviceIds: serviceIds.join(","),
+    startsAt: MONDAY_0900,
+    combinationId: id,
+  });
+  const quote = peakPriceQuoteSchema.parse(
+    await (
+      await json(t.app, `/appointments/peak-price?${query}`, "GET", undefined, bea.cookie)
+    ).json(),
+  );
+  expect(quote.combination).toMatchObject({ id, version: 1, reviewHash: expect.any(String) });
+  const appointmentId = uuid();
+  const request = {
+    id: appointmentId,
+    staffId: f.beaId,
+    serviceIds,
+    combination: quote.combination,
+    startsAt: MONDAY_0900,
+    clientId: f.clientId,
+  };
+  const book = mutation("appointment.create", request);
+  expect((await push(t, ana, [book])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "forbidden",
+  });
+  expect((await push(t, bea, [{ ...book, mutationId: mid() }])).body.results[0]).toMatchObject({
+    status: "applied",
+  });
+  const lines = await t.db
+    .select()
+    .from(appointmentService)
+    .where(eq(appointmentService.appointmentId, appointmentId))
+    .orderBy(appointmentService.position);
+  expect(lines.map(({ priceCents }) => priceCents)).toEqual([1790, 1210]);
+  expect(
+    (await push(t, owner, [save({ ...fixedTerms, pricesCents: [2500, 2000] }, 1)])).body.results[0],
+  ).toMatchObject({ status: "applied" });
+  const stale = mutation("appointment.create", { ...request, id: uuid(), startsAt: MONDAY_1400 });
+  expect((await push(t, bea, [stale])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  expect(lines.map(({ priceCents }) => priceCents)).toEqual([1790, 1210]);
 });
 
 test("native resource requirements are versioned, validated and replay safely", async () => {

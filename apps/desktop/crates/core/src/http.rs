@@ -2122,10 +2122,14 @@ impl HttpTransport {
         terms: &BookingTerms,
     ) -> Result<crate::booking::PeakPriceQuote, TransportError> {
         let services = terms.service_ids().join(",");
-        let query = url::form_urlencoded::Serializer::new(String::new())
+        let mut query = url::form_urlencoded::Serializer::new(String::new());
+        query
             .append_pair("serviceIds", &services)
-            .append_pair("startsAt", &terms.starts_at().to_rfc3339())
-            .finish();
+            .append_pair("startsAt", &terms.starts_at().to_rfc3339());
+        if let Some(combination) = terms.combination() {
+            query.append_pair("combinationId", &combination.id);
+        }
+        let query = query.finish();
         let response = self.get(
             &self.agent,
             &format!("/appointments/peak-price?{query}"),
@@ -2499,10 +2503,11 @@ impl HttpTransport {
             .map(|snapshots| {
                 let mode = |full| if full { "full" } else { "delta" };
                 format!(
-                    "&resourcePools={}&combinations={}&peakPrices={}&fixedCombinationTerms=1",
+                    "&resourcePools={}&combinations={}&peakPrices={}&fixedCombinationTerms=1&bookingCombinations={}",
                     mode(snapshots.full_resource_pools),
                     mode(snapshots.full_combinations),
-                    mode(snapshots.full_peak_prices)
+                    mode(snapshots.full_peak_prices),
+                    mode(snapshots.full_booking_combinations)
                 )
             })
             .unwrap_or_default();

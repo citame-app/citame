@@ -47,6 +47,7 @@ pub enum TransportError {
 pub struct CatalogueSnapshots {
     pub full_resource_pools: bool,
     pub full_combinations: bool,
+    pub full_booking_combinations: bool,
     pub full_peak_prices: bool,
 }
 
@@ -246,6 +247,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             CatalogueSnapshots {
                 full_resource_pools: store.needs_resource_pool_snapshot()?,
                 full_combinations: store.needs_combination_snapshot()?,
+                full_booking_combinations: store.needs_booking_combination_snapshot()?,
                 full_peak_prices: store.peak_price_snapshot()?.is_none(),
             },
         );

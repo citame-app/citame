@@ -46,6 +46,7 @@ mod visit_group;
 use calendar_overview::CalendarMode;
 mod cash;
 mod checkout;
+mod combination_booking;
 mod combinations;
 mod connection;
 mod directory;
@@ -230,6 +231,7 @@ struct NewForm {
     staff_id: Option<String>,
     services: Vec<String>,
     selected_quotes: std::collections::BTreeMap<String, String>,
+    combination: Option<combination_booking::BookingCombination>,
     client_id: Option<String>,
     client_search: Entity<TextField>,
     _client_search_sub: Subscription,
@@ -387,6 +389,7 @@ pub struct Root {
     staff: Vec<Staff>,
     report_staff_options: Vec<Staff>,
     services: Vec<Service>,
+    booking_combinations: Vec<sob_core::combinations::ManagedCombination>,
     service_colors: HashMap<String, String>,
     focus: gpui::FocusHandle,
     overlay: Overlay,
@@ -479,6 +482,7 @@ impl Root {
             staff: vec![],
             report_staff_options: vec![],
             services: vec![],
+            booking_combinations: vec![],
             service_colors: HashMap::new(),
             focus: cx.focus_handle(),
             overlay: Overlay::None,
@@ -946,6 +950,11 @@ impl Root {
                     .is_none_or(|visible| visible.contains(id.as_str()))
         });
         let catalogue = store.services().unwrap_or_default();
+        self.booking_combinations = store
+            .booking_combinations()
+            .ok()
+            .flatten()
+            .map_or_else(Vec::new, |view| view.combinations);
         self.service_colors = catalogue
             .iter()
             .filter_map(|service| {
@@ -1132,6 +1141,7 @@ impl Root {
                 .map(str::to_owned),
             services: vec![],
             selected_quotes: Default::default(),
+            combination: None,
             client_id: None,
             client_search,
             _client_search_sub: client_search_sub,
@@ -1154,10 +1164,19 @@ impl Root {
 
     /// Choosing a staff member drops selected services they do not perform.
     fn pick_new_staff(&mut self, id: String, cx: &mut Context<Self>) {
-        let performed = ops::performed_services(&self.svc.store, &id).unwrap_or_default();
         if let Overlay::New(f) = &mut self.overlay {
-            f.services.retain(|s| performed.contains(s));
-            f.selected_quotes.retain(|id, _| performed.contains(id));
+            if let Some(selection) = &f.combination {
+                if !selection.offer.permits_staff(&id) {
+                    return;
+                }
+                if f.staff_id.as_deref() != Some(id.as_str()) {
+                    f.selected_end = None;
+                }
+            } else {
+                let performed = ops::performed_services(&self.svc.store, &id).unwrap_or_default();
+                f.services.retain(|s| performed.contains(s));
+                f.selected_quotes.retain(|id, _| performed.contains(id));
+            }
             f.staff_id = Some(id);
             f.service_scroll.set_offset(gpui::point(px(0.), px(0.)));
         }
@@ -1243,6 +1262,9 @@ impl Root {
         }
         let (services, chosen) = (form.services.clone(), form.client_id.clone());
         let has_client = chosen.is_some();
+        let combination = form.combination.as_ref().map(|selection| &selection.review);
+        let inline =
+            (!has_client).then_some((name.as_str(), (!phone.is_empty()).then_some(phone.as_str())));
         let booking = NewAppointment {
             staff_id,
             service_ids: services,
@@ -1252,9 +1274,12 @@ impl Root {
             override_notice: form.recurrence.is_some() && form.series_override,
         };
         if self.status.connectivity == Connectivity::Online && self.svc.transport().is_some() {
-            let inline = (!has_client)
-                .then_some((name.as_str(), (!phone.is_empty()).then_some(phone.as_str())));
-            match sob_core::booking::BookingTerms::prepare(&self.svc.store, booking, inline) {
+            match sob_core::booking::BookingTerms::prepare_reviewed(
+                &self.svc.store,
+                booking,
+                inline,
+                combination,
+            ) {
                 Ok(terms)
                     if terms.service_ids().iter().all(|id| {
                         form.selected_quotes
@@ -1273,7 +1298,9 @@ impl Root {
             }
             return;
         }
-        let result = if has_client {
+        let result = if let Some(combination) = combination {
+            ops::create_combination_appointment(&mut self.svc.store, booking, inline, combination)
+        } else if has_client {
             ops::create_appointment_reviewed(&mut self.svc.store, booking, peak_review)
         } else {
             ops::create_appointment_for_new_client_reviewed(
@@ -1299,7 +1326,9 @@ impl Root {
     fn show_new_booking_error(&mut self, error: CoreError, cx: &mut Context<Self>) {
         if matches!(
             error,
-            CoreError::PendingClient | CoreError::CalendarGenerationChanged
+            CoreError::PendingClient
+                | CoreError::CalendarGenerationChanged
+                | CoreError::CombinationBookingChanged
         ) {
             self.svc.wake(Wake::Manual);
         }
@@ -1311,6 +1340,7 @@ impl Root {
                 CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
                 CoreError::IncompatibleServices => Key::ErrIncompatibleServices,
                 CoreError::PeakPriceReviewChanged => Key::PeakPriceChanged,
+                CoreError::CombinationBookingChanged => Key::CombinationBookingChanged,
                 CoreError::CatalogueEditPending => Key::ErrCatalogueEditPending,
                 _ => Key::ErrGeneric,
             });
@@ -2847,8 +2877,9 @@ impl Root {
             return self.render_booking_intake(f, review, viewport, cx);
         }
         const CLIENT_LIMIT: usize = 12;
-        let review_offline_price =
-            self.status.connectivity != Connectivity::Online && !f.services.is_empty();
+        let review_offline_price = f.combination.is_none()
+            && self.status.connectivity != Connectivity::Online
+            && !f.services.is_empty();
         let offline_price = if review_offline_price {
             salon_local_instant(self.tz, f.date, f.minutes)
                 .map(|start| ops::offline_peak_quote(&self.svc.store, start, &f.services))
@@ -2887,6 +2918,13 @@ impl Root {
             f.minutes % 60,
         );
         let staff = f.staff_id.as_deref().unwrap_or_default();
+        let combination_staff = f.combination.as_ref().map(|selection| {
+            self.staff
+                .iter()
+                .filter(|staff| selection.offer.permits_staff(&staff.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        });
         let search = f.client_search.read(cx).text().trim().to_lowercase();
         let selected_client = self
             .clients
@@ -2948,7 +2986,7 @@ impl Root {
                     .gap_2()
                     .child(self.label(Key::Staff))
                     .child(self.staff_chips(
-                        &self.staff,
+                        combination_staff.as_deref().unwrap_or(&self.staff),
                         "new-staff",
                         staff,
                         cx,
@@ -3022,9 +3060,10 @@ impl Root {
                     }),
             )
             .child(f.notes.clone())
-            .when(f.visit_parts.is_empty(), |fields| {
-                fields.child(self.render_recurrence(f.recurrence, f.series_override, cx))
-            })
+            .when(
+                f.visit_parts.is_empty() && f.combination.is_none(),
+                |fields| fields.child(self.render_recurrence(f.recurrence, f.series_override, cx)),
+            )
             .when(!f.visit_parts.is_empty(), |fields| {
                 fields.child(self.render_visit_parts(f, cx))
             });
@@ -3035,11 +3074,13 @@ impl Root {
                 .into_iter()
                 .collect();
         let search = f.service_search.read(cx).text().trim().to_lowercase();
+        let combination_picker = self.render_booking_combinations(f, &search, cx);
         let offered: Vec<_> = self
             .services
             .iter()
             .filter(|service| {
                 service.active
+                    && f.combination.is_none()
                     && performed.contains(&service.id)
                     && service.name.to_lowercase().contains(&search)
                     && !f
@@ -3063,68 +3104,74 @@ impl Root {
             .filter(|service| f.services.contains(&service.id))
             .map(|service| service.duration_minutes)
             .sum();
-        let service_picker = div()
-            .flex_1()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .p_3()
-            .rounded_lg()
-            .border_1()
-            .border_color(theme::line())
-            .bg(theme::bg())
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(self.t(Key::Services)),
-            )
-            .child(f.service_search.clone())
-            .when(
-                f.recurrence.is_none() && !f.services.is_empty() && f.visit_parts.len() < 7,
-                |list| {
-                    list.child(
-                        self.button(
-                            "visit-add-step",
-                            self.t(Key::VisitAddStep),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| root.add_visit_part(cx)),
-                        )
-                        .tab_index(0)
-                        .focus(|style| style.border_color(theme::text())),
-                    )
-                },
-            )
-            .when(offered.is_empty(), |section| {
-                section.child(
+        let service_picker =
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .rounded_lg()
+                .border_1()
+                .border_color(theme::line())
+                .bg(theme::bg())
+                .child(
                     div()
-                        .p_2()
-                        .text_sm()
-                        .text_color(theme::muted())
-                        .child(self.t(if search.is_empty() {
-                            Key::NoStaffServices
-                        } else {
-                            Key::NoMatchingServices
-                        })),
+                        .text_base()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(self.t(Key::Services)),
                 )
-            })
-            .child(
-                div()
-                    .id("new-service-list")
-                    .debug_selector(|| "new-service-list".to_string())
-                    .track_scroll(&f.service_scroll)
-                    .max_h((viewport.height * 0.53).clamp(px(144.), px(440.)))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .children(
-                        offered
-                            .into_iter()
-                            .map(|service| self.new_service_row(f, service, cx)),
-                    ),
-            );
+                .when(f.combination.is_none(), |list| {
+                    list.child(f.service_search.clone())
+                })
+                .when(
+                    f.combination.is_none()
+                        && f.recurrence.is_none()
+                        && !f.services.is_empty()
+                        && f.visit_parts.len() < 7,
+                    |list| {
+                        list.child(
+                            self.button(
+                                "visit-add-step",
+                                self.t(Key::VisitAddStep),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| root.add_visit_part(cx)),
+                            )
+                            .tab_index(0)
+                            .focus(|style| style.border_color(theme::text())),
+                        )
+                    },
+                )
+                .when(
+                    offered.is_empty() && combination_picker.is_none(),
+                    |section| {
+                        section.child(div().p_2().text_sm().text_color(theme::muted()).child(
+                            self.t(if search.is_empty() {
+                                Key::NoStaffServices
+                            } else {
+                                Key::NoMatchingServices
+                            }),
+                        ))
+                    },
+                )
+                .child(
+                    div()
+                        .id("new-service-list")
+                        .debug_selector(|| "new-service-list".to_string())
+                        .track_scroll(&f.service_scroll)
+                        .max_h((viewport.height * 0.53).clamp(px(144.), px(440.)))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .children(combination_picker)
+                        .children(
+                            offered
+                                .into_iter()
+                                .map(|service| self.new_service_row(f, service, cx)),
+                        ),
+                );
 
         let footer = div()
             .debug_selector(|| "new-appointment-footer".to_string())
@@ -5545,6 +5592,93 @@ mod tests {
             assert_eq!(
                 root.view.as_ref().unwrap().columns[1].items[0].client_name,
                 "Marta"
+            );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn the_offline_calendar_uses_combination_prices_and_assigned_professional(
+        cx: &mut TestAppContext,
+    ) {
+        use sob_core::combinations::{
+            CombinationCatalogue, CombinationDraft, FixedCombinationTerms, ManagedCombination,
+        };
+
+        let (_directory, win) = open(cx);
+        win.update(cx, |root, window, cx| {
+            let changes = root
+                .services
+                .iter()
+                .cloned()
+                .zip(1000..)
+                .map(|(mut service, seq)| {
+                    service.currency = "EUR".into();
+                    RawChange {
+                        seq,
+                        entity: "service".into(),
+                        id: service.id.clone(),
+                        op: "upsert".into(),
+                        data: Some(serde_json::to_value(service).unwrap()),
+                    }
+                })
+                .collect::<Vec<_>>();
+            root.svc.store.apply_page(&changes, 1005).unwrap();
+            let id = uuid::Uuid::now_v7().to_string();
+            let catalogue = CombinationCatalogue {
+                generation: root.svc.store.verified_reviewed_generation().unwrap(),
+                combinations: vec![ManagedCombination {
+                    id: id.clone(),
+                    version: 1,
+                    bookable: true,
+                    draft: CombinationDraft {
+                        name: "Centre manicure pair".into(),
+                        service_ids: vec![NAILS.into(), CUT.into()],
+                        active: true,
+                        fixed_terms: Some(FixedCombinationTerms {
+                            prices_cents: vec![850, 1440],
+                            staff_ids: vec![BEA.into()],
+                            online_booking: Some(false),
+                        }),
+                        ..Default::default()
+                    },
+                }],
+            };
+            root.svc
+                .store
+                .set_meta(
+                    "booking_combination_catalogue",
+                    &serde_json::to_string(&catalogue).unwrap(),
+                )
+                .unwrap();
+            root.status.connectivity = Connectivity::Offline;
+            root.reload(cx);
+            root.open_new(window, cx);
+            let Overlay::New(form) = &mut root.overlay else {
+                unreachable!()
+            };
+            form.staff_id = Some(ANA.into());
+            form.selected_end = Some(form.minutes + 15);
+            form.new_client
+                .update(cx, |field, cx| field.set_text("Combination client", cx));
+            root.pick_booking_combination(&id, cx);
+            let Overlay::New(form) = &root.overlay else {
+                unreachable!()
+            };
+            assert_eq!(form.staff_id.as_deref(), Some(BEA));
+            assert!(form.selected_end.is_none());
+            assert_eq!(form.services, [NAILS, CUT]);
+            root.book(cx);
+            let entries = root.svc.store.outbox(10).unwrap();
+            assert_eq!(outbox_kinds(root), ["client.create", "appointment.create"]);
+            assert_eq!(entries[1].payload["combination"]["id"], id);
+            assert_eq!(
+                entries[1].payload["_reviewedServices"][0]["priceCents"],
+                850
+            );
+            assert_eq!(
+                entries[1].payload["_reviewedServices"][1]["priceCents"],
+                1440
             );
         })
         .unwrap();

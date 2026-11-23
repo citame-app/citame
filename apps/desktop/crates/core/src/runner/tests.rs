@@ -76,6 +76,8 @@ impl Transport for Scripted {
             peak_price_access: None,
             resource_pools: None,
             combinations: None,
+            booking_combinations: None,
+            booking_combination_access: None,
             viewer_write_inventory: None,
             portfolio_uploads: None,
             viewer_read_inventory: None,

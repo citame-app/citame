@@ -196,6 +196,10 @@ pub struct Appointment {
     pub visit_group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub itinerary_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combination_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combination_staff_ids: Option<Vec<String>>,
     pub staff_id: String,
     pub client_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,6 +481,10 @@ pub struct PullResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub combinations: Option<Vec<crate::combinations::ManagedCombination>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booking_combinations: Option<Vec<crate::combinations::ManagedCombination>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booking_combination_access: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_prices: Option<crate::booking::PeakPriceSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_price_access: Option<bool>,
@@ -576,6 +584,7 @@ impl OutboxEntry {
         {
             fields.remove("_reviewedServices");
             fields.remove("_clientName");
+            fields.remove("_combinationStaffIds");
         } else if self.kind == crate::store::SERVICE_EDIT_KIND
             && let Some(fields) = payload.as_object_mut()
         {

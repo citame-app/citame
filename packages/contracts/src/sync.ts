@@ -4,7 +4,6 @@ import { calendarAppointmentSchema } from "./calendar";
 import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
-import { giftReplicaScopeSchema } from "./gift-cards";
 import {
   createProductSchema,
   productPhotoInputSchema,
@@ -540,6 +539,7 @@ export const syncPullQuerySchema = z.object({
   combinationCatalogue: z.literal("1").optional(),
   combinations: z.enum(["full", "delta"]).optional(),
   fixedCombinationTerms: z.literal("1").optional(),
+  bookingCombinations: z.enum(["full", "delta"]).optional(),
   peakPrices: z.enum(["full", "delta"]).optional(),
   peakPriceViews: z.literal("1").optional(),
   inventoryAccess: z.literal("1").optional(),
@@ -630,6 +630,7 @@ const upsertChangeSchema = z.discriminatedUnion("entity", [
     "appointment",
     appointmentSchema.extend({
       clientName: z.string().optional(),
+      combinationStaffIds: z.array(idSchema).min(1).max(100).optional(),
       ...calendarAppointmentSchema.pick({
         billingReviewReasons: true,
         externallySettled: true,
@@ -695,6 +696,8 @@ export const syncPullResponseSchema = z.object({
   catalogColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resourcePools: z.array(resourceSchema).max(50).optional(),
   combinations: z.array(serviceCombinationSchema).max(100).optional(),
+  bookingCombinations: z.array(serviceCombinationSchema).max(100).optional(),
+  bookingCombinationAccess: z.boolean().optional(),
   peakPrices: peakPriceSnapshotSchema.optional(),
   peakPriceAccess: z.boolean().optional(),
   changes: z.array(syncChangeSchema),
