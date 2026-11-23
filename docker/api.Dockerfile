@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.4-slim AS base
+FROM oven/bun:1.4.5-slim AS base
 WORKDIR /app
 
 # Prune the monorepo down to @sob/api and its workspace dependencies.
