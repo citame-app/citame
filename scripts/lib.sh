@@ -57,6 +57,23 @@ use_docker() { # use_docker <tool>
   esac
 }
 
+pg_container_tool() {
+  if [ "${PG_CONTAINER+x}" ]; then
+    [ -n "$PG_CONTAINER" ] || { echo "PG_CONTAINER is set but empty" >&2; return 1; }
+    docker exec -i "$PG_CONTAINER" "$@"
+  else
+    docker compose exec -T postgres "$@"
+  fi
+}
+
+list_restore_archive() {
+  if use_docker pg_restore; then
+    pg_container_tool pg_restore --list
+  else
+    pg_restore --list
+  fi
+}
+
 # pg_tool <tool> <url> [args...]   (stdin/stdout pass through)
 pg_tool() {
   local tool="$1" url="$2"; shift 2
@@ -73,12 +90,7 @@ pg_tool() {
     user="$(url_part "$url" user)" || return 1
     db="$(url_part "$url" db)" || return 1
     # Inside the container the server is reachable on its own socket; credentials are not needed.
-    if [ "${PG_CONTAINER+x}" ]; then
-      [ -n "$PG_CONTAINER" ] || { echo "PG_CONTAINER is set but empty" >&2; return 1; }
-      docker exec -i "$PG_CONTAINER" "$tool" -U "$user" -d "$db" "$@"
-    else
-      docker compose exec -T postgres "$tool" -U "$user" -d "$db" "$@"
-    fi
+    pg_container_tool "$tool" -U "$user" -d "$db" "$@"
   else
     connection="$(url_part "$url" native)" || return 1
     password="$(url_part "$url" password)" || return 1

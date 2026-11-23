@@ -3,7 +3,7 @@
 #
 #   scripts/restore.sh <dump-file> <target-database-url>
 #
-# It verifies the checksum first and checks the target's catalogs for existing user objects.
+# It checks the checksum and archive table of contents before connecting to the target.
 # Restore into a fresh database, validate it and then switch DATABASE_URL (see docs/operations.md).
 # FORCE=1 skips refusal for an occupied target.
 source "$(dirname "$0")/lib.sh"
@@ -16,6 +16,11 @@ if [ -f "$DUMP.sha256" ]; then
   [ "$(sha256_of "$DUMP")" = "$expected" ] || { echo "restore refused: checksum mismatch for $DUMP" >&2; exit 1; }
 else
   echo "restore refused: missing checksum file $DUMP.sha256" >&2
+  exit 1
+fi
+
+if ! list_restore_archive < "$DUMP" > /dev/null; then
+  echo "restore refused: could not read the PostgreSQL archive table of contents for $DUMP" >&2
   exit 1
 fi
 
