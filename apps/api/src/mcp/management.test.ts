@@ -48,7 +48,8 @@ const block = {
 test("the personal booking grant cannot create or cancel centre appointments", async () => {
   const owner = await actor(t, "owner", "owner@example.com");
   const personal = (await tokenFor(t, owner, "mcp:read mcp:book")).tokens.access_token;
-  const manager = (await tokenFor(t, owner, "operations:read schedule:write")).tokens.access_token;
+  const { clientId, tokens } = await tokenFor(t, owner, "operations:read schedule:write");
+  const manager = tokens.access_token;
   const input = {
     clientId: f.clientId,
     serviceIds: [f.haircutId],
@@ -90,6 +91,25 @@ test("the personal booking grant cannot create or cancel centre appointments", a
     version,
   });
   expect(cancelled.data?.appointment?.status).toBe("cancelled");
+
+  const attempts = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "mcp.write_requested"));
+  expect(attempts.map(({ metadata }) => metadata.tool).sort()).toEqual([
+    "cancel_appointment",
+    "cancel_appointment",
+    "cancel_appointment",
+    "create_appointment",
+  ]);
+  for (const attempt of attempts) {
+    expect(attempt.actorUserId).toBe(owner.userId);
+    expect(attempt.metadata).toEqual({
+      tool: expect.any(String),
+      oauthClientId: clientId,
+      scope: "schedule:write",
+    });
+  }
 });
 
 test("the Booksy consultation copy refuses MCP mutations even with a valid management token", async () => {

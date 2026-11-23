@@ -3,7 +3,6 @@ import * as C from "@sob/contracts";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppDeps } from "../app";
-import { recordAudit } from "../audit";
 import type { AppEnv, Principal } from "../auth/principal";
 import { DomainError } from "../errors";
 import { parseOrThrow, respondError } from "../http";
@@ -26,6 +25,7 @@ import { waitlistAdminRoutes } from "../modules/waitlist/routes";
 import { entryRow, entryView } from "../modules/waitlist/service";
 import { notificationAdminRoutes } from "../notifications/routes";
 import { whatsappAdminRoutes } from "../notifications/whatsapp/routes";
+import { recordMcpWriteRequested } from "./audit";
 import { errorResult, toolFailure } from "./errors";
 import type { ToolContext } from "./tools";
 
@@ -290,18 +290,7 @@ export function registerManagementTools(
           for (const [key, value] of Object.entries(query ?? {})) {
             if (value !== undefined) url.searchParams.set(key, String(value));
           }
-          if (!readOnly) {
-            await recordAudit(ctx.db, {
-              actorUserId: ctx.principal.userId,
-              action: "mcp.write_requested",
-              entity: "mcp_tool",
-              metadata: {
-                tool: name,
-                oauthClientId: ctx.via.clientId,
-                scope: gate.scope,
-              },
-            });
-          }
+          if (!readOnly) await recordMcpWriteRequested(ctx, name, gate.scope);
           const response = await router.request(
             url,
             {

@@ -52,6 +52,7 @@ import { previewPeakSlot } from "../modules/peak-prices/service";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
 import { bookingOutcome } from "../observability/booking";
+import { recordMcpWriteRequested } from "./audit";
 import { errorResult, toolFailure } from "./errors";
 
 export interface ToolContext {
@@ -106,6 +107,7 @@ function guarded<Args, Out extends Record<string, unknown>>(
       });
     }
     try {
+      if (required === "schedule:write") await recordMcpWriteRequested(ctx, tool, required);
       return ok(await body(args));
     } catch (error) {
       return errorResult(toolFailure(error));
