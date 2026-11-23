@@ -120,7 +120,7 @@ impl Store {
     pub(crate) fn needs_booking_combination_snapshot(&self) -> Result<bool> {
         Ok(self.get_meta(BOOKING_CACHE)?.is_none()
             || self.get_meta(BOOKED_TERMS_GENERATION)?.as_deref()
-                != Some(self.verified_reviewed_generation()?.as_str()))
+                != Some(self.replica_generation()?.as_str()))
     }
 
     pub(super) fn forget_booking_combinations_at(conn: &Connection) -> Result<()> {
