@@ -194,13 +194,13 @@ test("test-email quota counts SMTP claims and permits replays after exhaustion",
     await t.db.execute(sql`drop function fail_test_email_claim() cascade`);
   }
   expect(messages).toHaveLength(2);
-  expect((await send(1)).status).toBe(200);
-  expect(messages).toHaveLength(3);
 
   const secondDraft = `${root}/${await createDraft(owner.cookie)}/test-email`;
-  const limited = await send(1, crypto.randomUUID(), secondDraft);
-  expect(limited.status).toBe(429);
-  expect(limited.headers.get("Retry-After")).not.toBeNull();
+  const competing = await Promise.all([send(1), send(1, crypto.randomUUID(), secondDraft)]);
+  expect(competing.map(({ status }) => status).sort()).toEqual([200, 429]);
+  const limited = competing.find(({ status }) => status === 429);
+  expect(limited?.headers.get("Retry-After")).toBe("60");
+  expect(messages).toHaveLength(3);
 
   const replay = await send(1, first);
   expect(replay.status).toBe(200);

@@ -39,15 +39,19 @@ async function testAttempt(
   tx: Tx,
   scope: { actorUserId: string; entity: string; entityId: string },
   filter: { requestId: string } | { version: number },
-  now: number,
+  now?: number,
 ) {
   const metadata = sql`(case when jsonb_typeof(${auditLog.metadata}) = 'string'
       then (${auditLog.metadata} #>> '{}')::jsonb else ${auditLog.metadata} end)`;
+  const interruptedBefore =
+    now === undefined
+      ? sql`clock_timestamp() - interval '5 minutes'`
+      : sql`${new Date(now - 5 * 60_000)}`;
   const [attempt] = await tx
     .select({
       action: auditLog.action,
       metadata: auditLog.metadata,
-      interrupted: sql<boolean>`${auditLog.createdAt} < ${new Date(now - 5 * 60_000)}`,
+      interrupted: sql<boolean>`${auditLog.createdAt} < ${interruptedBefore}`,
     })
     .from(auditLog)
     .where(
@@ -77,7 +81,7 @@ async function testAttempt(
 }
 
 export async function requestCampaignTestEmail(
-  { db, config, disableEmailDeliveryTest, rateLimitNow = Date.now }: AppDeps,
+  { db, config, disableEmailDeliveryTest, rateLimitNow }: AppDeps,
   principal: Principal,
   id: string,
   input: CampaignTestEmail,
@@ -103,7 +107,7 @@ export async function requestCampaignTestEmail(
     if (draft.status !== "draft" || draft.channel === "sms" || !draft.subject || !draft.emailBody)
       throw new DomainError("invalid_state", "Save an email draft with a subject and message");
 
-    const checkedAt = rateLimitNow();
+    const checkedAt = rateLimitNow?.();
     const repeated = await testAttempt(tx, audit, { requestId: input.requestId }, checkedAt);
     if (repeated) {
       if (repeated.version !== input.version)
@@ -123,7 +127,13 @@ export async function requestCampaignTestEmail(
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${`marketing-campaign-test:${principal.userId}`}, 0))`,
     );
-    const now = rateLimitNow();
+    const now =
+      rateLimitNow?.() ??
+      (
+        await tx.execute<{ now: number }>(
+          sql`select (extract(epoch from clock_timestamp()) * 1000)::float8 as now`,
+        )
+      )[0]!.now;
     const windowStart = Math.floor(now / 60_000) * 60_000;
     const windowEnd = windowStart + 60_000;
     const claims = await tx
@@ -176,7 +186,7 @@ export async function requestCampaignTestEmail(
   await recordAudit(db, {
     ...audit,
     action: actionFor[status],
-    createdAt: new Date(rateLimitNow()),
+    createdAt: rateLimitNow ? new Date(rateLimitNow()) : undefined,
   });
   return { status, requestId: input.requestId };
 }
