@@ -1,3 +1,4 @@
+import type { ResourceOccupancy } from "@sob/contracts";
 import {
   type Database,
   resourcePool,
@@ -5,7 +6,7 @@ import {
   serviceResource,
   waitlistOffer,
 } from "@sob/db";
-import { and, asc, eq, gt, inArray, isNull, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import {
@@ -144,6 +145,16 @@ function absolute(windows: Window[], start: number): ResourceWindow[] {
     quantity: w.quantity,
   }));
 }
+function occupiesRange(from: Date, to: Date, now: Date) {
+  return and(
+    eq(resourceReservation.active, true),
+    eq(resourceReservation.released, false),
+    lt(resourceReservation.startsAt, to),
+    gt(resourceReservation.endsAt, from),
+    or(isNotNull(resourceReservation.appointmentId), gt(waitlistOffer.expiresAt, now)),
+  );
+}
+
 async function occupied(
   db: Connection,
   ids: string[],
@@ -160,11 +171,7 @@ async function occupied(
     .where(
       and(
         inArray(resourceReservation.resourceId, ids),
-        eq(resourceReservation.active, true),
-        eq(resourceReservation.released, false),
-        lt(resourceReservation.startsAt, to),
-        gt(resourceReservation.endsAt, from),
-        or(sql`${resourceReservation.appointmentId} is not null`, gt(waitlistOffer.expiresAt, now)),
+        occupiesRange(from, to, now),
         excludeAppointmentId
           ? or(
               isNull(resourceReservation.appointmentId),
@@ -440,6 +447,88 @@ export async function calendarResources(db: Connection, appointmentIds: string[]
     );
   }
   return result;
+}
+
+export async function calendarResourceOccupancy(
+  db: Connection,
+  from: Date,
+  to: Date,
+  now: Date,
+  visibleAppointmentIds: ReadonlySet<string>,
+): Promise<ResourceOccupancy> {
+  const occupied = db
+    .select({
+      reservationId: resourceReservation.id,
+      resourceId: resourceReservation.resourceId,
+      appointmentId: resourceReservation.appointmentId,
+      startsAt: resourceReservation.startsAt,
+      endsAt: resourceReservation.endsAt,
+      holdExpiresAt: waitlistOffer.expiresAt,
+    })
+    .from(resourceReservation)
+    .leftJoin(waitlistOffer, eq(waitlistOffer.id, resourceReservation.offerId))
+    .where(occupiesRange(from, to, now))
+    .as("occupied_resources");
+  const rows = await db
+    .select({
+      id: resourcePool.id,
+      name: resourcePool.name,
+      kind: resourcePool.kind,
+      capacity: resourcePool.capacity,
+      active: resourcePool.active,
+      appointmentId: occupied.appointmentId,
+      startsAt: occupied.startsAt,
+      endsAt: occupied.endsAt,
+      holdExpiresAt: occupied.holdExpiresAt,
+    })
+    .from(resourcePool)
+    .leftJoin(occupied, eq(occupied.resourceId, resourcePool.id))
+    .where(or(eq(resourcePool.active, true), isNotNull(occupied.reservationId)))
+    .orderBy(
+      asc(resourcePool.name),
+      asc(resourcePool.id),
+      asc(occupied.startsAt),
+      asc(occupied.endsAt),
+      asc(occupied.appointmentId),
+      asc(occupied.holdExpiresAt),
+    );
+
+  type Column = ResourceOccupancy["pools"][number];
+  const groups = new Map<
+    string,
+    { column: Column; byWindow: Map<string, Column["windows"][number]> }
+  >();
+  for (const { id, name, kind, capacity, active, ...space } of rows) {
+    let group = groups.get(id);
+    if (!group) {
+      group = { column: { id, name, kind, capacity, active, windows: [] }, byWindow: new Map() };
+      groups.set(id, group);
+    }
+    if (!space.startsAt || !space.endsAt) continue;
+    const startsAt = space.startsAt.toISOString();
+    const endsAt = space.endsAt.toISOString();
+    const appointmentId =
+      space.appointmentId && visibleAppointmentIds.has(space.appointmentId)
+        ? space.appointmentId
+        : undefined;
+    const holdExpiresAt = space.holdExpiresAt?.toISOString();
+    const key = JSON.stringify([startsAt, endsAt, appointmentId, holdExpiresAt]);
+    const existing = group.byWindow.get(key);
+    if (existing) {
+      existing.quantity += 1;
+    } else {
+      const window = {
+        startsAt,
+        endsAt,
+        quantity: 1,
+        ...(appointmentId ? { appointmentId } : {}),
+        ...(holdExpiresAt ? { holdExpiresAt } : {}),
+      };
+      group.byWindow.set(key, window);
+      group.column.windows.push(window);
+    }
+  }
+  return { capturedAt: now.toISOString(), pools: [...groups.values()].map(({ column }) => column) };
 }
 
 /** Recolour future interchangeable units only; units currently in use keep their assignment. */

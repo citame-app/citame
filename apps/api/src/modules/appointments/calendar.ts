@@ -14,12 +14,40 @@ import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { workingWindows } from "../availability/windows";
 import { calendarProtections } from "../booking-protection/value";
-import { calendarResources } from "../resources/reservations";
+import { calendarResourceOccupancy, calendarResources } from "../resources/reservations";
 import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { calendarBadges } from "./context";
 import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
+
+type CalendarScope = {
+  staffIds?: string[];
+  includeBilling: boolean;
+  includeInactiveStaff?: boolean;
+};
+
+export async function getCalendarWithResourceOccupancy(
+  db: Database,
+  query: CalendarQuery,
+  scope: CalendarScope,
+  now: Date,
+): Promise<CalendarResponse> {
+  return db.transaction(
+    async (tx) => {
+      const calendar = await getCalendar(tx, query, scope);
+      const resourceOccupancy = await calendarResourceOccupancy(
+        tx,
+        new Date(query.from),
+        new Date(query.to),
+        now,
+        new Set(calendar.appointments.map(({ id }) => id)),
+      );
+      return { ...calendar, resourceOccupancy };
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
 
 /**
  * Everything a day/week calendar draws, in one round of queries: the columns (staff), the
@@ -31,7 +59,7 @@ import { loadSeriesReferences } from "./series-references";
 export async function getCalendar(
   db: Database | Tx,
   query: CalendarQuery,
-  scope: { staffIds?: string[]; includeBilling: boolean; includeInactiveStaff?: boolean },
+  scope: CalendarScope,
 ): Promise<CalendarResponse> {
   const settings = await getSalonSettings(db);
   const from = new Date(query.from);

@@ -37,6 +37,7 @@ import { shortcutFor } from "./keys";
 import { useCalendarLive } from "./live-provider";
 import {
   availableActions,
+  calendarViews,
   rangeFor,
   statusAppearance,
   type CalendarView as ViewName,
@@ -45,6 +46,7 @@ import { MiniCalendar } from "./mini-calendar";
 import { type NewAppointmentInitial, NewAppointmentSheet } from "./new-appointment";
 import { CalendarOverview } from "./overview";
 import { indexCalendar, personInitials, serviceHue } from "./presentation";
+import { ResourceCalendar } from "./resource-calendar";
 import { type CalendarSearch, shiftDate } from "./search";
 import { ShortcutsHelp } from "./shortcuts-help";
 import { CalendarTimeOff } from "./time-off";
@@ -90,13 +92,22 @@ export function CalendarView({
   const salon = useQuery(salonQuery);
   const allStaff = useQuery(adminStaffQuery);
   const selectedIds = useMemo(() => search.staff?.split(",") ?? [], [search.staff]);
-  const apiStaffIds = role === "owner" && selectedIds.length > 0 ? selectedIds : undefined;
+  const resourceMode = search.view === "resources";
+  const apiStaffIds =
+    role === "owner" && !resourceMode && selectedIds.length > 0 ? selectedIds : undefined;
+  const resourceOccupancy = resourceMode && role === "owner" ? "1" : undefined;
   const range = useMemo(
     () => rangeFor(search.view, search.date, timeZone),
     [search.view, search.date, timeZone],
   );
   const query = useQuery({
-    ...calendarQuery({ from: range.from, to: range.to, staffIds: apiStaffIds, accessScope }),
+    ...calendarQuery({
+      from: range.from,
+      to: range.to,
+      staffIds: apiStaffIds,
+      accessScope,
+      resourceOccupancy,
+    }),
     ...(live ? { refetchInterval: false } : {}),
   });
   const calendar = query.data;
@@ -106,6 +117,10 @@ export function CalendarView({
     if (calendar) setLastConsultation(Boolean(calendar.importSnapshot));
   }, [calendar]);
   const readOnly = providedReadOnly || consultation;
+  const views =
+    role === "owner" && !consultation
+      ? calendarViews
+      : calendarViews.filter((view) => view !== "resources");
   const { move, conflict, clearConflict } = useMoveAppointment();
   const [showCancelled, setShowCancelled] = useState(false);
   const [status, setStatus] = useState("all");
@@ -180,8 +195,8 @@ export function CalendarView({
   }, [calendar?.appointments, showCancelled, status, resource, deferredText, locale, staffIds]);
   const isDay = search.view === "day";
   const index = useMemo(
-    () => (isDay ? null : indexCalendar(appointments, timeZone)),
-    [isDay, appointments, timeZone],
+    () => (isDay || resourceMode ? null : indexCalendar(appointments, timeZone)),
+    [isDay, resourceMode, appointments, timeZone],
   );
   const serviceNames = useMemo(
     () =>
@@ -229,6 +244,9 @@ export function CalendarView({
     (patch: Partial<CalendarSearch>) => onSearchChange({ ...search, ...patch }),
     [search, onSearchChange],
   );
+  useEffect(() => {
+    if (consultation && resourceMode) go({ view: "day" });
+  }, [consultation, go, resourceMode]);
   const setView = (view: ViewName) => go({ view });
   const openNew = useCallback(
     (slot?: Partial<NewAppointmentInitial>) => {
@@ -255,6 +273,12 @@ export function CalendarView({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
+      if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        event.target instanceof Element &&
+        event.target.closest(".calendar-resource-scroll")
+      )
+        return;
       const action = shortcutFor({
         key: event.key,
         typing: isTyping(event.target) || document.querySelector("[role='dialog']") !== null,
@@ -306,7 +330,13 @@ export function CalendarView({
   const prefetch = (direction: 1 | -1) => {
     const next = rangeFor(search.view, shiftDate(search.date, search.view, direction), timeZone);
     void queryClient.prefetchQuery(
-      calendarQuery({ from: next.from, to: next.to, staffIds: apiStaffIds, accessScope }),
+      calendarQuery({
+        from: next.from,
+        to: next.to,
+        staffIds: apiStaffIds,
+        accessScope,
+        resourceOccupancy,
+      }),
     );
   };
   const onDay = (date: string, staffId?: string) =>
@@ -314,7 +344,7 @@ export function CalendarView({
   const unit = t(
     search.view === "month"
       ? "calendar.unit.month"
-      : search.view === "day"
+      : isDay || resourceMode
         ? "calendar.unit.day"
         : "calendar.unit.week",
   );
@@ -323,7 +353,7 @@ export function CalendarView({
       ? new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(
           new Date(`${search.date}T12:00:00Z`),
         )
-      : search.view === "day"
+      : isDay || resourceMode
         ? formatDateLong(search.date, locale)
         : `${formatDateLong(range.dates[0] as string, locale)} – ${formatDateLong(range.dates.at(-1) as string, locale)}`;
 
@@ -376,7 +406,14 @@ export function CalendarView({
               <i aria-hidden="true" />
             </span>
           )}
-          <label className="calendar-search">
+          {resourceMode && query.dataUpdatedAt > 0 && (
+            <p className="calendar-resource-updated">
+              {t("calendar.updatedAt", {
+                time: formatTime(new Date(query.dataUpdatedAt).toISOString(), timeZone, locale),
+              })}
+            </p>
+          )}
+          <label className="calendar-search" hidden={resourceMode}>
             <SearchIcon width={16} />
             <span className="sr-only">{t("calendar.search")}</span>
             <input
@@ -491,7 +528,7 @@ export function CalendarView({
               </div>
             ))}
           </details>
-          {role === "owner" && (
+          {!resourceMode && role === "owner" && (
             <details className="calendar-filter-section" open>
               <summary>{t("calendar.staffFilter")}</summary>
               <label className="calendar-filter-check">
@@ -543,7 +580,7 @@ export function CalendarView({
             </details>
           )}
           {role === "owner" && !readOnly && <BooksyContextImport />}
-          <section className="calendar-filter-section">
+          <section className="calendar-filter-section" hidden={resourceMode}>
             <h3>
               <label htmlFor="calendar-status">{t("calendar.statusFilter")}</label>
             </h3>
@@ -589,7 +626,7 @@ export function CalendarView({
               {t("calendar.clearFilters")}
             </button>
           </section>
-          {resourceOptions.length > 0 && (
+          {!resourceMode && resourceOptions.length > 0 && (
             <section className="calendar-filter-section">
               <h3>
                 <label htmlFor="calendar-resource">{t("calendar.resourceFilter")}</label>
@@ -613,7 +650,7 @@ export function CalendarView({
               </select>
             </section>
           )}
-          {serviceNames.length > 0 && (
+          {!resourceMode && serviceNames.length > 0 && (
             <section className="calendar-filter-section calendar-service-legend">
               <h3>{t("calendar.serviceColors")}</h3>
               <ul>
@@ -714,7 +751,7 @@ export function CalendarView({
               value={search.view}
               onChange={(event) => setView(event.target.value as ViewName)}
             >
-              {(["day", "week", "month", "list"] as const).map((view) => (
+              {views.map((view) => (
                 <option key={view} value={view}>
                   {t(`calendar.view.${view}`)}
                 </option>
@@ -722,7 +759,7 @@ export function CalendarView({
             </select>
             <fieldset className="calendar-view-segments">
               <legend className="sr-only">{t("calendar.view.label")}</legend>
-              {(["day", "week", "month", "list"] as const).map((view) => (
+              {views.map((view) => (
                 <button
                   key={view}
                   type="button"
@@ -774,6 +811,8 @@ export function CalendarView({
             </div>
           ) : query.isError ? (
             <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+          ) : calendar && resourceMode ? (
+            <ResourceCalendar calendar={calendar} onOpen={onOpenAppointment} />
           ) : calendar && staff.length === 0 ? (
             <EmptyState title={t("calendar.grid.empty")} />
           ) : calendar && search.view === "day" ? (
@@ -794,7 +833,7 @@ export function CalendarView({
             />
           ) : calendar && index ? (
             <CalendarOverview
-              view={search.view as Exclude<ViewName, "day">}
+              view={search.view as Exclude<ViewName, "day" | "resources">}
               dates={range.dates}
               date={search.date}
               today={today}

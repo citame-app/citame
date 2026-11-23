@@ -34,14 +34,19 @@ export const Route = createFileRoute("/admin/calendar")({
     if (cause === "stay" || !context.session) return;
     const { timezone } = context.salon;
     const date = deps.date ?? localDateOf(new Date().toISOString(), timezone);
-    const { from, to, dates } = rangeFor(deps.view ?? "day", date, timezone);
     const { user, accessPreset } = context.session;
     const permissions = permissionsFor(user.role, accessPreset);
-    const staffIds = permissions.allCalendars ? deps.staff?.split(",") : undefined;
+    const resources = deps.view === "resources" && permissions.allCalendars;
+    const view = deps.view === "resources" && !resources ? "day" : (deps.view ?? "day");
+    const { from, to, dates } = rangeFor(view, date, timezone);
+    const staffIds = permissions.allCalendars && !resources ? deps.staff?.split(",") : undefined;
     const accessScope = calendarScope(context.session);
     await Promise.allSettled([
       context.queryClient.ensureQueryData(
-        calendarQuery({ from, to, staffIds, accessScope }, routeEndpoints),
+        calendarQuery(
+          { from, to, staffIds, accessScope, resourceOccupancy: resources ? "1" : undefined },
+          routeEndpoints,
+        ),
       ),
       context.queryClient.ensureQueryData(staffQuery(routeEndpoints)),
       ...(permissions.clients && permissions.editCalendar
@@ -94,7 +99,10 @@ function CalendarPage() {
         accessScope={accessScope}
         userId={session.user.id}
         search={{
-          view: search.view ?? "day",
+          view:
+            search.view === "resources" && !permissions.allCalendars
+              ? "day"
+              : (search.view ?? "day"),
           date,
           ...(search.staff ? { staff: search.staff } : {}),
           ...(search.working ? { working: true } : {}),

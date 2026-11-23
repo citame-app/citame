@@ -3,7 +3,8 @@ import { addDaysLocal, localDateOf } from "~/lib/format";
 import { localDayBounds, minutesIntoLocalDay, startOfWeek, weekDates } from "~/lib/zoned";
 import { localMinuteRange } from "./presentation";
 
-export type CalendarView = "day" | "week" | "month" | "list";
+export const calendarViews = ["day", "week", "month", "list", "resources"] as const;
+export type CalendarView = (typeof calendarViews)[number];
 
 export function shiftMonth(date: string, offset: number): string {
   const value = new Date(`${date.slice(0, 7)}-01T12:00:00Z`);
@@ -28,7 +29,7 @@ export function rangeFor(view: CalendarView, date: string, timeZone: string) {
       ? monthDates(date)
       : view === "list"
         ? Array.from({ length: 7 }, (_, i) => addDaysLocal(date, i))
-        : view === "day"
+        : view === "day" || view === "resources"
           ? [date]
           : weekDates(date);
   const first = dates[0] as string;

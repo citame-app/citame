@@ -157,6 +157,27 @@ test("an existing replica learns Booksy origin without an appointment edit", asy
   ]);
 });
 
+test("reception receives resource calendar refresh markers without the management catalogue", async () => {
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "receptionist" })
+    .where(eq(staffProfile.id, f.anaId));
+  const since = await head();
+  const created = await call(owner, "POST", "/admin/resources", {
+    name: "New room",
+    kind: "room",
+    capacity: 1,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(created.status, await created.clone().text()).toBe(201);
+  const query = { since, resourceCatalogue: "1" as const, resourcePools: "delta" as const };
+  const reception = await pull(t, ana, query);
+  expect(reception.refresh).toContain("resource_catalogue");
+  expect(reception.resourcePools).toBeUndefined();
+  expect((await pull(t, bea, query)).refresh ?? []).not.toContain("resource_catalogue");
+  expect((await pull(t, ana, { since })).refresh ?? []).not.toContain("resource_catalogue");
+});
+
 test("existing replicas receive confirmed resource quantities only for visible appointments", async () => {
   const unallocated = await book(f.beaId);
   const [room] = await t.db

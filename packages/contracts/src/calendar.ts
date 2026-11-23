@@ -3,6 +3,7 @@ import { calendarServiceBadgesSchema } from "./appointment-context";
 import { appointmentSchema } from "./appointments";
 import { externalBalanceSchema, moneyCentsSchema } from "./commerce";
 import { idSchema, instantSchema } from "./common";
+import { resourceKindSchema } from "./resources";
 import { timeOffSchema } from "./staff";
 
 /** Longest window one calendar request may cover (six weeks). */
@@ -19,6 +20,7 @@ export const calendarQuerySchema = z
     from: instantSchema,
     to: instantSchema,
     booksyPaymentReview: z.literal("1").optional(),
+    resourceOccupancy: z.literal("1").optional(),
     staffIds: z
       .string()
       .transform((value) => value.split(",").filter((part) => part.length > 0))
@@ -44,6 +46,11 @@ export const calendarQuerySchema = z
       message: `The range cannot exceed ${CALENDAR_MAX_DAYS} days`,
       path: ["to"],
     },
+  )
+  .refine(
+    (value) =>
+      !value.resourceOccupancy || Date.parse(value.to) - Date.parse(value.from) <= 25 * 3_600_000,
+    { message: "Resource occupancy covers one day", path: ["to"] },
   );
 export type CalendarQuery = z.infer<typeof calendarQuerySchema>;
 
@@ -122,6 +129,30 @@ export const workingWindowSchema = z.object({
 });
 export type WorkingWindow = z.infer<typeof workingWindowSchema>;
 
+const resourceOccupancyWindowSchema = z.object({
+  startsAt: instantSchema,
+  endsAt: instantSchema,
+  quantity: z.number().int().positive(),
+  /** Present only for a booking included in the calendar response. */
+  appointmentId: idSchema.optional(),
+  /** Temporary waitlist capacity. The offer and its client are never included. */
+  holdExpiresAt: instantSchema.optional(),
+});
+export const resourceOccupancySchema = z.object({
+  capturedAt: instantSchema,
+  pools: z.array(
+    z.object({
+      id: idSchema,
+      name: z.string(),
+      kind: resourceKindSchema,
+      capacity: z.number().int().min(1).max(20),
+      active: z.boolean(),
+      windows: z.array(resourceOccupancyWindowSchema),
+    }),
+  ),
+});
+export type ResourceOccupancy = z.infer<typeof resourceOccupancySchema>;
+
 /** Everything a day/week calendar needs in one response. */
 export const calendarResponseSchema = z.object({
   importSnapshot: z
@@ -142,5 +173,6 @@ export const calendarResponseSchema = z.object({
   appointments: z.array(calendarAppointmentSchema),
   timeOff: z.array(timeOffSchema),
   workingWindows: z.array(workingWindowSchema),
+  resourceOccupancy: resourceOccupancySchema.optional(),
 });
 export type CalendarResponse = z.infer<typeof calendarResponseSchema>;

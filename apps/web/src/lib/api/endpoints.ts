@@ -334,6 +334,7 @@ export function createEndpoints(client: ApiClient) {
             to: query.to,
             staffIds: query.staffIds?.join(","),
             booksyPaymentReview: "1",
+            resourceOccupancy: query.resourceOccupancy,
           },
         }),
       clients: {

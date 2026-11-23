@@ -220,6 +220,8 @@ export function authorizeCalendarQuery(
 ): { staffIds?: string[]; includeBilling: boolean } {
   requireRole(principal, "owner", "staff");
   const { allCalendars, commerce } = permissionsFor(principal.role, principal.accessPreset);
+  if (query.resourceOccupancy && !allCalendars)
+    throw forbidden("Resource occupancy requires access to all calendars");
   if (allCalendars) return { staffIds: query.staffIds, includeBilling: commerce };
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {

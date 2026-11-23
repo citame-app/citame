@@ -1183,3 +1183,82 @@
     height: 2.75rem;
   }
 }
+
+.calendar-resource-scroll {
+  flex: 1;
+  min-block-size: 0;
+  min-inline-size: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.calendar-resource-table {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: start;
+}
+.calendar-resource-table :is(th, td) {
+  padding: 0.65rem 0.75rem;
+  min-inline-size: 9.5rem;
+  text-align: start;
+  vertical-align: top;
+  border-inline-end: 1px solid var(--calendar-line);
+  border-block-end: 1px solid var(--calendar-line);
+}
+.calendar-resource-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+}
+.calendar-resource-table th {
+  background: var(--surface);
+}
+.calendar-resource-table .calendar-resource-time {
+  position: sticky;
+  inset-inline-start: 0;
+  z-index: 1;
+  min-inline-size: max-content;
+  white-space: nowrap;
+  width: 1%;
+  font-variant-numeric: tabular-nums;
+}
+.calendar-resource-time > span {
+  margin-inline: 0.15rem;
+}
+.calendar-resource-table td {
+  color: var(--muted);
+}
+.calendar-resource-table td[data-occupied] {
+  background: var(--accent-soft);
+  color: var(--accent-soft-fg);
+}
+.calendar-resource-table :is(th, td):not(.calendar-resource-time) > span {
+  display: block;
+  font-weight: 400;
+}
+.calendar-resource-table button {
+  display: block;
+  min-block-size: 2.75rem;
+  margin-block-start: 0.25rem;
+  max-inline-size: 18rem;
+  overflow-wrap: anywhere;
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.calendar-search[hidden] {
+  display: none;
+}
+
+.calendar-resource-updated {
+  display: none;
+}
+@media (max-width: 1023px) {
+  .calendar-resource-updated {
+    display: block;
+    grid-column: 1 / 5;
+    grid-row: 2;
+    align-self: center;
+    color: var(--muted);
+  }
+}
