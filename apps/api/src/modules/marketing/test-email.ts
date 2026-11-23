@@ -95,13 +95,6 @@ export async function requestCampaignTestEmail(
     entityId: id,
     metadata: { version: input.version, requestId: input.requestId },
   };
-  const budget =
-    input.mode === "check"
-      ? null
-      : await limiter.hit("marketing-campaign-test", principal.userId, {
-          max: 3,
-          windowSeconds: 60,
-        });
   const claim = await db.transaction(async (tx) => {
     const draft = await campaignRow(tx, id, true);
     const recipient = await verifiedCampaignEmailRecipient(tx, principal.userId, true);
@@ -117,16 +110,21 @@ export async function requestCampaignTestEmail(
         throw new DomainError("version_conflict", "Review this campaign version again");
       return { status: repeated.status, requestId: repeated.requestId };
     }
-    if (!budget) return { status: "not_requested" as const, requestId: input.requestId };
+    if (input.mode === "check")
+      return { status: "not_requested" as const, requestId: input.requestId };
     const previous = await testAttempt(tx, audit, { version: input.version });
     if (
       previous?.status === "pending" ||
       (previous?.status === "unconfirmed" && input.mode !== "replace_unconfirmed")
     )
       return { status: previous.status, requestId: previous.requestId };
-    if (!budget.allowed) return { retryAfterSeconds: budget.retryAfterSeconds };
-
     const salon = await getSalonSettings(tx);
+    // Claim the quota only for a new send, after resolving replays under the draft lock.
+    const budget = await limiter.hit("marketing-campaign-test", principal.userId, {
+      max: 3,
+      windowSeconds: 60,
+    });
+    if (!budget.allowed) return { retryAfterSeconds: budget.retryAfterSeconds };
     await recordAudit(tx, { ...audit, action: actionFor.pending });
     return { draft, recipient, salonName: salon.name };
   });

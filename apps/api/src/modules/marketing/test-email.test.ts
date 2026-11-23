@@ -156,6 +156,31 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   expect(await t.db.select().from(marketingDelivery)).toEqual([]);
 });
 
+test("test-email quota counts SMTP claims and permits replays after exhaustion", async () => {
+  const { owner, id, root } = await prepareDraft();
+  const path = `${root}/${id}/test-email`;
+  const send = (version: number, requestId = crypto.randomUUID()) =>
+    json(t.app, path, "POST", { version, requestId }, owner.cookie);
+
+  for (let n = 0; n < 3; n++) expect((await send(2)).status).toBe(409);
+  const first = crypto.randomUUID();
+  for (const response of await Promise.all([send(1, first), send(1, first)]))
+    expect(response.status, await response.clone().text()).toBe(200);
+
+  expect((await send(1)).status).toBe(200);
+  expect((await send(1)).status).toBe(200);
+  expect(messages).toHaveLength(3);
+
+  const limited = await send(1);
+  expect(limited.status).toBe(429);
+  expect(limited.headers.get("Retry-After")).not.toBeNull();
+
+  const replay = await send(1, first);
+  expect(replay.status).toBe(200);
+  expect(await replay.json()).toEqual({ status: "accepted", requestId: first });
+  expect(messages).toHaveLength(3);
+});
+
 test("an SMTP rejection permits a fresh test and an ambiguous send requires another explicit action", async () => {
   const { owner, id, root } = await prepareDraft();
   const send = async (requestId: string, replaceUnconfirmed?: true) => {
