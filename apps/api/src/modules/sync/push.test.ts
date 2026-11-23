@@ -580,7 +580,9 @@ test("offline combo bookings use the exact reviewed allocation and the operator'
       await json(t.app, `/appointments/peak-price?${query}`, "GET", undefined, bea.cookie)
     ).json(),
   );
-  expect(quote.combination).toMatchObject({ id, version: 1, reviewHash: expect.any(String) });
+  // Bun 1.4.4's asymmetric object matcher can replace values in the fixture sent below.
+  expect(quote.combination?.id).toBe(id);
+  expect(quote.combination?.version).toBe(1);
   const appointmentId = uuid();
   const request = {
     id: appointmentId,
@@ -598,12 +600,15 @@ test("offline combo bookings use the exact reviewed allocation and the operator'
   expect((await push(t, bea, [{ ...book, mutationId: mid() }])).body.results[0]).toMatchObject({
     status: "applied",
   });
-  const lines = await t.db
-    .select()
-    .from(appointmentService)
-    .where(eq(appointmentService.appointmentId, appointmentId))
-    .orderBy(appointmentService.position);
-  expect(lines.map(({ priceCents }) => priceCents)).toEqual([1790, 1210]);
+  async function bookedPrices() {
+    const lines = await t.db
+      .select({ priceCents: appointmentService.priceCents })
+      .from(appointmentService)
+      .where(eq(appointmentService.appointmentId, appointmentId))
+      .orderBy(appointmentService.position);
+    return lines.map(({ priceCents }) => priceCents);
+  }
+  expect(await bookedPrices()).toEqual([1790, 1210]);
   expect((await pull(t, bea, { bookingCombinations: "full" })).bookedCombinationTerms).toEqual([
     { appointmentId, version: 1, combinationId: id, staffIds: [f.beaId] },
   ]);
@@ -616,7 +621,7 @@ test("offline combo bookings use the exact reviewed allocation and the operator'
     status: "rejected",
     reason: "conflict",
   });
-  expect(lines.map(({ priceCents }) => priceCents)).toEqual([1790, 1210]);
+  expect(await bookedPrices()).toEqual([1790, 1210]);
 });
 
 test("native resource requirements are versioned, validated and replay safely", async () => {
