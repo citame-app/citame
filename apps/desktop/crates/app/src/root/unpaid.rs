@@ -1,6 +1,7 @@
 use super::*;
 use sob_core::billing::{UnpaidAppointments, UnpaidRow};
 use sob_core::sync::TransportError;
+use uuid::Uuid;
 
 pub(super) struct Desk {
     date: NaiveDate,
@@ -10,8 +11,21 @@ pub(super) struct Desk {
     observation: Option<Observation>,
     error: Option<Key>,
     invalid_date: bool,
-    unavailable_id: Option<String>,
+    unavailable: Option<(String, Key)>,
     pub(super) needs_refresh: bool,
+}
+
+impl Desk {
+    pub(super) fn receipt_restricted_for(&self, id: &str) -> bool {
+        let Ok(id) = id.parse::<Uuid>() else {
+            return false;
+        };
+        self.rows.as_ref().is_some_and(|rows| {
+            rows.appointments
+                .iter()
+                .any(|appointment| appointment.row.id == id && appointment.receipt_restricted)
+        })
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -37,7 +51,7 @@ impl Root {
             observation: None,
             error: None,
             invalid_date: false,
-            unavailable_id: None,
+            unavailable: None,
             needs_refresh: true,
         }));
         self.load_unpaid(cx);
@@ -88,7 +102,7 @@ impl Root {
         };
         if desk.date != date {
             desk.rows = None;
-            desk.unavailable_id = None;
+            desk.unavailable = None;
         }
         desk.date = date;
         desk.invalid_date = false;
@@ -160,16 +174,42 @@ impl Root {
             return;
         };
         let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id) else {
-            desk.unavailable_id = Some(id.to_owned());
+            desk.unavailable = Some((id.to_owned(), Key::ShiftAppointmentUnavailable));
             self.svc.wake(Wake::Manual);
             cx.notify();
             return;
         };
+        let receipt = id.parse::<Uuid>().ok().and_then(|id| {
+            desk.rows
+                .as_ref()?
+                .appointments
+                .iter()
+                .find(|appointment| appointment.row.id == id)?
+                .receipt_balance
+        });
+        if receipt.is_some()
+            && (!self.can_open_appointment_checkout(&appointment)
+                || !self
+                    .svc
+                    .store
+                    .outbox(usize::MAX)
+                    .is_ok_and(|edits| edits.iter().all(|edit| edit.entity_id != id)))
+        {
+            if let Overlay::Unpaid(desk) = &mut self.overlay {
+                desk.unavailable = Some((id.to_owned(), Key::DueReceiptWaiting));
+            }
+            self.svc.wake(Wake::Manual);
+            cx.notify();
+            return;
+        }
         let Overlay::Unpaid(mut desk) = std::mem::replace(&mut self.overlay, Overlay::None) else {
             unreachable!()
         };
-        desk.unavailable_id = None;
+        desk.unavailable = None;
         self.show_appointment_details(appointment, Some(AppointmentReturn::Unpaid(desk)), cx);
+        if let Some(receipt) = receipt {
+            self.load_appointment_checkout(Some(receipt.id), cx);
+        }
     }
 
     pub(super) fn render_unpaid(
@@ -253,16 +293,42 @@ impl Root {
                         body.child(self.t(Key::DueEmpty))
                     })
                     .children(rows.appointments.iter().map(|appointment| {
-                        let extra = appointment.external_balance.map(|balance| {
+                        let mut labels = Vec::new();
+                        let amount = |key, cents: u32| {
                             i18n::fill(
-                                self.t(Key::DueBalance),
-                                &[(
-                                    "amount",
-                                    &self.amount_label(balance.due_in_citame_cents.into(), "EUR"),
-                                )],
+                                self.t(key),
+                                &[("amount", &self.amount_label(cents.into(), "EUR"))],
                             )
-                        });
-                        self.render_unpaid_row(&appointment.row, &[], extra, desk, cx)
+                        };
+                        if let Some(receipt) = appointment.receipt_balance {
+                            if receipt.confirmed_cents > 0 {
+                                labels.push(amount(Key::DueConfirmed, receipt.confirmed_cents));
+                            }
+                            if let Some(balance) = receipt.balance_cents {
+                                labels.push(amount(Key::DueReceiptBalance, balance));
+                            }
+                            if receipt.price_pending {
+                                labels.push(self.t(Key::DuePricePending).to_owned());
+                            }
+                            if receipt.service_balance_deferred {
+                                labels.push(self.t(Key::DueAfterVisit).to_owned());
+                            }
+                            if receipt.payment_in_progress {
+                                labels.push(self.t(Key::DuePaymentPending).to_owned());
+                            }
+                        } else if appointment.receipt_restricted {
+                            labels.push(self.t(Key::DueReceiptRestricted).to_owned());
+                        } else if let Some(balance) = appointment.external_balance {
+                            labels.push(amount(Key::DueBalance, balance.due_in_citame_cents));
+                        }
+                        self.render_unpaid_row(
+                            &appointment.row,
+                            &[],
+                            labels,
+                            appointment.receipt_balance.is_some(),
+                            desk,
+                            cx,
+                        )
                     }))
                     .when(!rows.billing_review.is_empty(), |body| {
                         body.child(
@@ -275,7 +341,8 @@ impl Root {
                             self.render_unpaid_row(
                                 &appointment.row,
                                 &appointment.reasons,
-                                None,
+                                Vec::new(),
+                                false,
                                 desk,
                                 cx,
                             )
@@ -314,12 +381,16 @@ impl Root {
         &self,
         row: &UnpaidRow,
         reasons: &[BillingReviewReason],
-        extra: Option<String>,
+        labels: Vec<String>,
+        has_receipt: bool,
         desk: &Desk,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let id = row.id.to_string();
-        let unavailable = desk.unavailable_id.as_deref() == Some(id.as_str());
+        let unavailable = desk
+            .unavailable
+            .as_ref()
+            .and_then(|(target, label)| (target == &id).then_some(*label));
         div()
             .id(SharedString::from(id.clone()))
             .flex()
@@ -344,7 +415,11 @@ impl Root {
                     .child(
                         self.button(
                             "unpaid-open-appointment",
-                            self.t(Key::DueOpenAppointment),
+                            self.t(if has_receipt {
+                                Key::DueOpenReceipt
+                            } else {
+                                Key::DueOpenAppointment
+                            }),
                             Kind::Ghost,
                             cx.listener(move |root, _, _, cx| {
                                 root.open_unpaid_appointment(&id, cx)
@@ -359,7 +434,7 @@ impl Root {
                     .child(self.staff_name(&row.staff_id.to_string())),
             )
             .child(div().text_sm().child(row.service_names.join(", ")))
-            .when_some(extra, |row, text| row.child(text))
+            .children(labels.into_iter().map(|label| div().text_sm().child(label)))
             .children(reasons.iter().map(|reason| {
                 div()
                     .text_sm()
@@ -371,12 +446,8 @@ impl Root {
                         BillingReviewReason::UnknownBooksyPayment => Key::DueUnknownBooksyPayment,
                     }))
             }))
-            .when(unavailable, |body| {
-                body.child(
-                    div()
-                        .text_sm()
-                        .child(self.t(Key::ShiftAppointmentUnavailable)),
-                )
+            .when_some(unavailable, |body, label| {
+                body.child(div().text_sm().child(self.t(label)))
             })
     }
 }

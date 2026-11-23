@@ -35,12 +35,14 @@ type CatalogTab = "quick" | "due" | "services" | "extras" | "products" | "custom
 export function PointOfSale({
   role,
   accessPreset,
+  viewerScope,
   sales,
   onCreated,
   onBenefits,
 }: {
   role: UserRole;
   accessPreset?: StaffAccessPreset | null;
+  viewerScope?: string;
   sales: Checkout[];
   onCreated: (id: string) => void;
   onBenefits: (tab: "gift" | "packages" | "memberships") => void;
@@ -213,7 +215,7 @@ export function PointOfSale({
           {tab === "custom" ? (
             <CustomAmount onAdd={add} disabled={create.isPending} />
           ) : tab === "due" ? (
-            <DueAppointments onCreated={onCreated} />
+            <DueAppointments onCreated={onCreated} viewerScope={viewerScope} />
           ) : (
             <>
               <TextField
@@ -741,15 +743,22 @@ function CustomAmount({
   );
 }
 
-function DueAppointments({ onCreated }: { onCreated: (id: string) => void }) {
+function DueAppointments({
+  onCreated,
+  viewerScope,
+}: {
+  onCreated: (id: string) => void;
+  viewerScope?: string;
+}) {
   const { t, locale, timeZone } = useI18n();
   const online = useOnline();
   const queries = useQueryClient();
   const [date, setDate] = useState(() => localDateOf(new Date().toISOString(), timeZone));
   const range = localDayBounds(date, timeZone);
   const appointments = useQuery({
-    queryKey: ["commerce", "unpaid", range.from, range.to],
-    queryFn: () => api().commerce.unpaid(range),
+    queryKey: ["commerce", "unpaid", viewerScope, range.from, range.to],
+    queryFn: ({ signal }) => api().commerce.unpaid(range, signal),
+    refetchOnMount: "always",
   });
   const requestKeys = useRef(new Map<string, string>());
   const create = useMutation({
@@ -786,7 +795,7 @@ function DueAppointments({ onCreated }: { onCreated: (id: string) => void }) {
           if (e.target.value) setDate(e.target.value);
         }}
       />
-      {appointments.isPending ? (
+      {appointments.isPending || (appointments.isFetching && !appointments.isFetchedAfterMount) ? (
         <Skeleton className="h-40" />
       ) : appointments.isError ? (
         <ErrorState error={appointments.error} />
@@ -796,22 +805,63 @@ function DueAppointments({ onCreated }: { onCreated: (id: string) => void }) {
           <ul className="pos-due-list" role="list">
             {due.map((item) => (
               <li key={item.id}>
-                <div>
+                <div className="min-w-0 space-y-1 wrap-anywhere">
                   <strong>
                     {formatTime(item.startsAt, timeZone, locale)} · {item.clientName}
                   </strong>
                   <p className="text-sm text-muted">{item.serviceNames.join(", ")}</p>
+                  {item.receiptRestricted && (
+                    <p className="text-sm">{t("pos.dueReceiptRestricted")}</p>
+                  )}
+                  {item.receiptBalance && (
+                    <>
+                      {(item.receiptBalance.confirmedCents > 0 ||
+                        item.receiptBalance.balanceCents !== null) && (
+                        <dl className="flex flex-wrap gap-x-4 gap-y-1 text-sm tabular-nums">
+                          {item.receiptBalance.confirmedCents > 0 && (
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <dt className="text-muted">{t("pos.dueConfirmed")}</dt>
+                              <dd>
+                                {formatMoney(item.receiptBalance.confirmedCents, "EUR", locale)}
+                              </dd>
+                            </div>
+                          )}
+                          {item.receiptBalance.balanceCents !== null && (
+                            <div className="flex flex-wrap items-baseline gap-x-2">
+                              <dt>{t("pos.dueReceiptBalance")}</dt>
+                              <dd className="font-semibold">
+                                {formatMoney(item.receiptBalance.balanceCents, "EUR", locale)}
+                              </dd>
+                            </div>
+                          )}
+                        </dl>
+                      )}
+                      {item.receiptBalance.pricePending && (
+                        <p className="text-sm">{t("pos.duePricePending")}</p>
+                      )}
+                      {item.receiptBalance.serviceBalanceDeferred && (
+                        <p className="text-sm">{t("pos.dueAfterVisit")}</p>
+                      )}
+                      {item.receiptBalance.paymentInProgress && (
+                        <p className="text-sm">{t("pos.duePaymentPending")}</p>
+                      )}
+                    </>
+                  )}
                 </div>
                 <Button
                   variant="secondary"
-                  disabled={!online || create.isPending}
-                  onClick={() => create.mutate(item)}
+                  disabled={!online || create.isPending || item.receiptRestricted}
+                  onClick={() =>
+                    item.receiptBalance ? onCreated(item.receiptBalance.id) : create.mutate(item)
+                  }
                 >
-                  {item.externalBalance
-                    ? t("pos.collectBalance", {
-                        amount: formatMoney(item.externalBalance.dueInCitameCents, "EUR", locale),
-                      })
-                    : t("pos.collect")}
+                  {item.receiptBalance
+                    ? t("pos.dueOpenReceipt")
+                    : item.externalBalance
+                      ? t("pos.collectBalance", {
+                          amount: formatMoney(item.externalBalance.dueInCitameCents, "EUR", locale),
+                        })
+                      : t("pos.collect")}
                 </Button>
               </li>
             ))}

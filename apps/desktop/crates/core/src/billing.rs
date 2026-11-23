@@ -19,6 +19,21 @@ pub struct DueAppointment {
     #[serde(flatten)]
     pub row: UnpaidRow,
     pub external_balance: Option<ExternalBalance>,
+    pub receipt_balance: Option<UnpaidReceiptBalance>,
+    #[serde(default)]
+    pub receipt_restricted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnpaidReceiptBalance {
+    pub id: Uuid,
+    pub confirmed_cents: u32,
+    pub balance_cents: Option<u32>,
+    pub price_pending: bool,
+    pub payment_in_progress: bool,
+    #[serde(default)]
+    pub service_balance_deferred: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,6 +57,13 @@ impl UnpaidAppointments {
         let mut seen = std::collections::HashSet::new();
         self.appointments.iter().all(|appointment| {
             seen.insert(appointment.row.id)
+                && appointment.receipt_balance.is_none_or(|receipt| {
+                    receipt.confirmed_cents <= 999_999_999
+                        && receipt.balance_cents.is_none_or(|balance| {
+                            valid_amount.contains(&balance)
+                                && receipt.confirmed_cents + balance <= 999_999_999
+                        })
+                })
                 && appointment.external_balance.is_none_or(|balance| {
                     valid_amount.contains(&balance.paid_in_booksy_cents)
                         && valid_amount.contains(&balance.due_in_citame_cents)

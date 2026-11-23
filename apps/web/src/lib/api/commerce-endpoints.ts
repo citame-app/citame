@@ -26,9 +26,10 @@ export type CommerceMode = "admin" | "client";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export function commerceEndpoints(client: ApiClient) {
   return {
-    unpaid: (query: { from: string; to: string }) =>
+    unpaid: (query: { from: string; to: string }, signal?: AbortSignal) =>
       client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, {
         query: { ...query, booksyPaymentReview: "1" },
+        signal,
       }),
     reviewImportedPrice: (id: string, input: ImportedPriceReview) =>
       client.put(

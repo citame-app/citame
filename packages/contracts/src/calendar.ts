@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { calendarServiceBadgesSchema } from "./appointment-context";
 import { appointmentSchema } from "./appointments";
-import { externalBalanceSchema } from "./commerce";
+import { externalBalanceSchema, moneyCentsSchema } from "./commerce";
 import { idSchema, instantSchema } from "./common";
 import { timeOffSchema } from "./staff";
 
@@ -75,8 +75,21 @@ export const calendarAppointmentSchema = appointmentSchema.extend({
     .min(1)
     .optional(),
 });
+export const unpaidReceiptBalanceSchema = z.object({
+  id: idSchema,
+  confirmedCents: moneyCentsSchema,
+  balanceCents: moneyCentsSchema.positive().nullable(),
+  pricePending: z.boolean(),
+  paymentInProgress: z.boolean(),
+  serviceBalanceDeferred: z.literal(true).optional(),
+});
 export const unpaidAppointmentsSchema = z.object({
-  appointments: z.array(calendarAppointmentSchema),
+  appointments: z.array(
+    calendarAppointmentSchema.extend({
+      receiptBalance: unpaidReceiptBalanceSchema.optional(),
+      receiptRestricted: z.literal(true).optional(),
+    }),
+  ),
   billingReview: z
     .array(
       calendarAppointmentSchema

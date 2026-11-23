@@ -2,7 +2,14 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { reportSummarySchema } from "@sob/contracts";
 import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
-import { expectNoHorizontalScroll, salonDate } from "./admin-helpers";
+import {
+  at,
+  expectNoHorizontalScroll,
+  freeHour,
+  runDays,
+  STYLIST_A,
+  salonDate,
+} from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
 import { addCustomItem, closeReceipt, reviewReceipt } from "./pos-helpers";
 
@@ -243,4 +250,72 @@ test("client collections report shows and exports net payments", async ({ page }
   await expect(saleRow.getByRole("cell").first()).toHaveText("€123.45");
   await page.getByRole("link", { name: "Back to client profile" }).click();
   await expect(page.getByRole("heading", { name: clientName })).toBeVisible();
+});
+
+test("reads the existing partial receipt and removes the row after the last payment", async ({
+  page,
+}) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/commerce");
+  await expect(page).toHaveURL(/\/admin\/commerce/);
+  const headers = { Origin: fixture.baseURL };
+  const clientId = crypto.randomUUID();
+  const customer = `Partial receipt ${clientId.slice(0, 8)}`;
+  const createdClient = await page.request.post("/api/admin/clients", {
+    headers,
+    data: { id: clientId, name: customer },
+  });
+  expect(createdClient.status(), await createdClient.text()).toBe(201);
+
+  const [date] = runDays(1);
+  if (!date) throw new Error("A synthetic booking date is required");
+  const hour = await freeHour(date);
+  const appointmentId = crypto.randomUUID();
+  const booking = await page.request.post("/api/appointments", {
+    headers,
+    data: {
+      id: appointmentId,
+      staffId: STYLIST_A,
+      clientId,
+      serviceIds: [fixture.haircut],
+      startsAt: at(date, `${String(hour).padStart(2, "0")}:00`),
+      override: true,
+    },
+  });
+  expect(booking.status(), await booking.text()).toBe(201);
+  const createdReceipt = await page.request.post("/api/admin/commerce/checkouts", {
+    headers,
+    data: { appointmentId, idempotencyKey: crypto.randomUUID() },
+  });
+  expect(createdReceipt.status(), await createdReceipt.text()).toBe(201);
+  const { id, totalCents } = await createdReceipt.json();
+  expect(totalCents).toBe(2000);
+  const payment = (amountCents: number) =>
+    page.request.post(`/api/admin/commerce/checkouts/${id}/payments`, {
+      headers,
+      data: { method: "external_card", amountCents, idempotencyKey: crypto.randomUUID() },
+    });
+  expect((await payment(400)).status()).toBe(201);
+
+  await page.getByRole("button", { name: "To collect", exact: true }).click();
+  await page.getByLabel("Appointment date", { exact: true }).fill(date);
+  const row = page.getByRole("listitem").filter({ hasText: customer });
+  await expect(row).toContainText("Confirmed payments");
+  await expect(row).toContainText("€4");
+  await expect(row).toContainText("Remaining on receipt");
+  await expect(row).toContainText("€16");
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page, "Partial receipt in To collect");
+  const readReceipt = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/admin/commerce/checkouts/${id}`) &&
+      response.request().method() === "GET",
+  );
+  const open = row.getByRole("button", { name: "Open receipt", exact: true });
+  await open.focus();
+  await open.press("Enter");
+  expect((await readReceipt).status()).toBe(200);
+  await expect(page).toHaveURL(new RegExp(`checkout=${id}`));
+  expect((await payment(1600)).status()).toBe(201);
+  await page.getByRole("button", { name: "Close panel", exact: true }).click();
+  await expect(row).toHaveCount(0);
 });

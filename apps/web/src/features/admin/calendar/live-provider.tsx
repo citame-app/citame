@@ -80,7 +80,8 @@ export function CalendarLiveProvider({
             queryKey[0] === "peak-price-policy" ||
             queryKey[0] === "booking-peak-price" ||
             queryKey[0] === "salon" ||
-            (queryKey[0] === "commerce" && queryKey[1] === "transactions") ||
+            (queryKey[0] === "commerce" &&
+              (queryKey[1] === "transactions" || queryKey[1] === "unpaid")) ||
             (queryKey[0] === "admin" &&
               (queryKey[1] === "calendar" ||
                 queryKey[1] === "report" ||
@@ -100,6 +101,7 @@ export function CalendarLiveProvider({
             void Promise.all([
               queryClient.cancelQueries({ queryKey: ["commerce", "transactions"] }),
               queryClient.cancelQueries({ queryKey: ["commerce", "admin", "checkout"] }),
+              queryClient.cancelQueries({ queryKey: ["commerce", "unpaid"] }),
             ]).then(() => {
               if (!closed) return queryClient.invalidateQueries({ queryKey });
             });

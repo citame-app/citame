@@ -29,18 +29,21 @@ export function CheckoutPanel({
   mode,
   role,
   bankPaymentId,
+  viewerScope,
 }: {
   id: string;
   mode: CommerceMode;
   role: UserRole;
   bankPaymentId?: string;
+  viewerScope?: string;
 }) {
   const { t, locale, timeZone } = useI18n();
   const queries = useQueryClient();
   const online = useOnline();
   const sale = useQuery({
-    queryKey: ["commerce", mode, "checkout", id],
+    queryKey: ["commerce", mode, "checkout", id, viewerScope],
     queryFn: ({ signal }) => api().commerce.get(id, mode, signal),
+    refetchOnMount: "always",
     refetchInterval: (query) =>
       query.state.data?.payments.some((p) => p.status === "pending") ||
       query.state.data?.refunds.some((r) => r.status === "dispatched")
@@ -124,7 +127,8 @@ export function CheckoutPanel({
       void invalidateCommerce(queries);
     },
   });
-  if (sale.isPending) return <Skeleton className="h-72" />;
+  if (sale.isPending || (sale.isFetching && !sale.isFetchedAfterMount))
+    return <Skeleton className="h-72" />;
   if (sale.isError) return <ErrorState error={sale.error} onRetry={() => void sale.refetch()} />;
   const order = sale.data;
   const unresolved = order.lines.some((line) => line.pricePending);

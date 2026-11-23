@@ -127,6 +127,7 @@ export function liveQueryKeys(changes?: Iterable<SyncEntity | SyncLiveView>) {
     for (const key of shared[entity]) unique.set(JSON.stringify(key), key);
   if (unique.has(JSON.stringify(["commerce"]))) {
     unique.delete(JSON.stringify(["commerce", "transactions"]));
+    unique.delete(JSON.stringify(["commerce", "unpaid"]));
   }
   return unique.values();
 }

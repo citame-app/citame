@@ -5445,7 +5445,27 @@ fn imported_partial_payment_preserves_the_original_total_and_opens_only_the_bala
     assert_eq!(checkout.balance_cents, 6500);
     assert_eq!(checkout.paid_cents, 0);
     assert_eq!(checkout.collectible_cents(), 6500);
-    let request = PaymentAttempt::new(ReceiptTender::ExternalCard, 6500);
+    let initial_payment = PaymentAttempt::new(ReceiptTender::ExternalCard, 2000);
+    desk.transport
+        .record_checkout_payment(&checkout, &initial_payment)
+        .unwrap();
+    let listed = desk.transport.unpaid_appointments(date, zone).unwrap();
+    let listed_balance = listed
+        .appointments
+        .iter()
+        .find(|row| belongs_to_appointment(row.row.id))
+        .and_then(|row| row.receipt_balance)
+        .expect("confirmed partial payment appears in To collect");
+    assert_eq!(listed_balance.id.to_string(), checkout.id);
+    assert_eq!(listed_balance.confirmed_cents, 2000);
+    assert_eq!(listed_balance.balance_cents, Some(4500));
+    assert!(!listed_balance.payment_in_progress);
+    let checkout = desk
+        .transport
+        .open_saved_checkout(listed_balance.id)
+        .unwrap();
+    assert_eq!(checkout.balance_cents, 4500);
+    let request = PaymentAttempt::new(ReceiptTender::ExternalCard, 4500);
     let record = || {
         desk.transport
             .record_checkout_payment(&checkout, &request)
