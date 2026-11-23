@@ -54,6 +54,12 @@ const notes = textEvidence.extend({
   source: z.literal("booksy_visible_notes"),
   fields: z.array(z.object({ placeholder: z.string().nullable(), value: z.string() })),
 });
+export const visibleBookingEnvelope = z.object({
+  kind: z.literal("booksy-reviewed-visible-booking"),
+  businessId: z.string(),
+  parentHash: z.string().regex(/^[a-f0-9]{64}$/),
+  originals: z.array(z.object({ bytes: z.base64(), sha256: z.string() })).length(5),
+});
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const normalize = (s: string) => s.trim().replace(/\s+/g, " ").normalize("NFC");
 const localPhone = (s: string) => s.replace(/\D/g, "").replace(/^(?:0034|34)(?=\d{9}$)/, "");
@@ -352,6 +358,56 @@ export function appendVisibleBooking(
       clients: model.summary.clients + Number(Boolean(provisional)),
     },
   } satisfies BooksySourceReadModel;
+}
+
+export function verifyReviewedVisibleBooking(
+  model: BooksySourceReadModel,
+  group: BooksySourceReadModel["groups"][number],
+  parent: BooksySourceReadModel,
+  envelope: z.infer<typeof visibleBookingEnvelope>,
+  artifact: BooksySourceReadModel["base"]["artifacts"][number],
+) {
+  if (
+    envelope.businessId !== model.businessId ||
+    parent.businessId !== model.businessId ||
+    fingerprint(parent) !== envelope.parentHash ||
+    group.raw.evidenceSha256 !== artifact.sha256 ||
+    group.raw.kind !== envelope.kind
+  )
+    throw new Error("Visible reservation evidence does not belong to this snapshot");
+  const documents = envelope.originals.map((original) => {
+    const bytes = Buffer.from(original.bytes, "base64");
+    if (sha256(bytes) !== original.sha256)
+      throw new Error("Visible reservation observation changed");
+    return JSON.parse(bytes.toString("utf8"));
+  });
+  const rebuilt = appendVisibleBooking(
+    parent,
+    documents,
+    artifact,
+    group.raw.contactPending === true,
+    Boolean(group.raw.financialHold),
+  );
+  const rebuiltGroup = rebuilt.groups.at(-1);
+  const appointmentId = rebuiltGroup?.ids[0];
+  if (!rebuiltGroup || !appointmentId || fingerprint(group) !== fingerprint(rebuiltGroup))
+    throw new Error("Reviewed visible reservation differs from the rebuilt group");
+  const line = model.appointments.find(({ id }) => id === appointmentId);
+  const rebuiltLine = rebuilt.appointments.find(({ id }) => id === appointmentId);
+  const context = model.contexts[appointmentId];
+  if (
+    !line?.sourceCopy ||
+    !rebuiltLine ||
+    !context ||
+    fingerprint(line) !== fingerprint(rebuiltLine) ||
+    fingerprint(context) !== fingerprint(rebuilt.contexts[appointmentId])
+  )
+    throw new Error("Reviewed visible reservation differs from the rebuilt line");
+  return {
+    itemRef: line.sourceCopy.itemRef,
+    observedAt: line.sourceCopy.capturedAt,
+    evidenceSha256: artifact.sha256,
+  };
 }
 
 if (import.meta.main) {

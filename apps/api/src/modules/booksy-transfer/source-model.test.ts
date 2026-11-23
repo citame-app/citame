@@ -28,7 +28,10 @@ import { DomainError } from "../../errors";
 import { respondError } from "../../http";
 import { reconcileObservedCalendar } from "../../scripts/booksy-reconcile-calendar";
 import { appendVisibleStaffBlock } from "../../scripts/booksy-review-visible-block";
-import { appendVisibleBooking } from "../../scripts/booksy-review-visible-booking";
+import {
+  appendVisibleBooking,
+  verifyReviewedVisibleBooking,
+} from "../../scripts/booksy-review-visible-booking";
 import { transferFixture } from "./fixtures";
 import {
   countCapacityConflicts,
@@ -242,6 +245,39 @@ test("reviewed visible bookings keep their exact resource and reject conflicting
   ];
   const evidence = { path: "synthetic-verified.json", bytes: 24, sha256: "a".repeat(64) };
   const result = appendVisibleBooking(snapshot, documents, evidence);
+  const group = result.groups.at(-1);
+  if (!group) throw new Error("Missing reviewed booking group");
+  const envelope = {
+    kind: "booksy-reviewed-visible-booking" as const,
+    businessId: snapshot.businessId,
+    parentHash: fingerprint(snapshot),
+    originals: documents.map((document) => {
+      const bytes = Buffer.from(JSON.stringify(document));
+      return {
+        bytes: bytes.toString("base64"),
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      };
+    }),
+  };
+  expect(verifyReviewedVisibleBooking(result, group, snapshot, envelope, evidence)).toEqual({
+    itemRef: "15",
+    observedAt: common.capturedAt,
+    evidenceSha256: evidence.sha256,
+  });
+  const modified = structuredClone(envelope);
+  const original = modified.originals[2];
+  if (!original) throw new Error("Missing original booking observation");
+  original.bytes = Buffer.from("{}").toString("base64");
+  expect(() => verifyReviewedVisibleBooking(result, group, snapshot, modified, evidence)).toThrow(
+    "observation changed",
+  );
+  const mismatched = structuredClone(result);
+  const line = mismatched.appointments.find((row) => row.id === group.ids[0]);
+  if (!line) throw new Error("Missing reviewed booking line");
+  line.endsAt = line.startsAt;
+  expect(() =>
+    verifyReviewedVisibleBooking(mismatched, group, snapshot, envelope, evidence),
+  ).toThrow("differs from the rebuilt line");
   const visit = planNativeRehearsal(result).visits.find(
     (row) => row.item.sourceCopy?.itemRef === "15",
   );

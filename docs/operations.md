@@ -178,6 +178,8 @@ Use inclusive ISO dates in the salon's time zone and an ISO timestamp with an of
 
 The locally archived candidate covered 371 dates from 2026-11-18 to 2027-11-23. Every date had a full observation predating the benchmark booking report on 2026-11-18 at 13:13 in Madrid. The latest appointment observed began at 12:10 Madrid time on 2027-04-15. Its position as the last appointment still requires evidence from Booksy.
 
+The audit separately counts projected lines missing from a full calendar that can be rebuilt from reviewed screen observations. It checks the original observation bytes, their parent snapshot and the rebuilt appointment, group and context. The private receipt records the observation date and archive hash. A reviewed line still counts as absent from the full calendar response, and its individual evidence adds no coverage for the day or the current booking status. If the parent snapshot is unavailable, the line stays in the count without rebuilt evidence.
+
 The offline audit for 2026-11-19 through 2027-11-23 verified all 1,053 archived originals. As of 20:02:25 Madrid time on 2026-11-18, all 370 dates had an archived full observation before the cutoff and zero had a full observation at or after it. The receipt also records `lastAppointmentProven: false` and `canCutOver: false`. The final coverage check needs a fresh source capture when the centre resumes the migration.
 
 Rehearse recovery from the externally held copy of the final Booksy candidate. Save the output of `booksy-portable-backup.ts rehearse-schedule` as a private file with mode 0600. Use the [Booksy import protocol](booksy-import-protocol.md#reservas-de-prueba-en-la-agenda-recuperada) to select the rehearsal date and recover the candidate.
