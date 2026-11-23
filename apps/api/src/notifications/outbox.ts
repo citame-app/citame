@@ -2,6 +2,7 @@ import { appointment, bookingProtection, clientProfile, reminder } from "@sob/db
 import { and, eq, gt, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { getSalonSettings } from "../modules/settings/service";
 import type { Tx } from "../tx";
+import { WHATSAPP_DELIVERY_UNKNOWN } from "./queue";
 import { planReminders } from "./schedule";
 
 type AppointmentRow = typeof appointment.$inferSelect;
@@ -69,15 +70,19 @@ async function reminderPlan(tx: Tx, appt: AppointmentRow, now: Date) {
 }
 
 /**
- * Withdraws everything that has not been sent. That includes rows a worker is sending right
- * now: the send in flight cannot be recalled, but the worker's own bookkeeping is fenced on
- * `processing`, so once withdrawn it can neither record the outcome nor put the row back to
- * `pending` for a retry after a failure (which would send a reminder for a superseded schedule).
+ * Withdraws pending deliveries and fences retries of sends already in flight.
+ * A marked WhatsApp send retains its dispatch data for the operator and callbacks.
  */
 async function withdrawPending(tx: Tx, appointmentId: string) {
   await tx
     .update(reminder)
-    .set({ status: "cancelled", lockedUntil: null, lastError: "withdrawn: appointment changed" })
+    .set({
+      status: "cancelled",
+      lockedUntil: null,
+      lastError: sql`case when ${reminder.whatsappDispatchAt} is not null
+        then ${WHATSAPP_DELIVERY_UNKNOWN}
+        else 'withdrawn: appointment changed' end`,
+    })
     .where(
       and(
         eq(reminder.appointmentId, appointmentId),

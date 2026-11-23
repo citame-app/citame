@@ -20,10 +20,14 @@ Times in messages are always in the salon timezone. Language comes from the clie
 
 Nothing is sent by default. Two switches:
 
-1. A provider: `NOTIFY_EMAIL_PROVIDER=smtp` + `SMTP_URL`, and/or `NOTIFY_SMS_PROVIDER=twilio` + Twilio keys.
+1. Configure appointment email in **Settings → Email delivery**, SMS with Twilio, or [WhatsApp Business](whatsapp-business.md).
 2. A worker: `NOTIFY_WORKER_ENABLED=true` (inside the API process) **or** run `bun run worker` / `docker compose --profile worker up -d worker` (keep the flag `false` on the API in that case, though running both is safe under normal operation: leases coordinate claims; crash recovery remains at least once).
 
 Scheduling happens regardless (rows are written with every booking), so enabling the worker later delivers what is due; reminders whose time passed while it was off are still sent if the appointment has not started (confirmations for appointments that already started are skipped).
+
+### Appointment email delivery
+
+An owner can inherit the deployment's SMTP sender, disable appointment email, or configure SMTP, Gmail / Google Workspace, or Resend in **Settings → Email delivery**. Save and send a test message before enabling operational reminders. See [operations.md](operations.md#appointment-email) for provider requirements. Account-security email uses the deployment SMTP settings.
 
 ### Environment
 
@@ -67,15 +71,15 @@ Book an appointment as a client whose profile has an email: the confirmation sho
 
 - Queue depth: `GET /admin/notifications/stats` (owner session): counts per status plus `overdue` (pending for more than five minutes: the worker is down or stuck) and this process's counters. Prometheus exposition is available at the protected `/metrics` endpoint (see [operations.md](operations.md)).
 - Logs: JSON lines, `component: "notifications"`, with `reminderId`, `kind`, `channel`, `attempt`, `workerId`. No addresses or bodies.
-- Failed messages (dead letters): `SELECT id, kind, channel, attempts, last_error FROM reminder WHERE status = 'failed';`. After fixing the cause, requeue with `UPDATE reminder SET status = 'pending', attempts = 0, scheduled_for = now() WHERE id = '...';`.
+- Failed messages (dead letters): `SELECT id, kind, channel, attempts, last_error FROM reminder WHERE status = 'failed';`. After fixing the cause, requeue a failed row without a WhatsApp dispatch marker with `UPDATE reminder SET status = 'pending', attempts = 0, scheduled_for = now() WHERE id = '...' AND status = 'failed' AND whatsapp_dispatch_at IS NULL;`. A marked WhatsApp send may already have reached the client. Review its delivery status in the WhatsApp desk.
 - Why was a message not sent? `SELECT kind, channel, last_error FROM reminder WHERE appointment_id = '...' AND status = 'skipped';` Reasons: `channel_disabled`, `opted_out`, `no_address`, `invalid_phone`, `appointment_not_booked`, `appointment_gone`, `already_started`, `not_cancelled`, `client_gone`.
-- Crash safety: kill the worker at any time. Its jobs reappear after `NOTIFY_VISIBILITY_TIMEOUT_SECONDS`. SIGTERM waits for the job in flight.
+- Crash safety: kill the worker at any time. An unmarked job becomes eligible again when its lease expires, up to the attempt limit. A marked WhatsApp job with an interrupted outcome is reported as delivery unknown. A confirmed WhatsApp rate limit retries with bounded backoff. SIGTERM waits for the job in flight.
 - Rotating `BETTER_AUTH_SECRET` invalidates existing unsubscribe links and queued account-email ciphertext (see above).
 
 ## Opt-out
 
 - Reminder emails include a footer link and `List-Unsubscribe` / one-click headers. The link needs no login, opens a confirmation page (it never changes anything on `GET`) and switches **email reminders** off. Confirmations, changes and cancellations still arrive.
-- Clients manage every switch in Account, Notifications: per channel (email, SMS) and category (booking messages, reminders), plus message language.
+- Clients manage every switch in Account, Notifications: per channel (email, SMS, WhatsApp) and category (booking messages, reminders), plus message language.
 - Choices are checked at send time, so they also apply to appointments already booked.
 
 ## SMS: regulatory checklist

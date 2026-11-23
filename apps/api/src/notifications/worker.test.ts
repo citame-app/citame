@@ -6,7 +6,7 @@ import {
   reminder,
   whatsappConnection,
 } from "@sob/db";
-import { asc, eq } from "drizzle-orm";
+import { asc, eq, sql } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -99,6 +99,21 @@ async function book(startsAt = MONDAY_0900) {
 const rows = () => t.db.select().from(reminder).orderBy(asc(reminder.kind), asc(reminder.channel));
 const byKind = async (kind: string, channel = "email") =>
   (await rows()).find((r) => r.kind === kind && r.channel === channel);
+
+async function waitForBlockedQuery(pattern: string) {
+  for (let check = 0; check < 100; check++) {
+    const waiting = await t.db.execute<{ waiting: boolean }>(sql`
+      select exists(
+        select 1 from pg_stat_activity
+        where datname = current_database() and wait_event_type = 'Lock'
+          and query like ${pattern}
+      ) as waiting
+    `);
+    if (waiting[0]?.waiting) return;
+    await Bun.sleep(10);
+  }
+  throw new Error("The worker did not reach the expected database lock");
+}
 
 describe("delivery", () => {
   test("sends only what is due, with the rendered message and provider id recorded", async () => {
@@ -420,6 +435,59 @@ describe("leases and supersession", () => {
     expect(stolen).toBe(0);
   });
 
+  test("renews the active lease while a provider is still sending", async () => {
+    await book();
+    let secondWorkerClaims = -1;
+    email.beforeDeliver = async () => {
+      const startedAt = clock.getTime();
+      clock = new Date(startedAt + 800);
+      for (let check = 0; check < 100; check++) {
+        const row = await byKind("confirmation");
+        if ((row?.lockedUntil?.getTime() ?? 0) > startedAt + 1000) break;
+        await Bun.sleep(10);
+      }
+      clock = new Date(startedAt + 1100);
+      const claimed = await claimDue(t.db, {
+        now: clock,
+        limit: 5,
+        visibilitySeconds: 1,
+        workerId: "other",
+        maxAttempts: 3,
+      });
+      secondWorkerClaims = claimed.filter((row) => row.channel === "email").length;
+    };
+    await worker("w1", { cfg: { visibilityTimeoutSeconds: 1 } }).runOnce();
+    expect(secondWorkerClaims).toBe(0);
+    expect((await byKind("confirmation"))?.status).toBe("sent");
+  });
+
+  test("does not deliver an email withdrawn while preparation is in flight", async () => {
+    await book();
+    const confirmation = await byKind("confirmation");
+    if (!confirmation) throw new Error("Missing fixture confirmation");
+    const locked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holding = t.db.transaction(async (tx) => {
+      await tx.execute(sql`lock table salon_settings in access exclusive mode`);
+      locked.resolve();
+      await release.promise;
+    });
+    await locked.promise;
+    const sending = worker("w1", { sms: null }).runOnce();
+    try {
+      await waitForBlockedQuery('%from "salon_settings"%');
+      await t.db
+        .update(reminder)
+        .set({ status: "cancelled", lockedUntil: null })
+        .where(eq(reminder.id, confirmation.id));
+    } finally {
+      release.resolve();
+      await Promise.all([holding, sending]);
+    }
+    expect(email.calls).toHaveLength(0);
+    expect((await byKind("confirmation"))?.status).toBe("cancelled");
+  });
+
   test("a failed send does not resurrect a reminder withdrawn by a reschedule", async () => {
     const appt = await book();
     clock = new Date("2026-03-08T12:00:00Z");
@@ -641,6 +709,92 @@ describe("WhatsApp appointment automations", () => {
     await sender.runOnce();
     expect(sends).toBe(1);
   });
+
+  test("honors consent withdrawn while dispatch waits for the sender lock", async () => {
+    const scheduled = await fixture(true);
+    let sends = 0;
+    const sender = whatsappWorker(async () => {
+      sends++;
+      return Response.json({ messages: [{ id: "wamid.fixture" }] });
+    });
+    const locked = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const holding = t.db.transaction(async (tx) => {
+      await tx.select().from(whatsappConnection).for("update");
+      locked.resolve();
+      await release.promise;
+    });
+    await locked.promise;
+    const sending = sender.runOnce();
+    try {
+      await waitForBlockedQuery('%from "whatsapp_connection"%for share%');
+      await t.db
+        .update(notificationPreference)
+        .set({ enabled: false })
+        .where(eq(notificationPreference.clientId, f.clientId));
+    } finally {
+      release.resolve();
+      await Promise.all([holding, sending]);
+    }
+    expect(sends).toBe(0);
+    expect((await rows()).find(({ id }) => id === scheduled.id)).toMatchObject({
+      status: "skipped",
+      lastError: "opted_out",
+      whatsappDispatchAt: null,
+    });
+  });
+
+  test("retries a confirmed Meta rate limit without retaining the dispatch marker", async () => {
+    const scheduled = await fixture(true);
+    let sends = 0;
+    const sender = whatsappWorker(async () => {
+      sends++;
+      return sends === 1
+        ? new Response(null, { status: 429 })
+        : Response.json({ messages: [{ id: "wamid.fixture" }] });
+    });
+    await sender.runOnce();
+    const retry = (await rows()).find(({ id }) => id === scheduled.id);
+    if (!retry) throw new Error("Missing fixture reminder");
+    expect(retry).toMatchObject({
+      status: "pending",
+      lastError: "whatsapp_rate_limited",
+      whatsappDispatchAt: null,
+    });
+    clock = retry.scheduledFor;
+    await sender.runOnce();
+    expect((await rows()).find(({ id }) => id === scheduled.id)?.status).toBe("sent");
+    expect(sends).toBe(2);
+  });
+
+  test.each([1, 3])(
+    "preserves unknown delivery after an expired marked claim (%i)",
+    async (attempts) => {
+      const scheduled = await fixture(true);
+      await t.db
+        .update(reminder)
+        .set({
+          status: "processing",
+          attempts,
+          lockedBy: "interrupted-worker",
+          lockedUntil: new Date(clock.getTime() - 1),
+          whatsappDispatchAt: new Date(clock.getTime() - 1000),
+        })
+        .where(eq(reminder.id, scheduled.id));
+      await t.db
+        .update(notificationPreference)
+        .set({ enabled: false })
+        .where(eq(notificationPreference.clientId, f.clientId));
+      const sender = whatsappWorker(async () => {
+        throw new Error("an ambiguous delivery must not be dispatched again");
+      });
+      await sender.runOnce();
+      expect((await rows()).find(({ id }) => id === scheduled.id)).toMatchObject({
+        status: "failed",
+        lastError: "whatsapp_delivery_unknown",
+      });
+    },
+  );
 
   test("disconnect cancels queued WhatsApp reminders and keeps the outcome of a send already started", async () => {
     const sending = await fixture(true);
