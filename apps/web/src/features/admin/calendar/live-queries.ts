@@ -1,5 +1,9 @@
 import type { SyncEntity, SyncLiveView } from "@sob/contracts";
-import { inventoryNumberingQueryKey, teamShiftWeekKey } from "~/lib/admin-queries";
+import {
+  calendarResourceQueryKey,
+  inventoryNumberingQueryKey,
+  teamShiftWeekKey,
+} from "~/lib/admin-queries";
 import { intakeAdminQueryKey, intakeHistoryQueryKey } from "~/lib/api/intake-endpoints";
 import { reviewRequestQueryKey } from "~/lib/api/review-endpoints";
 import {
@@ -94,7 +98,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     teamShiftWeekKey,
   ],
   commerce: [...commerce, ["admin", "calendar"], ["admin", "appointment-context"]],
-  waitlist: [["waitlist"]],
+  waitlist: [["waitlist"], calendarResourceQueryKey],
   inbox: [["calendar-inbox"]],
   review_requests: [reviewRequestQueryKey, moderation],
   portfolio: [["portfolio"]],

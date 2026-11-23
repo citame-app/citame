@@ -123,6 +123,23 @@ for (const scheme of ["light", "dark"] as const) {
         await expect(page.getByRole("button", { name: /Resource browser client/ })).toBeVisible();
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `calendar resource filter ${scheme}`);
+        await page.goto(`/admin/calendar?date=${date}&view=resources`);
+        const occupancy = page.getByRole("region", { name: "Recursos", exact: true });
+        await expect(occupancy.getByRole("columnheader", { name: new RegExp(name) })).toBeVisible();
+        await expect(occupancy.getByText("1/1 reservadas", { exact: true })).toBeVisible();
+        const bookingCard = occupancy.getByRole("button", {
+          name: "Resource browser client",
+          exact: true,
+        });
+        await bookingCard.click();
+        await expect(page.getByRole("dialog", { name: "Resource browser client" })).toBeVisible();
+        await page.keyboard.press("Escape");
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `resource occupancy ${scheme}`);
+        await page.screenshot({
+          path: `/tmp/sob-resource-occupancy-${scheme}-${test.info().project.name}.png`,
+          animations: "disabled",
+        });
       } finally {
         for (const booking of bookings)
           await page.request.patch(`/api/appointments/${booking.id}`, {

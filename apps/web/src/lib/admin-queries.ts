@@ -5,18 +5,20 @@ import { api } from "./api/instance";
 /** SSE refreshes the web calendar; focus/interval remain the fallback when disconnected. */
 export const CALENDAR_POLL_MS = 30_000;
 
+export const calendarResourceQueryKey = ["admin", "calendar", "resources"] as const;
+
 export interface CalendarParams {
   from: string;
   to: string;
   staffIds?: string[];
   accessScope?: string;
+  resourceOccupancy?: "1";
 }
 
 export const calendarQuery = (params: CalendarParams, endpoints = api) =>
   queryOptions({
     queryKey: [
-      "admin",
-      "calendar",
+      ...(params.resourceOccupancy ? calendarResourceQueryKey : ["admin", "calendar"]),
       params.from,
       params.to,
       (params.staffIds ?? []).join(","),

@@ -358,6 +358,69 @@ test("calendar resource summaries retain the allocated quantities", async () => 
     ).appointments.find((b) => b.id === a.id)?.resources,
   ).toEqual([{ resourceId: resource.id, name: "Treatment rooms", quantity: 2 }]);
 });
+test("resource occupancy exposes exact service windows and free pools in the full calendar scope", async () => {
+  const occupied = await pool(3);
+  const spare = await pool(1, "Spare room");
+  await requirements(occupied.id, 2);
+  const booking = await call(owner, "/appointments", "POST", {
+    staffId: f.anaId,
+    clientId: f.clientId,
+    serviceIds: [f.haircutId, f.colorId],
+    startsAt: "2026-03-09T12:00:00.000Z",
+  });
+  expect(booking.status, await booking.clone().text()).toBe(201);
+  const { id, version, endsAt } = (await booking.json()) as {
+    id: string;
+    version: number;
+    endsAt: string;
+  };
+  expect(endsAt).toBe("2026-03-09T14:30:00.000Z");
+  const day = "/appointments/calendar?from=2026-03-09T00:00:00.000Z&to=2026-03-10T00:00:00.000Z";
+  const read = async (staffId?: string) => {
+    const response = await call(
+      owner,
+      `${day}&resourceOccupancy=1${staffId ? `&staffIds=${staffId}` : ""}`,
+    );
+    expect(response.status, await response.clone().text()).toBe(200);
+    const { resourceOccupancy } =
+      (await response.json()) as import("@sob/contracts").CalendarResponse;
+    if (!resourceOccupancy) throw new Error("Missing resource occupancy");
+    return resourceOccupancy;
+  };
+  const window = {
+    startsAt: "2026-03-09T12:00:00.000Z",
+    endsAt: "2026-03-09T13:00:00.000Z",
+    quantity: 2,
+  };
+  expect(await read()).toEqual({
+    capturedAt: NOW.toISOString(),
+    pools: [
+      { id: spare.id, name: "Spare room", kind: "room", capacity: 1, active: true, windows: [] },
+      {
+        id: occupied.id,
+        name: "Treatment rooms",
+        kind: "room",
+        capacity: 3,
+        active: true,
+        windows: [{ ...window, appointmentId: id }],
+      },
+    ],
+  });
+  expect((await read(f.beaId)).pools[1]?.windows).toEqual([window]);
+  expect((await call(professional, `${day}&resourceOccupancy=1`)).status).toBe(403);
+  expect((await call(client, `${day}&resourceOccupancy=1`)).status).toBe(403);
+  expect(await (await call(owner, day)).json()).not.toHaveProperty("resourceOccupancy");
+  expect(
+    (await call(owner, `${day.replace("2026-03-10", "2026-03-12")}&resourceOccupancy=1`)).status,
+  ).toBe(400);
+
+  const cancelled = await call(owner, `/appointments/${id}`, "PATCH", {
+    status: "cancelled",
+    version,
+  });
+  expect(cancelled.status, await cancelled.clone().text()).toBe(200);
+  expect((await read()).pools[1]?.windows).toEqual([]);
+});
 test("deposit expiry releases shared capacity even when it cancels outside the regular appointment command", async () => {
   const resource = await pool();
   await requirements(resource.id);
@@ -430,7 +493,24 @@ test("waitlist offers hold shared capacity and expired offers release it before 
   expect(offer?.state).toBe("offered");
   expect((await book(f.beaId)).status).toBe(409);
   if (!offer) throw new Error("Missing offer");
+  const day =
+    "/appointments/calendar?from=2026-03-09T00:00:00.000Z&to=2026-03-10T00:00:00.000Z&resourceOccupancy=1";
+  const readWindows = async () => {
+    const response = await call(owner, day);
+    expect(response.status, await response.clone().text()).toBe(200);
+    const data = (await response.json()) as import("@sob/contracts").CalendarResponse;
+    return data.resourceOccupancy?.pools[0]?.windows;
+  };
+  expect(await readWindows()).toEqual([
+    {
+      startsAt: "2026-03-09T12:00:00.000Z",
+      endsAt: "2026-03-09T13:00:00.000Z",
+      holdExpiresAt: offer.expiresAt.toISOString(),
+      quantity: 1,
+    },
+  ]);
   await t.db.update(waitlistOffer).set({ expiresAt: NOW }).where(eq(waitlistOffer.id, offer.id));
+  expect(await readWindows()).toEqual([]);
   expect((await book(f.beaId)).status).toBe(201);
   const [released] = await t.db
     .select()

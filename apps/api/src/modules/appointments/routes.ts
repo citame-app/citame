@@ -34,6 +34,7 @@ import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
+import { calendarResourceOccupancy } from "../resources/reservations";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { listServices } from "../services/service";
 import { getCalendar } from "./calendar";
@@ -297,8 +298,19 @@ export function appointmentsRoutes({
       // Registered before any `/:id` route so "calendar" is never read as an id.
       .get("/calendar", async (c) => {
         const query = parseOrThrow(calendarQuerySchema, c.req.query());
-        const scope = authorizeCalendarQuery(c.get("principal"), query);
+        const principal = c.get("principal");
+        const scope = authorizeCalendarQuery(principal, query);
+        if (query.resourceOccupancy) requirePermission(principal, "allCalendars");
         const calendar = await getCalendar(db, query, scope);
+        if (query.resourceOccupancy && !booksyNativePreview) {
+          calendar.resourceOccupancy = await calendarResourceOccupancy(
+            db,
+            new Date(query.from),
+            new Date(query.to),
+            now(),
+            new Set(calendar.appointments.map(({ id }) => id)),
+          );
+        }
         if (query.booksyPaymentReview !== "1") {
           for (const entry of calendar.appointments) {
             if (entry.billingReviewReasons)

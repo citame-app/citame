@@ -22,7 +22,10 @@ export function validateCalendarSearch(
       ? [...new Set(raw.staff.split(",").filter((id) => idSchema.safeParse(id).success))]
       : [];
   return {
-    view: raw.view === "week" || raw.view === "month" || raw.view === "list" ? raw.view : "day",
+    view:
+      raw.view === "week" || raw.view === "month" || raw.view === "list" || raw.view === "resources"
+        ? raw.view
+        : "day",
     date: date.success ? date.data : today,
     ...(staff.length > 0 ? { staff: staff.join(",") } : {}),
     ...(raw.working === true || raw.working === "true" ? { working: true } : {}),

@@ -64,7 +64,7 @@ export function CalendarOverview({
   onDay,
   onOpen,
 }: {
-  view: Exclude<CalendarView, "day">;
+  view: Exclude<CalendarView, "day" | "resources">;
   dates: string[];
   date: string;
   today: string;
