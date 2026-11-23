@@ -182,6 +182,8 @@ pub struct UpdateServiceAnnotations {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookedResource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_id: Option<String>,
     pub name: String,
     pub quantity: u32,
 }

@@ -36,6 +36,7 @@ const lucia: CalendarAppointment = {
 
 let patchReply: { status: number; body: unknown };
 let stored: CalendarAppointment;
+let additionalAppointments: CalendarAppointment[];
 let requests: string[];
 let patches: unknown[];
 const json = (body: unknown, status = 200) =>
@@ -45,6 +46,7 @@ beforeEach(() => {
   requests = [];
   patches = [];
   stored = lucia;
+  additionalAppointments = [];
   patchReply = {
     status: 200,
     body: {
@@ -66,7 +68,7 @@ beforeEach(() => {
           { id: ANA, displayName: "Ana" },
           { id: BEA, displayName: "Bea" },
         ],
-        appointments: [stored],
+        appointments: [stored, ...additionalAppointments],
         timeOff: [],
         workingWindows: [
           {
@@ -123,6 +125,39 @@ const open = (props: Partial<Parameters<typeof CalendarView>[0]> = {}) => {
 };
 
 describe("CalendarView", () => {
+  test("booked resources with the same name filter by ID and clear independently", async () => {
+    const firstRoom = "0198f5a0-7b1c-7000-8000-000000000301";
+    const secondRoom = "0198f5a0-7b1c-7000-8000-000000000302";
+    stored = {
+      ...lucia,
+      resources: [{ resourceId: firstRoom, name: "Treatment room", quantity: 1 }],
+    };
+    additionalAppointments = [
+      {
+        ...lucia,
+        id: "0198f5a0-7b1c-7000-8000-0000000000a2",
+        clientName: "Marta",
+        resources: [{ resourceId: secondRoom, name: "Treatment room", quantity: 1 }],
+      },
+      {
+        ...lucia,
+        id: "0198f5a0-7b1c-7000-8000-0000000000a3",
+        clientName: "Nora",
+        resources: [{ name: "Treatment room", quantity: 1 }],
+      },
+    ];
+    open({ search: { date: "2026-03-09", view: "list" } });
+    const agenda = await screen.findByRole("region", { name: "List" });
+    const filter = await screen.findByRole("combobox", { name: "Booked resource" });
+    expect(within(filter).getAllByRole("option")).toHaveLength(3);
+    fireEvent.change(filter, { target: { value: secondRoom } });
+    expect(within(agenda).getByRole("button", { name: /Marta/ })).toBeInTheDocument();
+    expect(within(agenda).queryByRole("button", { name: /Lucia|Nora/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(within(agenda).getByRole("button", { name: /Lucia/ })).toBeInTheDocument();
+    expect(within(agenda).getByRole("button", { name: /Nora/ })).toBeInTheDocument();
+  });
+
   test("the week shows every professional and drills down to a professional's day", async () => {
     const { onSearchChange } = open({ search: { date: "2026-03-09", view: "week" } });
     const week = await screen.findByRole("region", { name: "Week" });

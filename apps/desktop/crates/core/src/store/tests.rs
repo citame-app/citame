@@ -902,7 +902,7 @@ fn booked_resources_refresh_existing_replicas_and_survive_offline_restart() {
 
         visit.seq = 2;
         visit.data.as_mut().unwrap()["resources"] =
-            json!([{ "name": "Treatment room", "quantity": 2 }]);
+            json!([{ "resourceId": "room-1", "name": "Treatment room", "quantity": 2 }]);
         store
             .apply_sync_page(&[visit], 2, true, true, &[], None)
             .unwrap();
@@ -912,6 +912,7 @@ fn booked_resources_refresh_existing_replicas_and_survive_offline_restart() {
     let visit = store.appointment(A1).unwrap().unwrap();
     assert_eq!(visit.version, 1);
     assert_eq!(visit.resources.len(), 1);
+    assert_eq!(visit.resources[0].resource_id.as_deref(), Some("room-1"));
     assert_eq!(visit.resources[0].name, "Treatment room");
     assert_eq!(visit.resources[0].quantity, 2);
 }

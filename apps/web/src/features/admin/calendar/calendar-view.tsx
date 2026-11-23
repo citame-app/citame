@@ -107,6 +107,7 @@ export function CalendarView({
   const { move, conflict, clearConflict } = useMoveAppointment();
   const [showCancelled, setShowCancelled] = useState(false);
   const [status, setStatus] = useState("all");
+  const [resource, setResource] = useState<{ id: string; name: string } | null>(null);
   const [text, setText] = useState("");
   const deferredText = useDeferredValue(text);
   const [openId, setOpenId] = useState<string | null>(search.appointment ?? null);
@@ -140,6 +141,27 @@ export function CalendarView({
     [calendar?.staff, calendar?.workingWindows, search.working, selectedIds, range.from, range.to],
   );
   const staffIds = useMemo(() => new Set(staff.map((member) => member.id)), [staff]);
+  const resourceOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    if (resource) names.set(resource.id, resource.name);
+    for (const appointment of calendar?.appointments ?? []) {
+      for (const booked of appointment.resources ?? []) {
+        if (booked.resourceId) names.set(booked.resourceId, booked.name);
+      }
+    }
+    const counts = new Map<string, number>();
+    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return [...names]
+      .sort(
+        ([idA, nameA], [idB, nameB]) =>
+          nameA.localeCompare(nameB, locale) || idA.localeCompare(idB),
+      )
+      .map(([id, name]) => ({
+        id,
+        name,
+        label: (counts.get(name) ?? 0) > 1 ? `${name} · ${id.slice(-8)}` : name,
+      }));
+  }, [calendar?.appointments, locale, resource]);
   const appointments = useMemo(() => {
     const needle = deferredText.trim().toLocaleLowerCase(locale);
     return (calendar?.appointments ?? []).filter(
@@ -147,10 +169,11 @@ export function CalendarView({
         staffIds.has(a.staffId) &&
         (showCancelled || a.status !== "cancelled") &&
         (status === "all" || a.status === status) &&
+        (!resource || a.resources?.some((booked) => booked.resourceId === resource.id)) &&
         (!needle ||
           `${a.clientName} ${a.serviceNames.join(" ")}`.toLocaleLowerCase(locale).includes(needle)),
     );
-  }, [calendar?.appointments, showCancelled, status, deferredText, locale, staffIds]);
+  }, [calendar?.appointments, showCancelled, status, resource, deferredText, locale, staffIds]);
   const isDay = search.view === "day";
   const index = useMemo(
     () => (isDay ? null : indexCalendar(appointments, timeZone)),
@@ -555,12 +578,37 @@ export function CalendarView({
                 setStatus("all");
                 setShowCancelled(false);
                 setText("");
+                setResource(null);
                 go({ staff: undefined, working: undefined });
               }}
             >
               {t("calendar.clearFilters")}
             </button>
           </section>
+          {resourceOptions.length > 0 && (
+            <section className="calendar-filter-section">
+              <h3>
+                <label htmlFor="calendar-resource">{t("calendar.resourceFilter")}</label>
+              </h3>
+              <select
+                id="calendar-resource"
+                className="calendar-filter-select"
+                value={resource?.id ?? ""}
+                onChange={(event) => {
+                  setResource(
+                    resourceOptions.find((option) => option.id === event.target.value) ?? null,
+                  );
+                }}
+              >
+                <option value="">{t("calendar.allResources")}</option>
+                {resourceOptions.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </section>
+          )}
           {serviceNames.length > 0 && (
             <section className="calendar-filter-section calendar-service-legend">
               <h3>{t("calendar.serviceColors")}</h3>

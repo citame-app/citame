@@ -458,6 +458,8 @@ keys! {
     CalendarShowCancelled => ("Show cancelled", "Mostrar canceladas"),
     CalendarHideCancelled => ("Hide cancelled", "Ocultar canceladas"),
     CalendarAllStaff => ("All staff", "Todo el equipo"),
+    CalendarBookedResource => ("Booked resource", "Recurso reservado"),
+    CalendarAllResources => ("All resources", "Todos los recursos"),
     CalendarBookedCount => ("Appointments: {n}", "Citas: {n}"),
     CalendarShowDay => ("See all {n} appointments", "Ver las {n} citas"),
     CalendarEmptyDay => ("No appointments", "Sin citas"),

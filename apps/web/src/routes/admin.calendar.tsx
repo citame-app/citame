@@ -77,6 +77,7 @@ function CalendarPage() {
         </p>
       )}
       <CalendarView
+        key={`${session.user.id}:${session.user.role}:${session.accessPreset}:${session.staffId}`}
         userId={session.user.id}
         search={{
           view: search.view ?? "day",

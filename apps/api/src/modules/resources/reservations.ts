@@ -408,7 +408,7 @@ export async function reassignAppointmentResources(tx: Tx, id: string, now: Date
     await repackFutureResources(tx, repack, now, { flexibleIds: own.map((r) => r.id) });
 }
 export async function calendarResources(db: Connection, appointmentIds: string[]) {
-  const result = new Map<string, { name: string; quantity: number }[]>();
+  const result = new Map<string, { resourceId: string; name: string; quantity: number }[]>();
   if (!appointmentIds.length) return result;
   const rows = await db
     .select({
@@ -432,9 +432,10 @@ export async function calendarResources(db: Connection, appointmentIds: string[]
   for (const [id, groups] of appointments) {
     result.set(
       id,
-      [...groups.values()].map((g) => ({
-        name: g.name,
-        quantity: Math.max(...g.counts.values()),
+      [...groups].map(([resourceId, group]) => ({
+        resourceId,
+        name: group.name,
+        quantity: Math.max(...group.counts.values()),
       })),
     );
   }

@@ -280,7 +280,9 @@ impl Root {
         let rows: Vec<_> = column
             .items
             .iter()
-            .filter(|item| filter.matches(item))
+            .filter(|item| {
+                filter.matches(item) && self.includes_calendar_resource(&item.appointment)
+            })
             .collect();
         let staff_id = column.staff.id.clone();
         let count = i18n::fill(

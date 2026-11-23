@@ -191,7 +191,10 @@ test("existing replicas receive confirmed resource quantities only for visible a
       id: allocated.id,
       entity: "appointment",
       op: "upsert",
-      data: { resources: [{ name: "Treatment room", quantity: 2 }], version: allocated.version },
+      data: {
+        resources: [{ resourceId: room.id, name: "Treatment room", quantity: 2 }],
+        version: allocated.version,
+      },
     });
   }
   expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
@@ -215,12 +218,12 @@ test("existing replicas receive confirmed resource quantities only for visible a
     (change) => change.id === allocated.id,
   );
   expect(updated).toMatchObject({ data: { version: allocated.version } });
-  expect(updated?.data).toHaveProperty("resources", [{ name: "Room 2", quantity: 2 }]);
+  expect(updated?.data).toHaveProperty("resources", [
+    { resourceId: room.id, name: "Room 2", quantity: 2 },
+  ]);
 
   const beforeRemoval = await head();
-  await t.db
-    .delete(resourceReservation)
-    .where(eq(resourceReservation.appointmentId, allocated.id));
+  await t.db.delete(resourceReservation).where(eq(resourceReservation.appointmentId, allocated.id));
   const cleared = (await pull(t, ana, { since: beforeRemoval })).changes.find(
     (change) => change.id === allocated.id,
   );
