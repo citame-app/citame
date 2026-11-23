@@ -659,6 +659,7 @@ keys! {
     CatalogTitle => ("Service catalogue", "Catálogo de servicios"),
     ResourceRequirements => ("Service resources", "Recursos por servicio"),
     AppointmentResources => ("Confirmed resources", "Recursos confirmados"),
+    AppointmentResourcesPrevious => ("Resources for the previous time", "Recursos de la franja anterior"),
     ResourceNone => ("No required resources", "Sin recursos obligatorios"),
     ResourceNoPools => ("There are no resources configured.", "No hay recursos configurados."),
     ResourceAll => ("Require every selected resource", "Requerir todos los recursos seleccionados"),

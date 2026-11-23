@@ -5,6 +5,7 @@ import {
   appointmentService,
   clientProfile,
   resourcePool,
+  resourceReservation,
   service,
   serviceResource,
   staffProfile,
@@ -178,7 +179,8 @@ test("existing replicas receive confirmed resource quantities only for visible a
     new URL("../../../../../packages/db/drizzle/0124_sync_booked_resources.sql", import.meta.url),
   ).text();
   await t.db.transaction(async (tx) => {
-    for (const statement of migration.split("--> statement-breakpoint")) {
+    // The fixture already installed the change trigger. Replay only the historical backfill.
+    for (const statement of migration.split("--> statement-breakpoint").slice(-2)) {
       await tx.execute(sql.raw(statement.trim()));
     }
   });
@@ -199,6 +201,31 @@ test("existing replicas receive confirmed resource quantities only for visible a
   const unrelated = full.changes.find((change) => change.id === unallocated.id);
   expect(unrelated?.op).toBe("upsert");
   expect(unrelated?.data).not.toHaveProperty("resources");
+
+  const beforeRename = await head();
+  const renamed = await call(owner, "PUT", `/admin/resources/${room.id}`, {
+    name: "Room 2",
+    kind: "room",
+    capacity: 2,
+    active: true,
+    version: room.version,
+  });
+  expect(renamed.status).toBe(200);
+  const updated = (await pull(t, ana, { since: beforeRename })).changes.find(
+    (change) => change.id === allocated.id,
+  );
+  expect(updated).toMatchObject({ data: { version: allocated.version } });
+  expect(updated?.data).toHaveProperty("resources", [{ name: "Room 2", quantity: 2 }]);
+
+  const beforeRemoval = await head();
+  await t.db
+    .delete(resourceReservation)
+    .where(eq(resourceReservation.appointmentId, allocated.id));
+  const cleared = (await pull(t, ana, { since: beforeRemoval })).changes.find(
+    (change) => change.id === allocated.id,
+  );
+  expect(cleared).toMatchObject({ op: "upsert", data: { version: allocated.version } });
+  expect(cleared?.data).not.toHaveProperty("resources");
 });
 
 test("billing holds and verified prices replicate without exposing the evidence reference or notes", async () => {

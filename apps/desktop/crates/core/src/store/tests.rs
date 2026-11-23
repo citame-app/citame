@@ -461,7 +461,7 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
 }
 
 #[test]
-fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
+fn upgrading_calendar_notices_and_resources_keeps_unsent_work_and_replays_silently() {
     let mut conn = Connection::open_in_memory().unwrap();
     for sql in &MIGRATIONS[..9] {
         conn.execute_batch(sql).unwrap();
@@ -477,6 +477,11 @@ fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
     tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','1')", [])
         .unwrap();
     tx.execute(
+        "INSERT INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
+        [],
+    )
+    .unwrap();
+    tx.execute(
         "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
          VALUES ('queued','2026-11-21T09:00:00Z','appointment.cancel',?1,'{}')",
         [A1],
@@ -484,7 +489,13 @@ fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
     .unwrap();
     tx.commit().unwrap();
     let store = Store::init(conn).unwrap();
-    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.cursor().unwrap(), 0);
+    assert!(
+        store
+            .get_meta("calendar_snapshot_complete")
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
     let notices = store.booking_notices_after(0).unwrap();
     assert_eq!(notices[0].1, CalendarNoticeKind::New);

@@ -3451,17 +3451,29 @@ impl Root {
             })
             .when_some(current.as_ref(), |body, appointment| {
                 body.when(!appointment.resources.is_empty(), |body| {
+                    let moved_locally = pending
+                        && self
+                            .svc
+                            .store
+                            .appointment(&appointment.id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|saved| {
+                                saved.starts_at != appointment.starts_at
+                                    || saved.staff_id != appointment.staff_id
+                            });
+                    let label = if moved_locally {
+                        Key::AppointmentResourcesPrevious
+                    } else {
+                        Key::AppointmentResources
+                    };
                     body.child(
                         div()
                             .flex()
                             .flex_col()
                             .gap_1()
                             .text_sm()
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(self.t(Key::AppointmentResources)),
-                            )
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(self.t(label)))
                             .children(appointment.resources.iter().map(|resource| {
                                 div().child(SharedString::from(format!(
                                     "{} × {}",

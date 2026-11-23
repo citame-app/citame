@@ -162,6 +162,12 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX local_calendar_ack_version ON local_calendar_ack(appointment_id,version);
     "#,
+    // Existing binaries can consume the server backfill before saving this projection.
+    // Replay the current snapshot silently while keeping the offline mirror and outbox.
+    r#"
+    UPDATE meta SET value = '0' WHERE key = 'cursor' AND EXISTS (SELECT 1 FROM appointment);
+    DELETE FROM meta WHERE key = 'calendar_snapshot_complete' AND EXISTS (SELECT 1 FROM appointment);
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
