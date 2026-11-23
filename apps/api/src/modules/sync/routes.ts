@@ -16,7 +16,13 @@ import { pushMutations } from "./push";
 export function syncRoutes(
   { db, config, now = () => new Date(), syncHeartbeatMs = 15_000, metrics }: AppDeps,
   hub: SyncHub,
-  streamLimit: MiddlewareHandler,
+  {
+    pullAccountLimit,
+    streamLimit,
+  }: {
+    pullAccountLimit: MiddlewareHandler<AppEnv>;
+    streamLimit: MiddlewareHandler;
+  },
   desktop?: TokenVerifier,
 ) {
   const generation = config.syncReplicaGeneration;
@@ -43,7 +49,7 @@ export function syncRoutes(
         }
         return c.json(response);
       })
-      .get("/pull", async (c) => {
+      .get("/pull", pullAccountLimit, async (c) => {
         const query = parseOrThrow(syncPullQuerySchema, c.req.query());
         const response = await pullChanges(db, c.get("principal"), query);
         metrics?.syncPull.inc();

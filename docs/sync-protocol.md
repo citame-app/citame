@@ -301,6 +301,7 @@ Rules:
 - Within one response a row appears at most once (latest entry wins).
 - `op: "delete"` has `data: null`: delete the local row (a no-op if absent). A tombstone also means "no longer visible to you" (for example an appointment moved to another staff member's calendar).
 - Store `nextCursor` and send it as the next `since`. It never decreases. If `hasMore` is true pull again immediately; `changes` may be empty while `hasMore` is true.
+- On HTTP 429, wait for `Retry-After` and retry the same cursor. Pulls have separate network-address and verified-account quotas. All devices and sessions for the same account share its quota.
 - The optional `refresh` list contains online view names (`commerce`, `waitlist`, `inbox`, `review_requests`, `intake_forms`, `intake_records`, `promotions`). A page can contain only these notifications and still advance the cursor. Reload each view through its regular authenticated endpoint. The owner-only `email_delivery`, `whatsapp_desk` and `whatsapp_settings` topics require `emailDelivery=1`, `whatsappDesk=1` and `whatsappSettings=1`, respectively. They carry no provider details or credentials. The list carries no row data. Financial records, review invitations and intake forms and answers stay out of the offline replica. Persist the notifications and cursor together so a retry cannot skip them.
 - `409 invalid_state` means your cursor is ahead of the server. Drop the local mirror and resync from `since=0`. Check the returned generation before applying any page.
 - Staff only receive their own calendar's appointments, working hours and time off (everything else arrives as tombstones). The `userId` of `staff` rows is `null` for staff callers.
@@ -333,7 +334,7 @@ data: {"seq":415}
 | 401    | `unauthorized`     | No session                                                                         |
 | 403    | `forbidden`        | Role `client`                                                                      |
 | 409    | `invalid_state`    | Pull cursor ahead of the server                                                    |
-| 429    | `rate_limited`     | Global or stream rate limit; see `Retry-After`                                     |
+| 429    | `rate_limited`     | Global, pull or stream rate limit. See `Retry-After`.                              |
 | 500    | `internal_error`   | Unexpected; retry the same batch with backoff                                      |
 
 ## Local schema hints

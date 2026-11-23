@@ -4,7 +4,7 @@ import type { RedisClient } from "bun";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth/auth";
-import { requireAuth } from "./auth/principal";
+import { type AppEnv, requireAuth } from "./auth/principal";
 import { valkeySecondaryStorage } from "./auth/secondary-storage";
 import type { AppConfig } from "./config";
 import { DomainError } from "./errors";
@@ -275,10 +275,28 @@ export function createApp(input: AppDeps): App {
   // Moderate limit for everything else, strict one for credential endpoints (brute force).
   // The global limiter fails open (a Valkey outage must not take public browsing down); the
   // auth limiter fails closed.
-  app.use(
-    "*",
-    rateLimit({ limiter, scope: "global", rule: limits.global, trustProxy, failOpen: true }),
-  );
+  const globalLimit = rateLimit({
+    limiter,
+    scope: "global",
+    rule: limits.global,
+    trustProxy,
+    failOpen: true,
+  });
+  const pullNetworkLimit = rateLimit({
+    limiter,
+    scope: "sync-pull-network",
+    rule: limits.syncPullNetwork,
+    trustProxy,
+    failOpen: true,
+  });
+  app.use("*", (c, next) => {
+    const { method, path } = c.req;
+    // Catch unauthenticated pulls too, without charging other routes on the shared network.
+    if (path === "/sync/pull" && (method === "GET" || method === "HEAD")) {
+      return pullNetworkLimit(c, next);
+    }
+    return globalLimit(c, next);
+  });
   // After every mutating request, tell connected sync clients that the change log moved. The
   // log is written inside the request's own transaction, so by now the change is committed.
   app.use("*", async (c, next) => {
@@ -446,7 +464,14 @@ export function createApp(input: AppDeps): App {
     trustProxy,
     failOpen: true,
   });
-  app.route("/sync", syncRoutes(deps, hub, streamLimit, desktop.verifier));
+  const pullAccountLimit = rateLimit<AppEnv>({
+    limiter,
+    scope: "sync-pull-account",
+    rule: limits.syncPullAccount,
+    failOpen: true,
+    identity: (c) => c.get("principal").userId,
+  });
+  app.route("/sync", syncRoutes(deps, hub, { pullAccountLimit, streamLimit }, desktop.verifier));
 
   return app;
 }

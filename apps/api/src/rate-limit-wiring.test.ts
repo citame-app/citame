@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { errorResponseSchema } from "@sob/contracts";
-import { PASSWORD, setupApiTest, signUp } from "../test/helpers";
+import { actor, PASSWORD, setupApiTest, signIn as signInAccount, signUp } from "../test/helpers";
 import { createApp } from "./app";
 
 const GLOBAL_MAX = 8;
@@ -16,6 +16,8 @@ beforeAll(async () => {
       RATE_LIMIT_AUTH_MAX: String(AUTH_MAX),
       RATE_LIMIT_AUTH_WINDOW_SECONDS: "60",
       TRUST_PROXY: "true",
+      SYNC_PULL_RATE_LIMIT_NETWORK_MAX: "12",
+      SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX: "3",
     },
   });
 });
@@ -109,6 +111,58 @@ describe("global limit", () => {
       await t.app.request("/services", { headers: from("7.7.7.7") });
     expect((await t.app.request("/services", { headers: from("7.7.7.7") })).status).toBe(429);
     expect((await t.app.request("/services", { headers: from("7.7.7.6") })).status).toBe(200);
+  });
+});
+
+describe("sync pull limits", () => {
+  const pull = (ip: string, cookie?: string, method = "GET") =>
+    t.app.request("/sync/pull?since=0&limit=200", {
+      method,
+      headers: { ...from(ip), ...(cookie ? { cookie } : {}) },
+    });
+
+  test("staff on one network have individual budgets across sessions and addresses", async () => {
+    const first = await actor(t, "staff", "first-calendar@example.com");
+    const second = await actor(t, "staff", "second-calendar@example.com");
+    const otherSession = await signInAccount(t.app, first.email);
+    const ip = "7.7.7.5";
+    expect((await pull(ip, first.cookie)).status).toBe(200);
+    expect((await pull(ip, otherSession.cookie, "HEAD")).status).toBe(200);
+    expect((await pull(ip, first.cookie)).status).toBe(200);
+    const blocked = await pull("7.7.7.4", otherSession.cookie);
+    expect(blocked.status).toBe(429);
+    expect(errorResponseSchema.parse(await blocked.json()).error.code).toBe("rate_limited");
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    expect((await pull(ip, second.cookie)).status).toBe(200);
+    t.clock.advance(60);
+    expect((await pull(ip, first.cookie)).status).toBe(200);
+  });
+
+  test("pull has a separate network cap even before authentication and leaves other routes available", async () => {
+    const staff = await actor(t, "staff", "calendar@example.com");
+    const customer = await actor(t, "client", "customer-calendar@example.com");
+    const ip = "7.7.7.5";
+    expect((await pull(ip, staff.cookie)).status).toBe(200);
+    expect((await pull(ip, customer.cookie)).status).toBe(403);
+    for (let i = 0; i < 10; i++) expect((await pull(ip)).status).toBe(401);
+    const blocked = await pull(ip, staff.cookie);
+    expect(blocked.status).toBe(429);
+    expect(errorResponseSchema.parse(await blocked.json()).error.code).toBe("rate_limited");
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    expect((await t.app.request("/services", { headers: from(ip) })).status).toBe(200);
+    const login = await t.app.request("/api/auth/sign-in/email", {
+      method: "POST",
+      headers: { ...from(ip), "content-type": "application/json", origin: "http://localhost:3000" },
+      body: JSON.stringify({ email: staff.email, password: PASSWORD }),
+    });
+    expect(login.status).toBe(200);
+    const invalidPush = await t.app.request("/sync/push", {
+      method: "POST",
+      headers: { ...from(ip), "content-type": "application/json", cookie: staff.cookie },
+      body: "{}",
+    });
+    expect(invalidPush.status).toBe(400);
+    expect((await pull("7.7.7.4", staff.cookie)).status).toBe(200);
   });
 });
 
