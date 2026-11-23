@@ -523,6 +523,45 @@ fn upgrading_booked_resources_preserves_the_live_cursor_notices_and_unsent_work(
 }
 
 #[test]
+fn upgrading_allocations_saved_by_name_repairs_the_existing_appointment() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    let previous_schema = MIGRATIONS.len() - 1;
+    for sql in &MIGRATIONS[..previous_schema] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", previous_schema as i64)
+        .unwrap();
+    let mut visit = appt_change(1, A1, 1);
+    visit.data.as_mut().unwrap()["resources"] = json!([{ "name": "Room", "quantity": 2 }]);
+    let tx = conn.transaction().unwrap();
+    apply_change(&tx, &visit, false).unwrap();
+    tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','1')", [])
+        .unwrap();
+    tx.commit().unwrap();
+
+    let mut store = Store::init(conn).unwrap();
+    assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0].name,
+        "Room"
+    );
+
+    visit.data.as_mut().unwrap()["resources"] =
+        json!([{ "resourceId": "room-1", "name": "Room", "quantity": 2 }]);
+    store
+        .apply_booked_resource_page(&[visit], 1, false, INITIAL_GENERATION)
+        .unwrap();
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0]
+            .resource_id
+            .as_deref(),
+        Some("room-1")
+    );
+}
+
+#[test]
 fn booking_notices_skip_snapshot_import_and_local_echo_and_follow_visibility() {
     let mut store = Store::open_in_memory().unwrap();
     store

@@ -465,6 +465,8 @@ pub struct PullResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_groups: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booked_resource_ids: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_role: Option<String>,

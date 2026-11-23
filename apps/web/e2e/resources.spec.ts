@@ -12,7 +12,6 @@ for (const scheme of ["light", "dark"] as const) {
       const bookings: { id: string; version: number }[] = [];
       let resourceId: string | undefined;
       await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
-      await page.getByRole("button", { name: "Resources", exact: true }).click();
       await expect(page).toHaveURL(/\/admin\/services$/);
       const catalog = await (await page.request.get("/api/admin/services")).json();
       const haircut = catalog.services.find((s: { id: string }) => s.id === fixture.haircut);

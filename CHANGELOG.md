@@ -54,7 +54,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Weekly team shifts in the web admin with dated overrides, absence intervals and links to individual schedules. [Scheduling guide](docs/date-shifts.md).
 - Native weekly team shifts read the offline replica, mark pending blocks and open the selected professional's calendar. Dates and names remain visible while scrolling, and a date field jumps directly to a week.
-- Desktop appointment details show confirmed rooms and equipment after sync, including when reopened offline.
+- Desktop appointment details show confirmed rooms and equipment after sync, including when reopened offline. Web and Desktop calendars can filter appointments by the resource reserved.
 
 - Single-location checkout, cash sessions, receipt/refund reconciliation, retail stock and staff commissions; configurable deposits and a hosted Redsys card/Bizum adapter, with optional explicitly consented membership renewal.
 - Gift cards, prepaid plans, memberships, loyalty points and bounded promotion codes. Customer booking reviews bind the offer, discounted total and deposit; uncertain requests recover their original visit.

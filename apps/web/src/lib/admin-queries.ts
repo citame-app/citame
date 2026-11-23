@@ -9,11 +9,19 @@ export interface CalendarParams {
   from: string;
   to: string;
   staffIds?: string[];
+  accessScope?: string;
 }
 
 export const calendarQuery = (params: CalendarParams, endpoints = api) =>
   queryOptions({
-    queryKey: ["admin", "calendar", params.from, params.to, (params.staffIds ?? []).join(",")],
+    queryKey: [
+      "admin",
+      "calendar",
+      params.from,
+      params.to,
+      (params.staffIds ?? []).join(","),
+      params.accessScope,
+    ],
     queryFn: ({ signal }) => endpoints().admin.calendar(params, signal),
     staleTime: 5_000,
     refetchInterval: CALENDAR_POLL_MS,

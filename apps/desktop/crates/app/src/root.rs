@@ -361,7 +361,7 @@ pub struct Root {
     overview_status: Option<AppointmentStatus>,
     overview_show_cancelled: bool,
     calendar_resource: Option<(String, String)>,
-    calendar_resources: OnceCell<Vec<(String, String, String)>>,
+    calendar_resources: OnceCell<Vec<calendar_overview::ResourceOption>>,
 
     calendar_layout: OnceCell<CalendarLayout>,
     slot_drag: Option<slots::SlotDrag>,
@@ -974,6 +974,7 @@ impl Root {
 
     fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
         self.calendar_layout.take();
+        self.calendar_resources.take();
         self.week_staff_id = id;
         if self.team_calendar_visible() {
             self.week_layout = team_calendar::WeekLayout::Timeline;

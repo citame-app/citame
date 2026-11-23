@@ -96,6 +96,7 @@ impl Root {
                             },
                             cx.listener(|root, _, _, cx| {
                                 root.week_working_only = !root.week_working_only;
+                                root.calendar_resources.take();
                                 cx.notify();
                             }),
                         )

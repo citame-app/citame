@@ -712,6 +712,8 @@ export const syncPullResponseSchema = z.object({
     .optional(),
   /** Confirms the requested client groups projection for callers with directory access. */
   clientGroups: z.literal(true).optional(),
+  /** Confirms that the booked-resource projection carries stable resource IDs. */
+  bookedResourceIds: z.literal(true).optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
   portfolioUploads: z.boolean().optional(),

@@ -168,6 +168,15 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO meta (key, value)
     SELECT 'booked_resources_cursor', '0' WHERE EXISTS (SELECT 1 FROM appointment);
     "#,
+    // Replicas that already synced allocations by name must fetch their stable IDs.
+    r#"
+    INSERT INTO meta (key, value)
+    SELECT 'booked_resources_cursor', '0' WHERE EXISTS (
+        SELECT 1 FROM appointment, json_each(appointment.json, '$.resources') AS resource
+         WHERE json_type(resource.value, '$.resourceId') IS NULL
+    )
+    ON CONFLICT(key) DO UPDATE SET value = '0';
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -965,7 +974,12 @@ impl Store {
                 let resources: Vec<BookedResource> = serde_json::from_value(resources.clone())?;
                 updated += store.conn.execute(
                     "UPDATE appointment SET json = json_set(json, '$.resources', json(?2))
-                     WHERE id = ?1 AND version = ?3 AND json_type(json, '$.resources') IS NULL",
+                     WHERE id = ?1 AND version = ?3 AND (
+                         json_type(json, '$.resources') IS NULL OR EXISTS (
+                             SELECT 1 FROM json_each(appointment.json, '$.resources') AS resource
+                             WHERE json_type(resource.value, '$.resourceId') IS NULL
+                         )
+                     )",
                     params![change.id, serde_json::to_string(&resources)?, version],
                 )?;
             }

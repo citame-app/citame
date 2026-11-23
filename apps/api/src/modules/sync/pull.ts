@@ -424,6 +424,7 @@ export async function pullChanges(
     headSeq: Math.max(head, nextCursor),
     timeOffScope,
     clientDirectory: permissions.clients,
+    bookedResourceIds: true,
     giftCardsScope: giftReplicaScope(principal),
     ...(query.clientGroups && permissions.clients ? { clientGroups: true as const } : {}),
     viewerRole: principal.role === "owner" ? "owner" : "staff",

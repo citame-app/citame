@@ -502,6 +502,7 @@ describe("snapshot (since=0)", () => {
     expect(page).toEqual({
       generation: "initial",
       giftCardsScope,
+      bookedResourceIds: true,
       changes: [],
       nextCursor: h,
       hasMore: false,

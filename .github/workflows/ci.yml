@@ -153,6 +153,8 @@ jobs:
           exit 1
       - run: bunx playwright install --with-deps chromium
         working-directory: apps/web
+      - name: Calendar resource filtering and shared capacity
+        run: bun run --cwd apps/web e2e:resources --output test-results/resources
       - run: bun run --cwd apps/web e2e
         env:
           E2E_OWNER_EMAIL: ci-owner@example.com

@@ -84,6 +84,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         client_directory: None,
         gift_cards_scope: None,
         client_groups: None,
+        booked_resource_ids: None,
         calendar_scope: None,
         viewer_role: None,
         viewer_edit_catalogue: None,
@@ -96,6 +97,32 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         viewer_read_inventory: None,
         head_seq: since,
     })
+}
+
+#[test]
+fn resource_replay_waits_for_a_server_that_supplies_ids() {
+    let mut store = Store::open_in_memory().unwrap();
+    store.set_meta("booked_resources_cursor", "0").unwrap();
+    store.set_meta("cursor", "1").unwrap();
+    let old = Fake::new(Box::new(applied_all), Box::new(empty_pull));
+    pull_all(&mut store, &old).unwrap();
+    assert_eq!(old.log(), ["pull:1"]);
+    assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+
+    let upgraded = Fake::new(
+        Box::new(applied_all),
+        Box::new(|since, limit| {
+            let mut page = empty_pull(since, limit)?;
+            page.head_seq = 1;
+            page.next_cursor = 1;
+            page.booked_resource_ids = Some(true);
+            Ok(page)
+        }),
+    );
+    pull_all(&mut store, &upgraded).unwrap();
+    assert_eq!(upgraded.log(), ["pull:1", "pull:0"]);
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
 }
 
 fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
@@ -449,6 +476,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             client_directory: None,
             gift_cards_scope: None,
             client_groups: None,
+            booked_resource_ids: None,
             calendar_scope: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
@@ -580,6 +608,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 client_directory: Some(false),
                 gift_cards_scope: None,
                 client_groups: None,
+                booked_resource_ids: None,
                 calendar_scope: Some("staff".into()),
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -648,6 +677,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 client_directory: None,
                 gift_cards_scope: None,
                 client_groups: None,
+                booked_resource_ids: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -728,6 +758,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 client_directory: None,
                 gift_cards_scope: None,
                 client_groups: None,
+                booked_resource_ids: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -764,6 +795,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 client_directory: None,
                 gift_cards_scope: None,
                 client_groups: None,
+                booked_resource_ids: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
@@ -916,6 +948,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 client_directory: None,
                 gift_cards_scope: None,
                 client_groups: None,
+                booked_resource_ids: None,
                 calendar_scope: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
