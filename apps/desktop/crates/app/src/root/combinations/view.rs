@@ -91,7 +91,9 @@ impl Root {
                         );
                 }
                 if desk.catalogue.is_none() {
-                    return view.child(self.t(Key::CombinationNeedsSync));
+                    return view
+                        .child(self.t(Key::CombinationNeedsSync))
+                        .child(self.render_combination_list(desk, cx));
                 }
                 view.when(!desk.at_limit(), |view| {
                     view.child(self.button(
@@ -122,7 +124,8 @@ impl Root {
             .filter(|row| !desk.pending.iter().any(|pending| pending.edit.id == row.id));
         let pending = desk.pending.iter().map(|row| {
             let id = row.edit.id.clone();
-            let editable = !row.submitted
+            let editable = desk.catalogue.is_some()
+                && !row.submitted
                 && desk.current(&id).map(|current| current.version) == row.edit.version;
             self.combination_summary(&row.edit.proposed, Key::CatalogPending)
                 .when(editable, |item| {
@@ -465,9 +468,8 @@ impl Root {
         let current = view.and_then(|view| editor.current(view));
         let can_review = draft.is_some() && view.is_some_and(|view| editor.can_review(view));
         let overlaps = current.zip(draft).is_some_and(|(row, draft)| {
-            !editor.has_legacy_terms(row)
-                && draft.rebase(&editor.original, &row.draft, true)
-                    != draft.rebase(&editor.original, &row.draft, false)
+            draft.rebase(&editor.original, &row.draft, true)
+                != draft.rebase(&editor.original, &row.draft, false)
         });
         div()
             .flex()

@@ -110,7 +110,7 @@ impl CombinationDraft {
             (&self.service_ids, &self.fixed_terms),
             (&reviewed.service_ids, &reviewed.fixed_terms),
             (&current.service_ids, &current.fixed_terms),
-            keep_overlaps,
+            keep_overlaps && !(self.fixed_terms.is_none() && reviewed.lacked_fixed_terms(current)),
         );
         Self {
             name: choose(&self.name, &reviewed.name, &current.name, keep_overlaps).clone(),
@@ -234,6 +234,18 @@ pub struct ManagedCombination {
     pub draft: CombinationDraft,
 }
 
+impl ManagedCombination {
+    pub fn can_review_rejected_version(
+        &self,
+        version: u64,
+        reviewed: Option<&CombinationDraft>,
+    ) -> bool {
+        self.version > version
+            || (self.version == version
+                && reviewed.is_some_and(|draft| draft.lacked_fixed_terms(&self.draft)))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct CombinationCatalogue {
     pub generation: String,
@@ -266,6 +278,15 @@ pub struct PendingCombination {
     pub proposed: CombinationDraft,
     #[serde(rename = "_reviewed", default, skip_serializing_if = "Option::is_none")]
     pub reviewed: Option<CombinationDraft>,
+}
+
+impl PendingCombination {
+    pub fn restore_reviewed_terms(&self, current: &CombinationDraft) -> Option<CombinationDraft> {
+        let reviewed = self.reviewed.as_ref().filter(|reviewed| {
+            self.proposed.fixed_terms.is_none() && reviewed.lacked_fixed_terms(current)
+        })?;
+        Some(self.proposed.rebase(reviewed, current, false))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,9 +323,20 @@ mod tests {
             local.rebase(&reviewed, &cloud, false),
             CombinationDraft {
                 name: local.name,
-                ..cloud
+                ..cloud.clone()
             }
         );
+        let legacy_review = CombinationDraft {
+            fixed_terms: None,
+            ..reviewed
+        };
+        let mut legacy = legacy_review.clone();
+        legacy.service_ids.push("third".into());
+        legacy.name = "Legacy edit".into();
+        let safe = legacy.rebase(&legacy_review, &cloud, true);
+        assert_eq!(safe.service_ids, cloud.service_ids);
+        assert_eq!(safe.fixed_terms, cloud.fixed_terms);
+        assert_eq!(safe.name, legacy.name);
     }
 
     #[test]

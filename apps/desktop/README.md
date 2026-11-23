@@ -57,7 +57,7 @@ The same editor updates variant labels and add-on eligibility. Open a pending se
 
 **Management → Treatment combinations** creates and edits ordered treatments and add-ons, multiline descriptions and online availability. Once the catalogue has synced, drafts can be saved offline and amended before submission. Review a rejected draft from **Sync conflicts**. Confirmation uses the same service and staff eligibility rules as Cloud.
 
-For fixed-price combinations, set the EUR amount for each treatment and choose the eligible professionals and booking visibility. Moving a treatment keeps its amount attached. A restored or concurrent edit reviews the treatment order and fixed terms together. Archive a staff-only combination before switching it to catalogue pricing.
+For fixed-price combinations, set the EUR amount for each treatment and choose the eligible professionals and booking visibility. Moving a treatment keeps its amount attached. A restored or concurrent edit reviews the treatment order and fixed terms together. Archive a staff-only combination before switching it to catalogue pricing. The first sync after upgrading refreshes the catalogue before enabling offline combination management.
 
 **Management → Inventory** filters products by name or reference, category, brand, sale availability, catalogue status and low stock. Choose the order and page size in **Filters and sort**. **Export CSV** downloads every matching product in that order. The summary covers the filtered catalogue. Cost totals and product costs appear only when the account has cost access.
 

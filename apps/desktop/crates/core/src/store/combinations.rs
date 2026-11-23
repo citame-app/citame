@@ -159,14 +159,8 @@ impl Store {
                 let restored = conflict.requires_restored_review();
                 if conflict.reason == "conflict" && !restored {
                     let edit = serde_json::from_value::<PendingCombination>(conflict.payload)?;
-                    if current.is_none_or(|row| {
-                        edit.version.is_none_or(|old| {
-                            let legacy_snapshot = row.version == old
-                                && edit.reviewed.as_ref().is_some_and(|reviewed| {
-                                    reviewed.lacked_fixed_terms(&row.draft)
-                                });
-                            row.version <= old && !legacy_snapshot
-                        })
+                    if !current.zip(edit.version).is_some_and(|(row, old)| {
+                        row.can_review_rejected_version(old, edit.reviewed.as_ref())
                     }) {
                         return Err(CoreError::CatalogueVersionChanged);
                     }
@@ -180,6 +174,19 @@ impl Store {
                     ));
                 }
                 let previous_terms = current.and_then(|row| row.draft.fixed_terms.as_ref());
+                if proposed.fixed_terms.is_none()
+                    && current.zip(pending_edit).is_some_and(|(row, pending)| {
+                        pending
+                            .edit
+                            .reviewed
+                            .as_ref()
+                            .is_some_and(|draft| draft.lacked_fixed_terms(&row.draft))
+                    })
+                {
+                    return Err(CoreError::Invalid(
+                        "Save the reviewed pricing before removing it".into(),
+                    ));
+                }
                 let selection_changed =
                     current.is_none_or(|row| row.draft.service_ids != proposed.service_ids);
                 let terms_changed = previous_terms != proposed.fixed_terms.as_ref();

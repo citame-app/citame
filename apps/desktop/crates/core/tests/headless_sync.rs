@@ -1099,6 +1099,19 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
             serde_json::to_value(&pending).unwrap(),
         )
         .unwrap();
+    let reviewed_proposal = pending.restore_reviewed_terms(&previous.draft).unwrap();
+    assert_eq!(reviewed_proposal.fixed_terms, previous.draft.fixed_terms);
+    assert!(matches!(
+        store.queue_combination(
+            &catalogue.generation,
+            &id,
+            Some(previous.version),
+            pending.proposed.clone(),
+            Some(&outdated.mutation_id),
+            None,
+        ),
+        Err(sob_core::error::CoreError::Invalid(_))
+    ));
     assert_eq!(
         sync::sync_cycle(&mut store, &*device.transport)
             .unwrap()
@@ -1116,7 +1129,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
     );
     let fixed = pending
         .proposed
-        .rebase(pending.reviewed.as_ref().unwrap(), &previous.draft, false);
+        .rebase(pending.reviewed.as_ref().unwrap(), &previous.draft, true);
     assert_eq!(fixed.service_ids, previous.draft.service_ids);
     assert_eq!(fixed.fixed_terms, previous.draft.fixed_terms);
     assert_eq!(fixed.name, "Legacy offline name");

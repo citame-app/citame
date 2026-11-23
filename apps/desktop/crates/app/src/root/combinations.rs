@@ -140,10 +140,6 @@ impl Editor {
             })
     }
 
-    fn has_legacy_terms(&self, current: &ManagedCombination) -> bool {
-        self.version == Some(current.version) && self.original.lacked_fixed_terms(&current.draft)
-    }
-
     fn can_review(&self, view: &CombinationCatalogue) -> bool {
         let current = self.current(view);
         let changed_history = self.generation != view.generation;
@@ -157,8 +153,7 @@ impl Editor {
                     .and_then(|row| row.minimum_version)
                     .is_none_or(|version| {
                         current.is_some_and(|row| {
-                            row.version > version
-                                || (row.version == version && self.has_legacy_terms(row))
+                            row.can_review_rejected_version(version, Some(&self.original))
                         })
                     }))
     }
@@ -329,7 +324,7 @@ impl Root {
         if desk.catalogue.is_none() || (id.is_none() && desk.at_limit()) {
             return;
         }
-        let (id, draft, baseline, pending_id) = match id {
+        let (id, draft, baseline, pending_id, replaced_draft) = match id {
             Some(id) => {
                 let current = desk.current(id);
                 let baseline = current.map(|row| (row.draft.clone(), row.version));
@@ -338,21 +333,34 @@ impl Root {
                     if pending.submitted || pending.edit.version != current.map(|row| row.version) {
                         return;
                     }
+                    let draft =
+                        current.and_then(|row| pending.edit.restore_reviewed_terms(&row.draft));
+                    let replaced_draft = draft.as_ref().map(|_| pending.edit.proposed.clone());
                     (
                         id.into(),
-                        pending.edit.proposed.clone(),
+                        draft.unwrap_or_else(|| pending.edit.proposed.clone()),
                         baseline,
                         Some(pending.mutation_id.clone()),
+                        replaced_draft,
                     )
                 } else {
                     let Some(row) = current else { return };
-                    (id.into(), row.draft.clone(), baseline, None)
+                    (id.into(), row.draft.clone(), baseline, None, None)
                 }
             }
-            None => (uuid::Uuid::now_v7().to_string(), new_draft(), None, None),
+            None => (
+                uuid::Uuid::now_v7().to_string(),
+                new_draft(),
+                None,
+                None,
+                None,
+            ),
         };
         let mut editor = self.combination_editor(desk, id, draft, baseline, None, cx);
         editor.pending_id = pending_id;
+        if let Some(replaced) = replaced_draft {
+            editor.opened = replaced;
+        }
         if let Overlay::Combinations(desk) = &mut self.overlay {
             desk.editor = Some(editor);
             desk.notice = None;
@@ -456,11 +464,7 @@ impl Root {
                 return;
             };
             let reviewed = current.map_or(draft.clone(), |row| {
-                draft.rebase(
-                    &editor.original,
-                    &row.draft,
-                    keep && !editor.has_legacy_terms(row),
-                )
+                draft.rebase(&editor.original, &row.draft, keep)
             });
             editor.original = current
                 .map(|row| row.draft.clone())
