@@ -25,6 +25,7 @@ export interface BookingContext {
   teamAccount: boolean;
   combination?: ServiceCombination;
   combinationUnavailable: boolean;
+  combinationLoad?: { error: unknown; retry: () => void };
   catalog: Service[];
   staff: Staff[];
   selectedServices: Service[];
@@ -80,9 +81,11 @@ export function useBooking(): BookingContext {
   return {
     teamAccount: Boolean(session && session.user.role !== "client"),
     combination,
-    combinationUnavailable: Boolean(
-      search.combinationId && !combination && !combinations.isPending,
-    ),
+    combinationUnavailable: Boolean(search.combinationId && !combination && combinations.isSuccess),
+    combinationLoad:
+      search.combinationId && combinations.isError
+        ? { error: combinations.error, retry: () => void combinations.refetch() }
+        : undefined,
     search: { ...search, services: selectedServices.map((s) => s.id) },
     catalog,
     staff,

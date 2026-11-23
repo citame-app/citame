@@ -345,7 +345,18 @@ test("publishes reviewed fixed terms in the catalogue and books the displayed to
       data: { appointmentId: booking.id, idempotencyKey: crypto.randomUUID() },
     });
     expect(checkout.status(), await checkout.text()).toBe(201);
-    expect(await checkout.json()).toMatchObject({ totalCents: 2000 });
+    const receipt = await checkout.json();
+    expect(receipt).toMatchObject({ totalCents: 2000 });
+    await page.goto(`/admin/commerce?view=sale&checkout=${receipt.id}`);
+    await expect(
+      page
+        .getByRole("dialog", { name: "Receipt", exact: true })
+        .locator("dl > div")
+        .filter({
+          has: page.getByText("Total", { exact: true }),
+        })
+        .locator("dd"),
+    ).toHaveText("€20");
     await expectNoHorizontalScroll(customer);
 
     const hidden = await owner.put(`/api/admin/services/combinations/${combo.id}`, {
@@ -403,7 +414,8 @@ test("publishes reviewed fixed terms in the catalogue and books the displayed to
     await dialog.getByLabel("Full name").fill(`Fixed walk-in ${info.project.name}`);
     await dialog.getByLabel("Treatment combinations").selectOption(combo.id);
     await expect(dialog.getByLabel("Team member")).toHaveValue(professional.id);
-    await dialog.getByLabel("Start time").fill(time);
+    await dialog.getByLabel("Available times").selectOption(slot.startsAt);
+    await expect(dialog.getByLabel("Start time")).toHaveValue(time);
     await expect(dialog.getByText(/Combination total:.*20/)).toBeVisible();
     const bookedByTeam = page.waitForResponse(
       (result) =>

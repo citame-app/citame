@@ -26,6 +26,7 @@ function ServicesStep() {
     <BookingFrame
       teamAccount={booking.teamAccount}
       combinationUnavailable={booking.combinationUnavailable}
+      combinationLoad={booking.combinationLoad}
       step="services"
       search={search}
       title={t("booking.services.title")}

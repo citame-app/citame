@@ -215,6 +215,13 @@ The price response carries the version and review hash required when submitting 
 Fixed prices exclude catalogue peak surcharges. Checkout uses the component amounts frozen on
 the appointment. A move uses the booked professional list and the original service amounts.
 
+In Web, open **Services → Combinations** to enter the EUR amounts in treatment order,
+choose the assigned professionals and set the visibility. Customers retain a fixed
+combination through service, professional and slot selection. To book an internal
+combination, choose it in **Calendar → New appointment**. A fixed combination keeps its
+allocated price through checkout and appears only on the booking surfaces allowed by its
+visibility.
+
 #### Conciliación de una candidata ya cargada
 
 El informe vuelve a comprobar la copia persistente dentro de una transacción de solo lectura. Coteja la identidad y los horarios de cada línea, los grupos, los importes congelados y sus indicadores, los comentarios, las franjas de capacidad reservadas, las asignaciones de recursos, los bloqueos y la lista de espera con el snapshot seleccionado. También comprueba los SHA-256 del archivo y coteja los identificadores, recuentos y huellas de los perfiles, el catálogo, las asignaciones profesionales y los horarios materializados. Verifica que la candidata no tenga recibos, recordatorios, ofertas ni lista de espera activa. Solo devuelve recuentos y estados de evidencias.

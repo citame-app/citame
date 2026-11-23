@@ -5,8 +5,8 @@ import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { adminStaffQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
-import { staffQuery } from "~/lib/queries";
 import { CombinationEditor } from "./combination-editor";
 export function CombinationsPanel() {
   const { t } = useI18n();
@@ -22,7 +22,7 @@ export function CombinationsPanel() {
     queryKey: ["appointment-catalog"],
     queryFn: async () => (await api().appointments.catalog()).services,
   });
-  const staff = useQuery(staffQuery);
+  const staff = useQuery(adminStaffQuery);
   const reload = () => {
     void client.invalidateQueries({ queryKey: ["combinations"] });
     void client.invalidateQueries({ queryKey: ["services"] });

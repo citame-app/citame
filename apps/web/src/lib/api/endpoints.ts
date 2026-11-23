@@ -151,6 +151,7 @@ const deletedAck = z.object({ id: z.string(), deleted: z.literal(true) });
 export interface AvailabilityParams {
   appointmentId?: string;
   combinationId?: string;
+  team?: boolean;
   serviceIds: string[];
   staffId?: string;
   date: string;
@@ -192,11 +193,15 @@ export function createEndpoints(client: ApiClient) {
         signal,
       }),
     availability: (
-      { serviceIds, staffId, date, appointmentId, combinationId }: AvailabilityParams,
+      { serviceIds, staffId, date, appointmentId, combinationId, team }: AvailabilityParams,
       signal?: AbortSignal,
     ) =>
       client.get(
-        appointmentId ? `/appointments/${appointmentId}/availability` : "/availability",
+        appointmentId
+          ? `/appointments/${appointmentId}/availability`
+          : team && combinationId
+            ? "/appointments/combination-availability"
+            : "/availability",
         availabilityResponseSchema,
         {
           query: { serviceIds: serviceIds.join(","), staffId, date, combinationId },

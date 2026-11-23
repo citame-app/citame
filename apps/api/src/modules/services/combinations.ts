@@ -257,6 +257,11 @@ export async function saveCombination(
         throw new DomainError("version_conflict", "Combination changed; reload before saving");
       const selectionChanged = JSON.stringify(input.serviceIds) !== JSON.stringify(row.serviceIds);
       const stored = fixedTerms(row);
+      if (stored?.onlineBooking === false && input.fixedTerms === null && input.active)
+        throw new DomainError(
+          "version_conflict",
+          "Archive an internal combination before removing its fixed terms",
+        );
       if (stored && input.fixedTerms === undefined && selectionChanged)
         throw new DomainError(
           "version_conflict",

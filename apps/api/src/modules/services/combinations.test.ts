@@ -429,6 +429,13 @@ test("staff-only fixed terms stay private while the owner can quote and book the
   });
   expect(saved.status).toBe(201);
   const combo = serviceCombinationSchema.parse(await saved.json());
+  const { idempotencyKey: _key, ...legacy } = input();
+  const convert = await call(`/admin/services/combinations/${combo.id}`, "PUT", {
+    ...legacy,
+    version: combo.version,
+    fixedTerms: null,
+  });
+  expect(convert.status).toBe(409);
   const query = new URLSearchParams({
     combinationId: combo.id,
     startsAt: MONDAY_0900,

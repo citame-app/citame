@@ -19,12 +19,8 @@ import { combinationAvailable } from "~/features/booking/combination-choices";
 import { useI18n } from "~/i18n/react";
 import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
+import { centsInput, inputCents } from "../commerce/money";
 import { UnsavedGuard } from "../unsaved-guard";
-
-function amountCents(value: string) {
-  const amount = /^(\d{1,7})(?:[.,](\d{1,2}))?$/.exec(value.trim());
-  return amount ? Number(amount[1]) * 100 + Number((amount[2] ?? "").padEnd(2, "0")) : -1;
-}
 
 type Packet =
   | { kind: "create"; input: CombinationCreate }
@@ -38,7 +34,7 @@ export function CombinationEditor({
 }: {
   initial: ServiceCombination | "new";
   catalog: Service[];
-  staff: Staff[];
+  staff: (Staff & { active?: boolean })[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -60,7 +56,7 @@ export function CombinationEditor({
     amounts: Object.fromEntries(
       (previous?.fixedTerms ? previous.serviceIds : []).map((id, index) => [
         id,
-        ((previous?.fixedTerms?.pricesCents[index] ?? 0) / 100).toFixed(2),
+        centsInput(previous?.fixedTerms?.pricesCents[index] ?? 0),
       ]),
     ) as Record<string, string>,
   };
@@ -79,26 +75,61 @@ export function CombinationEditor({
       mounted.current = false;
     };
   }, []);
-  const pricesCents = values.serviceIds.map((id) => amountCents(values.amounts[id] ?? ""));
+  const pricesCents = values.serviceIds.map((id) => inputCents(values.amounts[id] ?? "") ?? -1);
+  const unchangedIds =
+    previous && JSON.stringify(previous.serviceIds) === JSON.stringify(values.serviceIds);
+  const activeStaff = staff.filter((member) => member.active !== false);
+  const staffChoices = [
+    ...staff.map((member) => ({
+      id: member.id,
+      label:
+        member.active === false
+          ? `${member.displayName} · ${t("combinations.staffUnavailable")}`
+          : member.displayName,
+      active: member.active !== false,
+    })),
+    ...values.scope
+      .filter((id) => !staff.some((member) => member.id === id))
+      .map((id) => ({
+        id,
+        label: t("combinations.staffUnavailable"),
+        active: false,
+      })),
+  ];
+  const removingInternalTerms = previous?.fixedTerms?.onlineBooking === false && !values.fixed;
+  const unchangedTerms = Boolean(
+    previous?.fixedTerms &&
+      values.visibility === original.visibility &&
+      JSON.stringify(values.scope) === JSON.stringify(original.scope) &&
+      unchangedIds &&
+      pricesCents.every((price, index) => price === previous.fixedTerms?.pricesCents[index]),
+  );
+
+  const priceErrors =
+    attempted && values.fixed
+      ? new Set(values.serviceIds.filter((_, index) => (pricesCents[index] ?? -1) < 0))
+      : new Set<string>();
+  const staffError = attempted && values.fixed && values.scope.length === 0;
+  const visibilityError = attempted && values.fixed && values.active && !values.visibility;
   const fields = {
     name: values.name,
     description: values.description.trim() || null,
     serviceIds: values.serviceIds,
     active: values.active,
     ...(values.fixed
-      ? {
-          fixedTerms: {
-            pricesCents,
-            staffIds: values.scope,
-            ...(values.visibility ? { onlineBooking: values.visibility === "public" } : {}),
-          },
-        }
+      ? !values.active && unchangedTerms
+        ? {}
+        : {
+            fixedTerms: {
+              pricesCents,
+              staffIds: values.scope,
+              ...(values.visibility ? { onlineBooking: values.visibility === "public" } : {}),
+            },
+          }
       : previous?.fixedTerms
         ? { fixedTerms: null }
         : {}),
   };
-  const unchangedIds =
-    previous && JSON.stringify(previous.serviceIds) === JSON.stringify(values.serviceIds);
   const valid =
     combinationCreateSchema.safeParse({ ...fields, idempotencyKey: key.current }).success &&
     (values.fixed
@@ -106,9 +137,9 @@ export function CombinationEditor({
         (values.serviceIds.every((id) =>
           catalog.some((service) => service.id === id && service.currency === "EUR"),
         ) &&
-          values.scope.every((id) => staff.some((member) => member.id === id)) &&
+          values.scope.every((id) => activeStaff.some((member) => member.id === id)) &&
           (!values.active || Boolean(values.visibility)))
-      : combinationAvailable(values.serviceIds, catalog, staff) ||
+      : combinationAvailable(values.serviceIds, catalog, activeStaff) ||
         (!values.active && unchangedIds));
   const dirty = uncertain || JSON.stringify(values) !== JSON.stringify(original);
   const mutation = useMutation({
@@ -186,13 +217,21 @@ export function CombinationEditor({
             if (valid || uncertain) mutation.mutate();
             else {
               setAttempted(true);
-              requestAnimationFrame(() => invalid.current?.focus());
+              requestAnimationFrame(() => {
+                const control = document
+                  .getElementById(form)
+                  ?.querySelector<HTMLElement>(
+                    'input[aria-invalid="true"], select[aria-invalid="true"], textarea[aria-invalid="true"]',
+                  );
+                (control ?? invalid.current)?.focus();
+              });
             }
           }}
         >
           <TextField
             label={t("combinations.name")}
             name="name"
+            required
             value={values.name}
             maxLength={120}
             disabled={disabled}
@@ -217,7 +256,7 @@ export function CombinationEditor({
               type="checkbox"
               name="active"
               checked={values.active}
-              disabled={disabled}
+              disabled={disabled || removingInternalTerms}
               onChange={(event) => {
                 setValues({ ...values, active: event.target.checked });
                 mutation.reset();
@@ -251,7 +290,16 @@ export function CombinationEditor({
               name="fixed"
               checked={values.fixed}
               disabled={disabled}
-              onChange={(event) => setValues({ ...values, fixed: event.target.checked })}
+              onChange={(event) =>
+                setValues({
+                  ...values,
+                  fixed: event.target.checked,
+                  active:
+                    !event.target.checked && previous?.fixedTerms?.onlineBooking === false
+                      ? false
+                      : values.active,
+                })
+              }
             />
             <span>{t("combinations.fixedPrice")}</span>
           </label>
@@ -266,6 +314,7 @@ export function CombinationEditor({
                   maxLength={10}
                   label={`${catalog.find((service) => service.id === id)?.name ?? t("combinations.unavailable")} (EUR)`}
                   value={values.amounts[id] ?? ""}
+                  error={priceErrors.has(id) ? t("combinations.amountError") : undefined}
                   onChange={(event) =>
                     setValues({
                       ...values,
@@ -275,15 +324,20 @@ export function CombinationEditor({
                   disabled={disabled}
                 />
               ))}
-              <fieldset className="min-w-0">
+              <fieldset
+                className="min-w-0"
+                aria-describedby={staffError ? `${form}-staff-error` : undefined}
+              >
                 <legend className="text-sm font-medium">{t("combinations.fixedStaff")}</legend>
-                {staff.map((member) => (
+                {staffChoices.map((member) => (
                   <label key={member.id} className="flex min-h-12 items-center gap-3">
                     <input
                       type="checkbox"
                       name="staff"
+                      aria-invalid={staffError || undefined}
+                      aria-describedby={staffError ? `${form}-staff-error` : undefined}
                       value={member.id}
-                      disabled={disabled}
+                      disabled={disabled || (!member.active && !values.scope.includes(member.id))}
                       checked={values.scope.includes(member.id)}
                       onChange={(event) =>
                         setValues({
@@ -294,14 +348,20 @@ export function CombinationEditor({
                         })
                       }
                     />
-                    <span>{member.displayName}</span>
+                    <span>{member.label}</span>
                   </label>
                 ))}
+                {staffError && (
+                  <p id={`${form}-staff-error`} className="text-sm text-danger-fg">
+                    {t("combinations.staffError")}
+                  </p>
+                )}
               </fieldset>
               <SelectField
                 name="visibility"
                 label={t("combinations.visibility")}
                 value={values.visibility}
+                error={visibilityError ? t("combinations.visibilityError") : undefined}
                 disabled={disabled}
                 options={[
                   { value: "", label: t("combinations.visibilityChoose"), disabled: true },

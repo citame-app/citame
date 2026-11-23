@@ -14,6 +14,7 @@ import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
 import { Sheet } from "~/components/ui/sheet";
+import { ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { CatalogChoices } from "~/features/booking/catalog-choices";
 import {
@@ -29,7 +30,7 @@ import { adminStaffQuery, clientsQuery } from "~/lib/admin-queries";
 import { ApiError, NetworkError, ResponseShapeError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
-import { salonQuery } from "~/lib/queries";
+import { availabilityQuery, salonQuery } from "~/lib/queries";
 import { minutesIntoLocalDay, zonedInstant } from "~/lib/zoned";
 import { describeProblem } from "../problems";
 import { useDebounced } from "../use-debounced";
@@ -189,13 +190,18 @@ function AppointmentDraft({
         row.fixedTerms?.staffIds.some((id) => activeStaff.some((staff) => staff.id === id)),
     ) ?? [];
   const selectedCombo = activeCombinations.find((row) => row.id === combinationId);
+  const selectionChanged = Boolean(
+    selectedCombo &&
+      (selectedCombo.serviceIds.length !== values.serviceIds.length ||
+        selectedCombo.serviceIds.some((id, index) => id !== values.serviceIds[index])),
+  );
   const applicableStaff = selectedCombo?.fixedTerms
     ? activeStaff.filter((member) => selectedCombo.fixedTerms?.staffIds.includes(member.id))
     : activeStaff;
   const chosenStaff = applicableStaff.find((s) => s.id === values.staffId);
   const offered = (services.data ?? []).filter((s) => chosenStaff?.serviceIds.includes(s.id));
   const chosen = combinationId
-    ? chosenStaff && selectedCombo
+    ? !selectionChanged && chosenStaff && selectedCombo
       ? (fixedCombinationServices(selectedCombo, services.data ?? []) ?? [])
       : []
     : values.serviceIds.flatMap((id) => {
@@ -216,6 +222,17 @@ function AppointmentDraft({
     if (next) setCadence("none");
   }
   const totalMinutes = chosen.reduce((sum, s) => sum + s.durationMinutes, 0);
+  const offeredTimes = useQuery({
+    ...availabilityQuery({
+      date,
+      team: true,
+      combinationId: selectedCombo?.id,
+      serviceIds: values.serviceIds,
+      staffId: chosenStaff?.id,
+    }),
+    enabled: Boolean(date && selectedCombo && chosenStaff && !selectionChanged),
+  });
+  const comboSlots = offeredTimes.data?.slots ?? [];
   const startsAt = resolveStart(date, time, timeZone);
   const peak = useBookingPeakPrice(
     chosen.map((service) => service.id),
@@ -567,6 +584,10 @@ function AppointmentDraft({
 
         <fieldset className="space-y-1">
           <legend className="mb-1 text-sm font-medium">{t("walkin.services")}</legend>
+          {combinations.isError &&
+            !(combinations.error instanceof ApiError && combinations.error.status === 404) && (
+              <ErrorState error={combinations.error} onRetry={() => void combinations.refetch()} />
+            )}
           {(activeCombinations.length > 0 || combinationId) && (
             <SelectField
               label={t("combinations.title")}
@@ -592,7 +613,9 @@ function AppointmentDraft({
             />
           )}
           {combinationId &&
-            (!selectedCombo || (peak.isSuccess && !peak.isFetching && !matchesCombination)) && (
+            (!selectedCombo ||
+              selectionChanged ||
+              (peak.isSuccess && !peak.isFetching && !matchesCombination)) && (
               <p role="alert" className="text-sm text-danger-fg">
                 {t("combinations.priceChanged")}
               </p>
@@ -633,6 +656,28 @@ function AppointmentDraft({
             })}
           />
         </div>
+
+        {combinationId && offeredTimes.isError && (
+          <ErrorState error={offeredTimes.error} onRetry={() => void offeredTimes.refetch()} />
+        )}
+        {combinationId && comboSlots.length > 0 && (
+          <SelectField
+            name="combinationTime"
+            label={t("combinations.availableTimes")}
+            value={
+              comboSlots.find((slot) => hhmm(minutesIntoLocalDay(slot.startsAt, timeZone)) === time)
+                ?.startsAt ?? ""
+            }
+            options={[
+              { value: "", label: t("combinations.chooseTime"), disabled: true },
+              ...comboSlots.map((slot) => ({
+                value: slot.startsAt,
+                label: formatTime(slot.startsAt, timeZone, locale),
+              })),
+            ]}
+            onChange={(startsAt) => setTime(hhmm(minutesIntoLocalDay(startsAt, timeZone)))}
+          />
+        )}
 
         {create.error instanceof ApiError && create.error.code === "peak_price_changed" && (
           <p role="alert">{t("bookingPeak.changed")}</p>

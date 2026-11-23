@@ -305,6 +305,7 @@ function SingleReviewStep() {
     <BookingFrame
       teamAccount={booking.teamAccount}
       combinationUnavailable={booking.combinationUnavailable}
+      combinationLoad={booking.combinationLoad}
       step="review"
       search={search}
       title={t("booking.review.title")}

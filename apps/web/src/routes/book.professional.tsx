@@ -54,6 +54,7 @@ function ProfessionalStep() {
     <BookingFrame
       teamAccount={booking.teamAccount}
       combinationUnavailable={booking.combinationUnavailable}
+      combinationLoad={booking.combinationLoad}
       step="professional"
       search={search}
       title={t("booking.professional.title")}
