@@ -7,13 +7,13 @@ import {
   salonSettings,
   staffProfile,
 } from "@sob/db";
-import { and, asc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, sql } from "drizzle-orm";
 import type { NotificationConfig } from "../config";
 import { resolveNotificationEmail } from "./email-delivery";
 import { type Metrics, processMetrics } from "./metrics";
 import { categoryOf, isEnabled, whatsappNumber } from "./preferences";
 import type { Providers } from "./providers";
-import { PermanentProviderError } from "./providers/types";
+import { PermanentProviderError, TransientProviderError } from "./providers/types";
 import {
   backoffMs,
   claimDue,
@@ -21,6 +21,7 @@ import {
   type ReminderRow,
   releaseUnstartedReminders,
   renewLeases,
+  WHATSAPP_DELIVERY_UNKNOWN,
 } from "./queue";
 import { LOCALES, type Locale, type MessageData, renderEmail, renderSms } from "./templates";
 import { signOptOutToken } from "./tokens";
@@ -55,8 +56,6 @@ export interface NotificationWorker {
   stop(): Promise<void>;
   readonly workerId: string;
 }
-
-const E164 = /^\+[1-9]\d{7,14}$/;
 
 type Prepared =
   | { skip: string }
@@ -100,15 +99,8 @@ async function prepare(
   if (!client || client.deletedAt) return { skip: "client_gone" };
   const rawAddress = row.channel === "email" ? client.email : client.phone;
   if (!rawAddress) return { skip: "no_address" };
-  let to = rawAddress.trim();
-  if (row.channel === "whatsapp") {
-    const whatsapp = whatsappNumber(to);
-    if (!whatsapp) return { skip: "invalid_phone" };
-    to = whatsapp;
-  } else if (row.channel === "sms") {
-    to = to.replace(/[\s().-]/g, "");
-    if (!E164.test(to)) return { skip: "invalid_phone" };
-  }
+  const to = row.channel === "email" ? rawAddress.trim() : whatsappNumber(rawAddress);
+  if (!to) return { skip: row.channel === "email" ? "no_address" : "invalid_phone" };
   const category = categoryOf(row.kind);
   if (!(await isEnabled(db, client.id, row.channel, category, to))) return { skip: "opted_out" };
 
@@ -151,6 +143,32 @@ async function prepare(
   return { channel: row.channel, to, data, clientName: client.name, clientId: client.id };
 }
 
+/** Recheck the exact recipient and their consent immediately before dispatch. */
+async function contactChanged(
+  db: Pick<Database, "select">,
+  row: ReminderRow,
+  prepared: Exclude<Prepared, { skip: string }>,
+) {
+  const [contact] = await db
+    .select({ email: clientProfile.email, phone: clientProfile.phone })
+    .from(clientProfile)
+    .where(
+      and(
+        eq(clientProfile.id, prepared.clientId),
+        isNull(clientProfile.deletedAt),
+        isNull(clientProfile.mergedIntoId),
+      ),
+    );
+  const address = row.channel === "email" ? contact?.email?.trim() : whatsappNumber(contact?.phone);
+  if (address !== prepared.to) {
+    return row.channel === "email" ? "contact_email_changed" : "contact_phone_changed";
+  }
+  if (!(await isEnabled(db, prepared.clientId, row.channel, categoryOf(row.kind), prepared.to))) {
+    return "opted_out";
+  }
+  return null;
+}
+
 export function createNotificationWorker(options: WorkerOptions): NotificationWorker {
   const { db, config, providers } = options;
   const clock = options.now ?? (() => new Date());
@@ -181,7 +199,27 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
       return owned;
     };
 
+    const claim = () =>
+      and(
+        eq(reminder.id, row.id),
+        eq(reminder.status, "processing"),
+        eq(reminder.lockedBy, workerId),
+        eq(reminder.attempts, row.attempts),
+        gte(reminder.lockedUntil, clock()),
+      );
+    const staleContact = async (reason: string) => {
+      await finish(
+        reason === "opted_out" || row.attempts >= config.maxAttempts
+          ? { status: "skipped", reason }
+          : { status: "pending", error: reason, retryAt: clock() },
+      );
+    };
+    let clearWhatsAppDispatch = false;
     try {
+      if (row.whatsappDispatchAt) {
+        await finish({ status: "failed", error: WHATSAPP_DELIVERY_UNKNOWN });
+        return;
+      }
       const email =
         row.channel === "email"
           ? await resolveNotificationEmail(db, config, providers.email, options.emailFetch)
@@ -193,6 +231,16 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
         await finish({ status: "skipped", reason: prepared.skip });
         return;
       }
+      if (prepared.channel !== "whatsapp") {
+        const reason = await contactChanged(db, row, prepared);
+        if (reason) {
+          await staleContact(reason);
+          return;
+        }
+        // A reschedule or cancellation may have withdrawn this job during preparation.
+        const [owned] = await db.select({ id: reminder.id }).from(reminder).where(claim());
+        if (!owned) return;
+      }
       let result: { messageId: string };
       if (prepared.channel === "email") {
         const rendered = renderEmail(prepared.data);
@@ -200,24 +248,6 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
           ? new URL(prepared.data.optOutUrl).searchParams.get("token")
           : null;
         if (!email) throw new Error("Email provider missing after delivery preparation");
-        const [contact] = await db
-          .select({ email: clientProfile.email })
-          .from(clientProfile)
-          .where(
-            and(
-              eq(clientProfile.id, prepared.clientId),
-              isNull(clientProfile.deletedAt),
-              isNull(clientProfile.mergedIntoId),
-            ),
-          );
-        if (contact?.email?.trim() !== prepared.to) {
-          await finish(
-            row.attempts >= config.maxAttempts
-              ? { status: "skipped", reason: "contact_email_changed" }
-              : { status: "pending", error: "contact_email_changed", retryAt: clock() },
-          );
-          return;
-        }
         result = await email.send({
           to: prepared.to,
           subject: rendered.subject,
@@ -250,6 +280,12 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
           const connection = await readConnection(tx, "share");
           const rule = activeRules(connection, clock()).find((item) => item.kind === row.kind);
           if (!connection || !rule) return { status: "inactive" } as const;
+          const [owned] = await tx
+            .select({ id: reminder.id })
+            .from(reminder)
+            .where(and(claim(), isNull(reminder.whatsappDispatchAt)))
+            .for("update");
+          if (!owned) return { status: "unavailable" } as const;
           const locale = rule.template.language.replaceAll("_", "-");
           const format = (options: Intl.DateTimeFormatOptions) =>
             new Intl.DateTimeFormat(locale, {
@@ -266,34 +302,28 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
             preferences: prepared.data.optOutUrl ?? `${config.publicUrl}/account/notifications`,
           });
           const token = requestToken(config, connection);
+          const reason = await contactChanged(tx, row, prepared);
+          if (reason) return { status: "contact_changed", reason } as const;
           // Meta's Send API does not deduplicate by a client-supplied key.
-          const [claimed] = await tx
+          await tx
             .update(reminder)
             .set({
               whatsappDispatchAt: clock(),
               whatsappDispatchWabaId: connection.wabaId,
               whatsappDispatchPhoneId: connection.phoneId,
             })
-            .where(
-              and(
-                eq(reminder.id, row.id),
-                eq(reminder.status, "processing"),
-                eq(reminder.lockedBy, workerId),
-                isNull(reminder.whatsappDispatchAt),
-              ),
-            )
-            .returning({ id: reminder.id });
-          if (!claimed) return { status: "unavailable" } as const;
+            .where(eq(reminder.id, owned.id));
           return { status: "ready", phoneId: connection.phoneId, token, body } as const;
         });
         if (dispatch.status === "inactive") {
           await finish({ status: "skipped", reason: "whatsapp_rule_inactive" });
           return;
         }
-        if (dispatch.status === "unavailable") {
-          await finish({ status: "failed", error: "whatsapp_delivery_unknown" });
+        if (dispatch.status === "contact_changed") {
+          await staleContact(dispatch.reason);
           return;
         }
+        if (dispatch.status === "unavailable") return;
         try {
           result = {
             messageId: await createMeta(meta, options.whatsappFetch).send(
@@ -304,10 +334,14 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
           };
         } catch (error) {
           const status = error instanceof MetaRequestError ? error.status : 0;
+          if (status === 429) {
+            clearWhatsAppDispatch = true;
+            throw new TransientProviderError("whatsapp_rate_limited");
+          }
           throw new PermanentProviderError(
             status >= 400 && status < 500
               ? `whatsapp_rejected_${status}`
-              : "whatsapp_delivery_unknown",
+              : WHATSAPP_DELIVERY_UNKNOWN,
           );
         }
       }
@@ -316,13 +350,16 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
         log({ level: "info", msg: "sent", providerMessageId: result.messageId, ...base });
       }
     } catch (error) {
-      const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
-      metrics.inc("errors");
       const permanent = error instanceof PermanentProviderError;
+      const message =
+        permanent || error instanceof TransientProviderError
+          ? error.message
+          : "notification_attempt_failed";
+      metrics.inc("errors");
       if (permanent || row.attempts >= config.maxAttempts) {
         metrics.inc("dead_lettered");
         log({ level: "error", msg: "dead-lettered", permanent, error: message, ...base });
-        await finish({ status: "failed", error: message });
+        await finish({ status: "failed", error: message, clearWhatsAppDispatch });
         return;
       }
       const delay = backoffMs(
@@ -336,6 +373,7 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
       await finish({
         status: "pending",
         error: message,
+        clearWhatsAppDispatch,
         retryAt: new Date(clock().getTime() + delay),
       });
     }
@@ -353,30 +391,52 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
       maxAttempts: config.maxAttempts,
     });
     metrics.inc("claimed", claimed.length);
+    if (!claimed.length) return 0;
     let waiting = [...claimed];
-    while (waiting.length > 0) {
-      if (draining) {
-        await releaseUnstartedReminders(
-          db,
-          waiting.map((row) => row.id),
-          workerId,
+    const claimedIds = claimed.map((row) => row.id);
+    let renewal: Promise<void> | undefined;
+    const heartbeat = setInterval(
+      () => {
+        renewal ??= renewLeases(db, claimedIds, workerId, clock(), config.visibilityTimeoutSeconds)
+          .then(() => {})
+          .catch(() => {
+            metrics.inc("errors");
+            log({ level: "warn", msg: "lease renewal failed", workerId });
+          })
+          .finally(() => {
+            renewal = undefined;
+          });
+      },
+      Math.max(10, Math.floor((config.visibilityTimeoutSeconds * 1000) / 3)),
+    );
+    try {
+      while (waiting.length > 0) {
+        if (draining) {
+          await releaseUnstartedReminders(
+            db,
+            waiting.map((row) => row.id),
+            workerId,
+          );
+          break;
+        }
+        const row = waiting.shift() as ReminderRow;
+        await handle(row);
+        if (draining) continue;
+        // Refresh waiting jobs before advancing, even if the timer was delayed.
+        const owned = new Set(
+          await renewLeases(
+            db,
+            waiting.map((r) => r.id),
+            workerId,
+            clock(),
+            config.visibilityTimeoutSeconds,
+          ),
         );
-        break;
+        waiting = waiting.filter((r) => owned.has(r.id));
       }
-      const row = waiting.shift() as ReminderRow;
-      await handle(row);
-      if (draining) continue;
-      // Keep the leases of the jobs still waiting alive, and drop any that were taken over.
-      const owned = new Set(
-        await renewLeases(
-          db,
-          waiting.map((r) => r.id),
-          workerId,
-          clock(),
-          config.visibilityTimeoutSeconds,
-        ),
-      );
-      waiting = waiting.filter((r) => owned.has(r.id));
+    } finally {
+      clearInterval(heartbeat);
+      await renewal;
     }
     return claimed.length;
   }
@@ -390,9 +450,9 @@ export function createNotificationWorker(options: WorkerOptions): NotificationWo
       let handled = 0;
       try {
         handled = await runOnce();
-      } catch (error) {
+      } catch {
         metrics.inc("errors");
-        log({ level: "error", msg: "poll failed", error: String(error), workerId });
+        log({ level: "error", msg: "poll failed", workerId });
       }
       // A full batch means more is probably waiting: go straight back for it.
       if (running && handled < config.batchSize) {

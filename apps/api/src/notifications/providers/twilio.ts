@@ -44,20 +44,19 @@ export function createTwilioProvider(options: TwilioOptions): SmsProvider {
             signal: AbortSignal.timeout(15_000),
           },
         );
-      } catch (error) {
-        throw new TransientProviderError(error instanceof Error ? error.message : "network error");
+      } catch {
+        throw new TransientProviderError("twilio_connection_failed");
       }
       if (response.ok) {
         const body = (await response.json()) as { sid?: string };
-        if (!body.sid) throw new TransientProviderError("Twilio response without a sid");
+        if (!body.sid) throw new TransientProviderError("twilio_confirmation_unreadable");
         return { messageId: body.sid };
       }
-      const text = (await response.text()).slice(0, 300);
-      const error = `Twilio ${response.status}: ${text}`;
+      await response.body?.cancel().catch(() => {});
       // 429 and 5xx are worth retrying; the other 4xx (bad number, unsubscribed, auth) are not.
       if (response.status === 429 || response.status >= 500)
-        throw new TransientProviderError(error);
-      throw new PermanentProviderError(error);
+        throw new TransientProviderError(`twilio_temporary_${response.status}`);
+      throw new PermanentProviderError(`twilio_rejected_${response.status}`);
     },
   };
 }

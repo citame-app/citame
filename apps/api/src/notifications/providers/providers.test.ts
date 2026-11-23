@@ -19,7 +19,9 @@ describe("SMTP provider against a real local SMTP server", () => {
       disabledCommands: ["STARTTLS"],
       onRcptTo(_address, _session, callback) {
         if (rejectWith) {
-          const error = Object.assign(new Error("mailbox rejected"), { responseCode: rejectWith });
+          const error = Object.assign(new Error("mailbox rejected lucia@example.com"), {
+            responseCode: rejectWith,
+          });
           return callback(error);
         }
         callback();
@@ -73,6 +75,7 @@ describe("SMTP provider against a real local SMTP server", () => {
     });
     rejectWith = 550;
     await expect(provider.send(message)).rejects.toBeInstanceOf(PermanentProviderError);
+    await expect(provider.send(message)).rejects.toThrow(/^smtp_rejected_550$/);
     rejectWith = 451;
     await expect(provider.send(message)).rejects.toBeInstanceOf(TransientProviderError);
     rejectWith = null;
@@ -130,7 +133,7 @@ describe("Twilio provider against a stub", () => {
           form: new URLSearchParams(await request.text()),
         });
         return status >= 400
-          ? new Response("nope", { status })
+          ? new Response("Message hi for +5491100000000", { status })
           : Response.json({ sid: "SM123" }, { status });
       },
     });
@@ -171,6 +174,7 @@ describe("Twilio provider against a stub", () => {
     await expect(make().send(sms)).rejects.toBeInstanceOf(TransientProviderError);
     status = 400;
     await expect(make().send(sms)).rejects.toBeInstanceOf(PermanentProviderError);
+    await expect(make().send(sms)).rejects.toThrow(/^twilio_rejected_400$/);
   });
 });
 

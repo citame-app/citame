@@ -1,6 +1,8 @@
 import { type Database, reminder } from "@sob/db";
 import { and, eq, gte, inArray, lt, lte, or, sql } from "drizzle-orm";
 
+export const WHATSAPP_DELIVERY_UNKNOWN = "whatsapp_delivery_unknown";
+
 export type ReminderRow = typeof reminder.$inferSelect;
 
 export interface ClaimOptions {
@@ -26,7 +28,10 @@ export async function claimDue(db: Database, options: ClaimOptions): Promise<Rem
       .set({
         status: "failed",
         lockedUntil: null,
-        lastError: "lease expired after the last attempt (worker crashed or stalled)",
+        lastError: sql`case when ${reminder.whatsappDispatchAt} is not null
+          then ${WHATSAPP_DELIVERY_UNKNOWN}
+          else 'lease expired after the last attempt (worker crashed or stalled)' end`,
+        updatedAt: now,
       })
       .where(
         and(
@@ -86,7 +91,9 @@ export async function renewLeases(
   if (ids.length === 0) return [];
   const renewed = await db
     .update(reminder)
-    .set({ lockedUntil: new Date(now.getTime() + visibilitySeconds * 1000) })
+    .set({
+      lockedUntil: sql`greatest(${reminder.lockedUntil}, ${new Date(now.getTime() + visibilitySeconds * 1000).toISOString()}::timestamptz)`,
+    })
     .where(
       and(
         inArray(reminder.id, ids),
@@ -124,16 +131,21 @@ export async function releaseUnstartedReminders(db: Database, ids: string[], wor
  */
 export async function finishClaim(
   db: Database,
-  row: Pick<ReminderRow, "id">,
+  row: Pick<ReminderRow, "id" | "attempts">,
   workerId: string,
   outcome:
     | { status: "sent"; providerMessageId: string; at: Date }
     | { status: "skipped"; reason: string }
-    | { status: "failed"; error: string }
-    | { status: "pending"; error: string; retryAt: Date },
+    | { status: "failed"; error: string; clearWhatsAppDispatch?: boolean }
+    | { status: "pending"; error: string; retryAt: Date; clearWhatsAppDispatch?: boolean },
 ): Promise<boolean> {
   // `locked_by` stays as a record of the last worker that handled the row.
-  const common = { lockedUntil: null };
+  const common = {
+    lockedUntil: null,
+    ...("clearWhatsAppDispatch" in outcome && outcome.clearWhatsAppDispatch
+      ? { whatsappDispatchAt: null, whatsappDispatchWabaId: null, whatsappDispatchPhoneId: null }
+      : {}),
+  };
   const changes =
     outcome.status === "sent"
       ? {
@@ -161,6 +173,7 @@ export async function finishClaim(
         eq(reminder.id, row.id),
         eq(reminder.status, "processing"),
         eq(reminder.lockedBy, workerId),
+        eq(reminder.attempts, row.attempts),
       ),
     )
     .returning({ id: reminder.id });

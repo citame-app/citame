@@ -9,14 +9,16 @@ import {
 } from "./types";
 
 /** SMTP codes: 5xx is a verdict about the message or recipient, 4xx and I/O errors are retryable. */
-function classify(error: unknown, redact: boolean): Error {
-  const e = error as { responseCode?: number; code?: string; message?: string };
-  const message = redact ? "smtp_delivery_failed" : (e.message ?? "SMTP error");
-  if (e.code === "EAUTH") return new PermanentProviderError(message);
-  if (typeof e.responseCode === "number" && e.responseCode >= 500) {
-    return new PermanentProviderError(message);
+function classify(error: unknown): Error {
+  const { responseCode, code } = (error as { responseCode?: number; code?: string } | null) ?? {};
+  if (code === "EAUTH") return new PermanentProviderError("smtp_authentication_failed");
+  if (responseCode && responseCode >= 500 && responseCode <= 599) {
+    return new PermanentProviderError(`smtp_rejected_${responseCode}`);
   }
-  return new TransientProviderError(message);
+  if (responseCode && responseCode >= 400 && responseCode <= 499) {
+    return new TransientProviderError(`smtp_temporary_${responseCode}`);
+  }
+  return new TransientProviderError("smtp_delivery_failed");
 }
 
 /**
@@ -86,7 +88,7 @@ export function createSmtpProvider(
         });
         return { messageId: info.messageId };
       } catch (error) {
-        throw classify(error, "connection" in options);
+        throw classify(error);
       }
     },
     async close() {
