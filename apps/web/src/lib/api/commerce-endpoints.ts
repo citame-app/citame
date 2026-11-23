@@ -5,6 +5,7 @@ import {
   type CheckoutPrices,
   type CreateCheckoutInput,
   cashSessionSchema,
+  checkoutCatalogPriceSchema,
   checkoutListSchema,
   checkoutRefundSchema,
   checkoutSchema,
@@ -26,6 +27,10 @@ export type CommerceMode = "admin" | "client";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/commerce" : "/me");
 export function commerceEndpoints(client: ApiClient) {
   return {
+    catalogPrice: (kind: "service" | "product", id: string) =>
+      client.get("/admin/commerce/catalog-price", checkoutCatalogPriceSchema, {
+        query: { kind, id },
+      }),
     unpaid: (query: { from: string; to: string }, signal?: AbortSignal) =>
       client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, {
         query: { ...query, booksyPaymentReview: "1" },

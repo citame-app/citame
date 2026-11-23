@@ -73,7 +73,7 @@ import {
 } from "../rewards/value";
 import { getSalonSettings } from "../settings/service";
 import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
-import { checkoutServices } from "./catalog";
+import { checkoutServices, reviewedCatalogPrice } from "./catalog";
 import { checkoutGroupTotals } from "./history-totals";
 import { allocateDiscount, completedRefundStatus, recordedPaymentStatuses } from "./money";
 
@@ -460,6 +460,9 @@ export async function createCheckoutInTransaction(
   )
     throw new DomainError("forbidden", "Clients can check out only their own appointment");
   if (principal.role !== "client") requireOperator(principal);
+  const hasPriceReviews = input.lines.some((line) => line.catalogPriceReview);
+  if (hasPriceReviews && input.appointmentId)
+    throw new DomainError("validation_error", "Use a separate sale to adjust catalog prices");
   // New receipts have no existing receipt lock. Coordinate before the appointment-specific
   // create lock, which booking creation may already hold under the scheduling lock.
   if (input.appointmentId) await lockScheduling(tx);
@@ -505,6 +508,7 @@ export async function createCheckoutInTransaction(
     if (!seller) throw new DomainError("not_found", "Active staff member not found");
   }
   const lines: {
+    id?: string;
     kind: string;
     productId?: string;
     giftCardId?: string;
@@ -610,16 +614,23 @@ export async function createCheckoutInTransaction(
     if (root.id !== clientId)
       throw new DomainError("client_merged", "Review the surviving client before creating a sale");
   }
+  const catalogPriceReviews = [];
   for (const line of input.lines) {
+    const review = line.catalogPriceReview;
+    const id = review && Bun.randomUUIDv7();
+    if (review && id) catalogPriceReviews.push({ checkoutLineId: id, ...review });
     if (line.kind === "service") {
       const item = services.get(line.serviceId ?? "");
       if (!item) throw new DomainError("not_found", "Service not found");
+      if (line.catalogPriceReview && item.priceType !== "fixed")
+        throw new DomainError("validation_error", "Only fixed service prices can be adjusted here");
       lines.push({
+        id,
         kind: "service",
         serviceId: item.id,
         description: item.name,
         quantity: line.quantity,
-        unitAmountCents: item.priceCents,
+        unitAmountCents: reviewedCatalogPrice(item.priceCents, line.catalogPriceReview),
         pricePending: needsFinalPrice(item.priceType),
         minimumUnitAmountCents: item.priceType === "from" ? item.priceCents : 0,
         taxBasisPoints: 0,
@@ -642,11 +653,12 @@ export async function createCheckoutInTransaction(
       const product = line.productId ? products.get(line.productId) : undefined;
       if (!product) throw new DomainError("not_found", "Product not found");
       lines.push({
+        id,
         kind: "product",
         productId: product.id,
         description: product.name,
         quantity: line.quantity,
-        unitAmountCents: product.priceCents,
+        unitAmountCents: reviewedCatalogPrice(product.priceCents, line.catalogPriceReview),
         unitCostCents: product.costCents,
         taxBasisPoints: product.taxBasisPoints,
       });
@@ -749,7 +761,11 @@ export async function createCheckoutInTransaction(
     action: "commerce.checkout_created",
     entity: "checkout",
     entityId: row.id,
-    metadata: { totalCents, currency: row.currency },
+    metadata: {
+      totalCents,
+      currency: row.currency,
+      ...(catalogPriceReviews.length > 0 && { catalogPriceReviews }),
+    },
   });
   return snapshot(tx, row);
 }

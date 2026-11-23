@@ -1,6 +1,10 @@
 use super::*;
-use sob_core::billing::{SaleItem, WalkInSale, parse_reviewed_amount};
+use sob_core::billing::{
+    CatalogPriceReview, SaleCatalogKind, SaleItem, WalkInSale, WalkInSaleError,
+    parse_reviewed_amount,
+};
 use sob_core::inventory::{ProductPage, ProductQuery};
+use sob_core::model::CatalogPrice;
 use sob_core::sync::TransportError;
 use uuid::Uuid;
 
@@ -13,6 +17,7 @@ enum CatalogTab {
     Custom,
 }
 
+#[derive(Clone, Copy)]
 enum CatalogItem {
     Service(Uuid),
     Product(Uuid),
@@ -24,6 +29,8 @@ struct Line {
     name: String,
     quantity: u32,
     limit: u32,
+    catalog_price: Option<u32>,
+    price_review: Option<CatalogPriceReview>,
 }
 
 pub(super) struct SaleDesk {
@@ -33,6 +40,11 @@ pub(super) struct SaleDesk {
     tip: Entity<TextField>,
     description: Entity<TextField>,
     amount: Entity<TextField>,
+    sale_price: Entity<TextField>,
+    price_reason: Entity<TextField>,
+    price_line: Option<usize>,
+    price_base: Option<u32>,
+    price_reload: Option<Arc<()>>,
     _changed: Vec<Subscription>,
     lines: Vec<Line>,
     client: Option<(Uuid, String)>,
@@ -55,7 +67,7 @@ impl SaleDesk {
     }
 
     fn adjustments(&self, cx: &App) -> Option<(u32, u32)> {
-        if self.lines.is_empty() {
+        if self.lines.is_empty() || self.price_line.is_some() {
             return None;
         }
         let amount = |value: &Entity<TextField>| {
@@ -85,10 +97,12 @@ impl SaleDesk {
                     CatalogItem::Service(service_id) => SaleItem::Service {
                         service_id,
                         quantity: line.quantity,
+                        catalog_price_review: line.price_review.clone(),
                     },
                     CatalogItem::Product(product_id) => SaleItem::Product {
                         product_id,
                         quantity: line.quantity,
+                        catalog_price_review: line.price_review.clone(),
                     },
                     CatalogItem::Custom(unit_amount_cents) => SaleItem::Custom {
                         description: line.name.clone(),
@@ -105,7 +119,7 @@ impl SaleDesk {
         })
     }
 
-    fn add(&mut self, item: CatalogItem, name: String, limit: u32) {
+    fn add(&mut self, item: CatalogItem, name: String, limit: u32, catalog_price: Option<u32>) {
         if self.pending.is_some() || limit == 0 {
             return;
         }
@@ -126,13 +140,62 @@ impl SaleDesk {
                 name,
                 quantity: 1,
                 limit,
+                catalog_price,
+                price_review: None,
             });
         }
         self.error = None;
     }
 
+    fn edit_price(&mut self, index: usize, cx: &mut App) {
+        let Some(line) = self.lines.get(index) else {
+            return;
+        };
+        let Some(catalog_price) = line.catalog_price else {
+            return;
+        };
+        let amount = line
+            .price_review
+            .as_ref()
+            .map_or(catalog_price, |r| r.unit_amount_cents);
+        let reason = line.price_review.as_ref().map_or("", |r| r.reason.as_str());
+        self.sale_price.update(cx, |field, cx| {
+            field.set_text(&format!("{}.{:02}", amount / 100, amount % 100), cx);
+        });
+        self.price_reason
+            .update(cx, |field, cx| field.set_text(reason, cx));
+        self.price_line = Some(index);
+        self.price_base = Some(catalog_price);
+        self.price_reload = None;
+    }
+
+    fn reviewed_price(&self, cx: &App) -> Option<(usize, u32, Option<CatalogPriceReview>)> {
+        if self.price_reload.is_some() {
+            return None;
+        }
+        let index = self.price_line?;
+        let base = self.price_base?;
+        let amount = parse_reviewed_amount(self.sale_price.read(cx).text())?;
+        if amount == base {
+            return Some((index, base, None));
+        }
+        let reason = self.price_reason.read(cx).text().trim();
+        if !(3..=200).contains(&reason.encode_utf16().count()) {
+            return None;
+        }
+        Some((
+            index,
+            base,
+            Some(CatalogPriceReview {
+                expected_unit_amount_cents: base,
+                unit_amount_cents: amount,
+                reason: reason.to_owned(),
+            }),
+        ))
+    }
+
     fn step_quantity(&mut self, index: usize, step: i32) {
-        if self.pending.is_some() {
+        if self.pending.is_some() || self.price_line.is_some() {
             return;
         }
         let Some(line) = self.lines.get_mut(index) else {
@@ -152,10 +215,20 @@ impl Root {
         let tip = cx.new(|cx| TextField::new("0,00 EUR", false, cx));
         let description = cx.new(|cx| TextField::new(self.t(Key::SaleItemDescription), false, cx));
         let amount = cx.new(|cx| TextField::new("EUR", false, cx));
-        let mut changed: Vec<_> = [&search, &discount, &tip, &description, &amount]
-            .into_iter()
-            .map(|field| cx.observe(field, |_, _, cx| cx.notify()))
-            .collect();
+        let sale_price = cx.new(|cx| TextField::new(self.t(Key::SaleUnitPrice), false, cx));
+        let price_reason = cx.new(|cx| TextField::new(self.t(Key::SalePriceReason), false, cx));
+        let mut changed: Vec<_> = [
+            &search,
+            &discount,
+            &tip,
+            &description,
+            &amount,
+            &sale_price,
+            &price_reason,
+        ]
+        .into_iter()
+        .map(|field| cx.observe(field, |_, _, cx| cx.notify()))
+        .collect();
         changed.push(cx.subscribe(&search, |root, _, event, cx| {
             if matches!(event, FieldEvent::Submit)
                 && matches!(&root.overlay, Overlay::WalkIn(sale) if sale.tab == CatalogTab::Products)
@@ -172,6 +245,11 @@ impl Root {
             tip,
             description,
             amount,
+            sale_price,
+            price_reason,
+            price_line: None,
+            price_base: None,
+            price_reload: None,
             _changed: changed,
             lines: vec![],
             client: None,
@@ -277,6 +355,7 @@ impl Root {
         if sale.submitting {
             return;
         }
+        let retrying = sale.pending.is_some();
         let Some(draft) = sale.pending.clone().or_else(|| sale.build_sale(cx)) else {
             return;
         };
@@ -302,6 +381,9 @@ impl Root {
                     return;
                 }
                 let fallback = root.t(Key::SaleUnconfirmed);
+                let price_changed = root.t(Key::SalePriceChanged);
+                let rate_limited = root.t(Key::FormRateLimited);
+                let sign_in_again = root.t(Key::SaleSignInAgain);
                 let Overlay::WalkIn(sale) = &mut root.overlay else {
                     return;
                 };
@@ -320,9 +402,23 @@ impl Root {
                         );
                         root.svc.wake(Wake::Manual);
                     }
-                    Err(
+                    Err(WalkInSaleError::PriceChanged) => {
+                        sale.pending = None;
+                        sale.error = Some(price_changed.to_owned());
+                    }
+                    Err(WalkInSaleError::Transport(
+                        error @ (TransportError::RateLimited(_) | TransportError::Unauthorized),
+                    )) if !retrying => {
+                        sale.pending = None;
+                        sale.error = Some(if matches!(error, TransportError::Unauthorized) {
+                            sign_in_again.to_owned()
+                        } else {
+                            rate_limited.to_owned()
+                        });
+                    }
+                    Err(WalkInSaleError::Transport(
                         TransportError::BadRequest(message) | TransportError::Forbidden(message),
-                    ) => {
+                    )) if !retrying => {
                         sale.pending = None;
                         sale.error = Some(message);
                     }
@@ -449,40 +545,84 @@ impl Root {
                 )
             })
             .children(sale.lines.iter().enumerate().map(|(index, line)| {
-                div()
+                let display_price = line
+                    .price_review
+                    .as_ref()
+                    .map(|review| review.unit_amount_cents)
+                    .or(line.catalog_price);
+                let row = div()
                     .flex()
                     .items_center()
                     .justify_between()
                     .gap_2()
                     .child(div().child(format!("{} × {}", line.quantity, line.name)))
-                    .when(sale.pending.is_none(), |view| {
+                    .when_some(display_price, |view, cents| {
                         view.child(
-                            div().flex().gap_2().children(
-                                [(-1, "−"), (1, "+")]
-                                    .into_iter()
-                                    .filter(|(step, _)| *step < 0 || line.quantity < line.limit)
-                                    .map(|(step, label)| {
-                                        self.button(
-                                            (
-                                                if step > 0 {
-                                                    "sale-increase"
-                                                } else {
-                                                    "sale-decrease"
-                                                },
-                                                index,
-                                            ),
-                                            label,
+                            self.amount_label(i64::from(cents) * i64::from(line.quantity), "EUR"),
+                        )
+                    })
+                    .when(
+                        sale.pending.is_none() && sale.price_line.is_none(),
+                        |view| {
+                            view.child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .when(line.catalog_price.is_some(), |view| {
+                                        view.child(self.button(
+                                            ("sale-edit-catalog-price", index),
+                                            self.t(Key::SaleChangePrice),
                                             Kind::Ghost,
                                             cx.listener(move |root, _, _, cx| {
-                                                if let Overlay::WalkIn(sale) = &mut root.overlay {
-                                                    sale.step_quantity(index, step);
+                                                if let Overlay::WalkIn(sale) = &mut root.overlay
+                                                    && sale.pending.is_none()
+                                                {
+                                                    sale.edit_price(index, cx);
                                                     cx.notify();
                                                 }
                                             }),
-                                        )
-                                    }),
-                            ),
-                        )
+                                        ))
+                                    })
+                                    .children(
+                                        [(-1, "−"), (1, "+")]
+                                            .into_iter()
+                                            .filter(|(step, _)| {
+                                                *step < 0 || line.quantity < line.limit
+                                            })
+                                            .map(|(step, label)| {
+                                                self.button(
+                                                    (
+                                                        if step > 0 {
+                                                            "sale-increase"
+                                                        } else {
+                                                            "sale-decrease"
+                                                        },
+                                                        index,
+                                                    ),
+                                                    label,
+                                                    Kind::Ghost,
+                                                    cx.listener(move |root, _, _, cx| {
+                                                        if let Overlay::WalkIn(sale) =
+                                                            &mut root.overlay
+                                                        {
+                                                            sale.step_quantity(index, step);
+                                                            cx.notify();
+                                                        }
+                                                    }),
+                                                )
+                                            }),
+                                    ),
+                            )
+                        },
+                    );
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(row)
+                    .when(sale.price_line == Some(index), |view| {
+                        view.child(self.render_price_editor(sale, cx))
                     })
             }))
             .when(sale.pending.is_none(), |view| {
@@ -576,6 +716,120 @@ impl Root {
         )
     }
 
+    fn reload_walk_in_price(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let Overlay::WalkIn(sale) = &mut self.overlay else {
+            return;
+        };
+        let Some(line) = sale.price_line.and_then(|index| sale.lines.get(index)) else {
+            return;
+        };
+        let (kind, id) = match line.item {
+            CatalogItem::Service(id) => (SaleCatalogKind::Service, id),
+            CatalogItem::Product(id) => (SaleCatalogKind::Product, id),
+            CatalogItem::Custom(_) => return,
+        };
+        let request = Arc::new(());
+        sale.price_reload = Some(request.clone());
+        cx.notify();
+        cx.spawn(async move |root, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { transport.walk_in_catalog_price(kind, id) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                let unavailable = root.t(Key::SalePriceUnavailable);
+                let Overlay::WalkIn(sale) = &mut root.overlay else {
+                    return;
+                };
+                if !sale
+                    .price_reload
+                    .as_ref()
+                    .is_some_and(|active| Arc::ptr_eq(active, &request))
+                {
+                    return;
+                }
+                sale.price_reload = None;
+                match result {
+                    Ok(price) => {
+                        sale.price_base = Some(price);
+                        sale.error = None;
+                    }
+                    Err(_) => {
+                        sale.price_base = None;
+                        sale.error = Some(unavailable.to_owned());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn render_price_editor(&self, sale: &SaleDesk, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .when_some(sale.price_base, |view, cents| {
+                view.child(format!(
+                    "{} · {}",
+                    self.t(Key::SaleCatalogPrice),
+                    self.amount_label(i64::from(cents), "EUR")
+                ))
+            })
+            .child(self.label(Key::SaleUnitPrice))
+            .child(sale.sale_price.clone())
+            .child(self.label(Key::SalePriceReason))
+            .child(sale.price_reason.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .when(sale.reviewed_price(cx).is_some(), |view| {
+                        view.child(self.button(
+                            "sale-apply-catalog-price",
+                            self.t(Key::SaleApplyPrice),
+                            Kind::Primary,
+                            cx.listener(|root, _, _, cx| {
+                                if let Overlay::WalkIn(sale) = &mut root.overlay
+                                    && let Some((index, base, review)) = sale.reviewed_price(cx)
+                                {
+                                    sale.lines[index].catalog_price = Some(base);
+                                    sale.lines[index].price_review = review;
+                                    sale.price_line = None;
+                                    sale.error = None;
+                                    cx.notify();
+                                }
+                            }),
+                        ))
+                    })
+                    .when(sale.price_reload.is_none(), |view| {
+                        view.child(self.button(
+                            "sale-reload-catalog-price",
+                            self.t(Key::SaleReloadPrice),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| root.reload_walk_in_price(cx)),
+                        ))
+                    })
+                    .child(self.button(
+                        "sale-cancel-catalog-price",
+                        self.t(Key::Cancel),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| {
+                            if let Overlay::WalkIn(sale) = &mut root.overlay {
+                                sale.price_line = None;
+                                sale.price_reload = None;
+                                cx.notify();
+                            }
+                        }),
+                    )),
+            )
+    }
+
     fn render_sale_choices(
         &self,
         sale: &SaleDesk,
@@ -598,7 +852,10 @@ impl Root {
                         continue;
                     };
                     let label = service.name.clone();
-                    view = view.child(self.sale_choice(id, label, 1000, false, cx));
+                    let price = (service.price_type.unwrap_or_default() == CatalogPrice::Fixed)
+                        .then(|| u32::try_from(service.price_cents).ok())
+                        .flatten();
+                    view = view.child(self.sale_choice(id, label, 1000, false, price, cx));
                 }
             }
             CatalogTab::Clients => {
@@ -685,6 +942,7 @@ impl Root {
                                     .unwrap_or(product.available)
                                     .min(1000),
                                 true,
+                                u32::try_from(product.price_cents).ok(),
                                 cx,
                             ),
                         );
@@ -730,7 +988,7 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(move |root, _, _, cx| {
                             if let Overlay::WalkIn(sale) = &mut root.overlay {
-                                sale.add(CatalogItem::Custom(cents), label.clone(), 1000);
+                                sale.add(CatalogItem::Custom(cents), label.clone(), 1000, None);
                                 sale.description
                                     .update(cx, |field, cx| field.set_text("", cx));
                                 sale.amount.update(cx, |field, cx| field.set_text("", cx));
@@ -750,6 +1008,7 @@ impl Root {
         name: String,
         limit: u32,
         is_product: bool,
+        catalog_price: Option<u32>,
         cx: &mut Context<Self>,
     ) -> Stateful<gpui::Div> {
         let kind = if is_product {
@@ -768,7 +1027,7 @@ impl Root {
                     } else {
                         CatalogItem::Service(id)
                     };
-                    sale.add(item, name.clone(), limit);
+                    sale.add(item, name.clone(), limit, catalog_price);
                     cx.notify();
                 }
             }),
@@ -789,15 +1048,28 @@ mod tests {
             root.open_walk_in(cx);
             let Overlay::WalkIn(desk) = &mut root.overlay else { panic!("sale did not open") };
             let product = Uuid::now_v7();
-            desk.add(CatalogItem::Product(product), "Retail product".into(), 2);
-            desk.add(CatalogItem::Product(product), "Retail product".into(), 2);
-            desk.add(CatalogItem::Product(product), "Retail product".into(), 2);
+            desk.add(CatalogItem::Product(product), "Retail product".into(), 2, Some(1000));
+            desk.add(CatalogItem::Product(product), "Retail product".into(), 2, Some(1000));
+            desk.add(CatalogItem::Product(product), "Retail product".into(), 2, Some(1000));
             desk.discount.update(cx, |field, cx| field.set_text("3,20", cx));
             desk.tip.update(cx, |field, cx| field.set_text("1.05", cx));
+            desk.edit_price(0, cx);
+            assert!(desk.build_sale(cx).is_none());
+            desk.sale_price.update(cx, |field, cx| field.set_text("8,55", cx));
+            assert!(desk.reviewed_price(cx).is_none());
+            desk.price_reason.update(cx, |field, cx| field.set_text("Reviewed offer", cx));
+            let (index, base, review) = desk.reviewed_price(cx).unwrap();
+            assert_eq!(base, 1000);
+            desk.lines[index].price_review = review;
+            desk.price_line = None;
             let draft = desk.build_sale(cx).unwrap();
             assert_eq!(draft.discount_cents, 320);
             assert_eq!(draft.tip_cents, 105);
-            assert!(matches!(draft.lines.as_slice(), [SaleItem::Product { product_id, quantity: 2 }] if *product_id == product));
+            assert!(matches!(draft.lines.as_slice(), [SaleItem::Product { product_id, quantity: 2, .. }] if *product_id == product));
+            let packet = serde_json::to_value(&draft).unwrap();
+            assert_eq!(packet["lines"][0]["catalogPriceReview"]["expectedUnitAmountCents"], 1000);
+            assert_eq!(packet["lines"][0]["catalogPriceReview"]["unitAmountCents"], 855);
+            assert_eq!(packet["lines"][0]["catalogPriceReview"]["reason"], "Reviewed offer");
             desk.pending = Some(draft);
             desk.step_quantity(0, -1);
             assert_eq!(desk.lines[0].quantity, 2);

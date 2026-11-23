@@ -45,6 +45,16 @@ export const idempotencyKeySchema = z
   .min(8)
   .max(100)
   .regex(/^[A-Za-z0-9_-]+$/);
+const catalogPriceReviewSchema = z
+  .object({
+    expectedUnitAmountCents: moneyCentsSchema,
+    unitAmountCents: moneyCentsSchema,
+    reason: z.string().trim().min(3).max(200),
+  })
+  .strict();
+export type CatalogPriceReview = z.infer<typeof catalogPriceReviewSchema>;
+export const checkoutCatalogPriceSchema = z.object({ unitAmountCents: moneyCentsSchema });
+
 export const checkoutLineInputSchema = z
   .object({
     kind: z.enum(["product", "service", "custom", "gift_card"]),
@@ -54,10 +64,17 @@ export const checkoutLineInputSchema = z
     description: z.string().trim().min(1).max(200).optional(),
     quantity: z.number().int().min(1).max(1000),
     unitAmountCents: moneyCentsSchema.optional(),
+    catalogPriceReview: catalogPriceReviewSchema.optional(),
     taxBasisPoints: z.number().int().min(0).max(10000).default(0),
   })
   .strict()
   .superRefine((line, ctx) => {
+    if (line.catalogPriceReview && line.kind !== "service" && line.kind !== "product")
+      ctx.addIssue({
+        code: "custom",
+        path: ["catalogPriceReview"],
+        message: "Only catalog services and products can have a reviewed unit price",
+      });
     if (
       line.kind === "service" &&
       (!line.serviceId ||
@@ -103,6 +120,10 @@ export const createCheckoutSchema = z
     idempotencyKey: idempotencyKeySchema,
   })
   .strict()
+  .refine(
+    (input) => !input.appointmentId || input.lines.every((line) => !line.catalogPriceReview),
+    "Use a separate sale to adjust catalog prices",
+  )
   .refine(
     (input) => Boolean(input.appointmentId) || input.lines.length > 0,
     "Checkout needs an appointment or items",

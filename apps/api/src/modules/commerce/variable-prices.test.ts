@@ -4,8 +4,10 @@ import {
   appointmentSchema,
   type Checkout,
   checkoutSchema,
+  type ServicePriceType,
 } from "@sob/contracts";
-import { service } from "@sob/db";
+import { auditLog, service } from "@sob/db";
+import { eq } from "drizzle-orm";
 import {
   type Actor,
   actor,
@@ -54,7 +56,11 @@ function firstLine(sale: Checkout) {
   if (!line) throw new Error("Missing service receipt line");
   return line;
 }
-async function book(priceType: string, priceCents = 0, accepted: Record<string, unknown> = {}) {
+async function book(
+  priceType: ServicePriceType,
+  priceCents = 0,
+  accepted: Record<string, unknown> = {},
+) {
   const result = await call("/admin/services", "POST", {
     name: "Bespoke colour",
     priceType,
@@ -65,7 +71,7 @@ async function book(priceType: string, priceCents = 0, accepted: Record<string, 
   });
   expect(result.status).toBe(201);
   const service = adminServiceSchema.parse(await result.json());
-  expect(service).toMatchObject({ priceType });
+  expect(service.priceType ?? "fixed").toBe(priceType);
   const booking = await call(
     "/appointments",
     "POST",
@@ -80,7 +86,7 @@ async function book(priceType: string, priceCents = 0, accepted: Record<string, 
   );
   expect(booking.status).toBe(201);
   const appointment = appointmentSchema.parse(await booking.json());
-  expect(appointment.services[0]).toMatchObject({ priceType });
+  expect(appointment.services[0]?.priceType ?? "fixed").toBe(priceType);
   const sale = await call(
     "/me/checkouts",
     "POST",
@@ -282,4 +288,99 @@ test("from prices preserve their promised minimum and price finalisation does no
   expect(saved.appointments.find((a) => a.id === appointment.id)?.services[0]?.priceCents).toBe(
     3000,
   );
+});
+
+test("walk-in line prices keep catalog identity, inventory, taxes and a single audited receipt", async () => {
+  const { service: item, appointment } = await book("fixed", 3000);
+  const productResponse = await call("/admin/inventory/products", "POST", {
+    name: "Samples",
+    sku: "SAMPLES",
+    priceCents: 2000,
+    costCents: 700,
+    taxBasisPoints: 2100,
+    openingStock: 5,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(productResponse.status).toBe(201);
+  const product = (await productResponse.json()) as { id: string };
+
+  const body = {
+    idempotencyKey: crypto.randomUUID(),
+    lines: [
+      {
+        kind: "service",
+        serviceId: item.id,
+        quantity: 1,
+        catalogPriceReview: {
+          expectedUnitAmountCents: 3000,
+          unitAmountCents: 2800,
+          reason: "Agreed price",
+        },
+      },
+      {
+        kind: "product",
+        productId: product.id,
+        quantity: 2,
+        catalogPriceReview: {
+          expectedUnitAmountCents: 2000,
+          unitAmountCents: 1210,
+          reason: "Test promotion",
+        },
+      },
+    ],
+  };
+  const path = "/admin/commerce/checkouts";
+  expect((await call(path, "POST", body, client)).status).toBe(403);
+  expect((await call(path, "POST", { ...body, appointmentId: appointment.id })).status).toBe(400);
+  const result = await call(path, "POST", body);
+  expect(result.status, await result.clone().text()).toBe(201);
+  const sale = checkoutSchema.parse(await result.json());
+  expect(sale.totalCents).toBe(5220);
+  expect(sale.taxCents).toBe(420);
+  expect(sale.lines.find((line) => line.productId === product.id)?.unitAmountCents).toBe(1210);
+  const stock = await call(`/admin/inventory/products/${product.id}`, "GET");
+  expect(((await stock.json()) as { stockReserved: number }).stockReserved).toBe(2);
+
+  await t.db.update(service).set({ priceCents: 3200 }).where(eq(service.id, item.id));
+  expect(checkoutSchema.parse(await (await call(path, "POST", body)).json()).id).toBe(sale.id);
+  const pricePath = `/admin/commerce/catalog-price?kind=service&id=${item.id}`;
+  expect((await call(pricePath, "GET", undefined, client)).status).toBe(403);
+  const reloaded = await call(pricePath, "GET");
+  expect(reloaded.status).toBe(200);
+  expect(reloaded.headers.get("Cache-Control")).toBe("private, no-store");
+  expect(await reloaded.json()).toEqual({ unitAmountCents: 3200 });
+
+  const stale = await call(path, "POST", { ...body, idempotencyKey: crypto.randomUUID() });
+  expect(stale.status).toBe(409);
+  expect(((await stale.json()) as { error: { code: string } }).error.code).toBe("version_conflict");
+
+  const events = (await t.db.select().from(auditLog).where(eq(auditLog.entityId, sale.id))).filter(
+    (event) => event.action === "commerce.checkout_created",
+  );
+  expect(events).toHaveLength(1);
+  const records = events[0]?.metadata.catalogPriceReviews as
+    | { checkoutLineId: string; reason: string }[]
+    | undefined;
+  expect(records?.find((record) => record.reason === "Test promotion")?.checkoutLineId).toBe(
+    sale.lines.find((line) => line.productId === product.id)?.id,
+  );
+});
+
+test("catalog price reload excludes variants of archived services", async () => {
+  const { service: parent } = await book("fixed", 3000);
+  const id = Bun.randomUUIDv7();
+  await t.db.insert(service).values({
+    id,
+    name: "Long colour",
+    catalogKind: "variant",
+    parentServiceId: parent.id,
+    optionLabel: "Long",
+    priceCents: 3500,
+    durationMinutes: 60,
+    currency: "EUR",
+  });
+  const path = `/admin/commerce/catalog-price?kind=service&id=${id}`;
+  expect(await (await call(path, "GET")).json()).toEqual({ unitAmountCents: 3500 });
+  await t.db.update(service).set({ active: false }).where(eq(service.id, parent.id));
+  expect((await call(path, "GET")).status).toBe(404);
 });

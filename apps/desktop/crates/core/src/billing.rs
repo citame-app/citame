@@ -542,6 +542,28 @@ pub struct CheckoutFinalPrice {
     pub unit_amount_cents: u32,
 }
 
+#[derive(Clone, Copy)]
+pub enum SaleCatalogKind {
+    Service,
+    Product,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum WalkInSaleError {
+    #[error("The catalog price changed")]
+    PriceChanged,
+    #[error(transparent)]
+    Transport(#[from] crate::sync::TransportError),
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogPriceReview {
+    pub expected_unit_amount_cents: u32,
+    pub unit_amount_cents: u32,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(
     tag = "kind",
@@ -552,10 +574,14 @@ pub enum SaleItem {
     Service {
         service_id: Uuid,
         quantity: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_price_review: Option<CatalogPriceReview>,
     },
     Product {
         product_id: Uuid,
         quantity: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        catalog_price_review: Option<CatalogPriceReview>,
     },
     Custom {
         description: String,

@@ -38,6 +38,7 @@ import {
   previewImportedPartialPayment,
   reviewImportedAppointmentPrice,
 } from "./appointment-billing";
+import { checkoutCatalogPrice } from "./catalog";
 import { checkoutBankTenders, gatewayFor } from "./hosted-tenders";
 import { finalizeCheckoutPrices } from "./prices";
 import {
@@ -104,6 +105,17 @@ export function commerceAdminRoutes(deps: AppDeps) {
     .use("*", operator)
     .route("/checkouts", checkoutRewardRoutes(deps))
     .route("/checkouts", hostedContinuation(deps, gateway))
+    .get("/catalog-price", async (c) => {
+      const kind = c.req.query("kind");
+      if (kind !== "service" && kind !== "product")
+        throw new DomainError("not_found", "Catalog item not found");
+      const current = await checkoutCatalogPrice(
+        deps.db,
+        kind,
+        parseOrThrow(idSchema, c.req.query("id")),
+      );
+      return c.json(current, 200, { "Cache-Control": "private, no-store" });
+    })
     .get("/unpaid", async (c) => {
       const query = parseOrThrow(calendarQuerySchema, c.req.query());
       const result = await unpaidAppointments(deps.db, query, c.get("principal"));

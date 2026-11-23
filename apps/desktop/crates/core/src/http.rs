@@ -14,8 +14,8 @@ use crate::billing::{
     CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage,
     CheckoutRefund, EligiblePassUse, ImportedPartialPayment, ImportedPartialPaymentPreview,
     ImportedPricePreview, ImportedPriceReview, ImportedSettlement, ImportedSettlementStatus,
-    PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SavedBankRefund,
-    SavedBankRefundStatus, WalkInSale,
+    PassRefundQuote, PaymentAttempt, ReceiptTender, RefundAttempt, RefundTender, SaleCatalogKind,
+    SavedBankRefund, SavedBankRefundStatus, WalkInSale, WalkInSaleError,
 };
 use crate::booking::visit::{ReviewedVisit, VisitConfirmation, VisitPacket, VisitPreview};
 use crate::booking::{
@@ -479,9 +479,44 @@ impl HttpTransport {
     pub fn create_walk_in_sale(
         &self,
         draft: &WalkInSale,
-    ) -> Result<AppointmentCheckout, TransportError> {
-        let receipt = self.post_json("/admin/commerce/checkouts", draft)?;
-        validate_checkout(receipt, None, None)
+    ) -> Result<AppointmentCheckout, WalkInSaleError> {
+        let response = self.send_json("/admin/commerce/checkouts", draft)?;
+        let receipt = read_response_with(response, |status, retry_after, body| {
+            if status == 409
+                && serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
+                    value
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_str)
+                        == Some("version_conflict")
+                })
+            {
+                return WalkInSaleError::PriceChanged;
+            }
+            review_transport_error(status, retry_after, body).into()
+        })?;
+        Ok(validate_checkout(receipt, None, None)?)
+    }
+
+    pub fn walk_in_catalog_price(
+        &self,
+        kind: SaleCatalogKind,
+        id: uuid::Uuid,
+    ) -> Result<u32, TransportError> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Price {
+            unit_amount_cents: u32,
+        }
+        let kind = match kind {
+            SaleCatalogKind::Service => "service",
+            SaleCatalogKind::Product => "product",
+        };
+        let path = format!("/admin/commerce/catalog-price?kind={kind}&id={id}");
+        let price: Price = read_response(self.get(&self.agent, &path, None)?, false)?;
+        if price.unit_amount_cents > 999_999_999 {
+            return Err(TransportError::Server("Unexpected catalog price".into()));
+        }
+        Ok(price.unit_amount_cents)
     }
 
     pub fn finalize_checkout_prices(
