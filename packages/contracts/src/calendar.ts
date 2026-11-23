@@ -61,7 +61,13 @@ export const calendarAppointmentSchema = appointmentSchema.extend({
   serviceBadges: z.array(calendarServiceBadgesSchema).optional(),
   serviceColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resources: z
-    .array(z.object({ name: z.string(), quantity: z.number().int().positive() }))
+    .array(
+      z.object({
+        resourceId: idSchema.optional(),
+        name: z.string(),
+        quantity: z.number().int().positive(),
+      }),
+    )
     .optional(),
   /** In booking order. */
   serviceNames: z.array(z.string()),

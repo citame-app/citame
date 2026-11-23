@@ -237,7 +237,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     let mut switched_generation = false;
     let snapshot_complete = store.get_meta("calendar_snapshot_complete")?.is_some();
     let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
-    let client_groups_supported = loop {
+    let (client_groups_supported, booked_resource_ids_supported) = loop {
         let since = store.cursor()?;
         let response = transport.pull_with_catalogue(
             since,
@@ -317,14 +317,50 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
         report.pages += 1;
         report.changes += applied;
         if !page.has_more {
-            break page.client_groups == Some(true);
+            break (
+                page.client_groups == Some(true),
+                page.booked_resource_ids == Some(true),
+            );
         }
     };
     if client_groups_supported {
         backfill_client_groups(store, transport, &generation, &mut report)?;
     }
+    if booked_resource_ids_supported {
+        backfill_booked_resources(store, transport, &generation, &mut report)?;
+    }
     report.cursor = store.cursor()?;
     Ok(report)
+}
+
+/// Fill allocations discarded by an older Desktop without replaying booking notices or outbox state.
+fn backfill_booked_resources(
+    store: &mut Store,
+    transport: &dyn Transport,
+    generation: &str,
+    report: &mut PullReport,
+) -> Result<(), SyncError> {
+    while let Some(since) = store.booked_resources_cursor()? {
+        let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
+        if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
+            || page.booked_resource_ids != Some(true)
+        {
+            break;
+        }
+        if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
+            return Err(SyncError::Fatal(
+                "The booked resources backfill cursor did not advance".into(),
+            ));
+        }
+        report.changes += store.apply_booked_resource_page(
+            &page.changes,
+            page.next_cursor,
+            page.has_more,
+            generation,
+        )?;
+        report.pages += 1;
+    }
+    Ok(())
 }
 
 /// Enrich existing client rows without reapplying unrelated events or moving the primary cursor.

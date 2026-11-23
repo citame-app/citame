@@ -61,6 +61,7 @@ function isTyping(target: EventTarget | null): boolean {
 export function CalendarView({
   search,
   userId = "operator",
+  accessScope,
   onSearchChange,
   role,
   bookingRole = role,
@@ -71,6 +72,7 @@ export function CalendarView({
 }: {
   search: CalendarSearch;
   userId?: string;
+  accessScope?: string;
   onSearchChange: (search: CalendarSearch) => void;
   role: UserRole;
   bookingRole?: UserRole;
@@ -94,7 +96,7 @@ export function CalendarView({
     [search.view, search.date, timeZone],
   );
   const query = useQuery({
-    ...calendarQuery({ from: range.from, to: range.to, staffIds: apiStaffIds }),
+    ...calendarQuery({ from: range.from, to: range.to, staffIds: apiStaffIds, accessScope }),
     ...(live ? { refetchInterval: false } : {}),
   });
   const calendar = query.data;
@@ -107,6 +109,7 @@ export function CalendarView({
   const { move, conflict, clearConflict } = useMoveAppointment();
   const [showCancelled, setShowCancelled] = useState(false);
   const [status, setStatus] = useState("all");
+  const [resource, setResource] = useState<{ id: string; name: string } | null>(null);
   const [text, setText] = useState("");
   const deferredText = useDeferredValue(text);
   const [openId, setOpenId] = useState<string | null>(search.appointment ?? null);
@@ -140,6 +143,29 @@ export function CalendarView({
     [calendar?.staff, calendar?.workingWindows, search.working, selectedIds, range.from, range.to],
   );
   const staffIds = useMemo(() => new Set(staff.map((member) => member.id)), [staff]);
+  const resourceOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    if (resource) names.set(resource.id, resource.name);
+    for (const appointment of calendar?.appointments ?? []) {
+      if (!staffIds.has(appointment.staffId)) continue;
+      for (const booked of appointment.resources ?? []) {
+        if (booked.resourceId) names.set(booked.resourceId, booked.name);
+      }
+    }
+    const counts = new Map<string, number>();
+    for (const name of names.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
+    const ordinals = new Map<string, number>();
+    return [...names]
+      .sort(
+        ([idA, nameA], [idB, nameB]) =>
+          nameA.localeCompare(nameB, locale) || idA.localeCompare(idB),
+      )
+      .map(([id, name]) => {
+        const ordinal = (ordinals.get(name) ?? 0) + 1;
+        ordinals.set(name, ordinal);
+        return { id, name, label: (counts.get(name) ?? 0) > 1 ? `${name} · ${ordinal}` : name };
+      });
+  }, [calendar?.appointments, locale, resource, staffIds]);
   const appointments = useMemo(() => {
     const needle = deferredText.trim().toLocaleLowerCase(locale);
     return (calendar?.appointments ?? []).filter(
@@ -147,10 +173,11 @@ export function CalendarView({
         staffIds.has(a.staffId) &&
         (showCancelled || a.status !== "cancelled") &&
         (status === "all" || a.status === status) &&
+        (!resource || a.resources?.some((booked) => booked.resourceId === resource.id)) &&
         (!needle ||
           `${a.clientName} ${a.serviceNames.join(" ")}`.toLocaleLowerCase(locale).includes(needle)),
     );
-  }, [calendar?.appointments, showCancelled, status, deferredText, locale, staffIds]);
+  }, [calendar?.appointments, showCancelled, status, resource, deferredText, locale, staffIds]);
   const isDay = search.view === "day";
   const index = useMemo(
     () => (isDay ? null : indexCalendar(appointments, timeZone)),
@@ -279,7 +306,7 @@ export function CalendarView({
   const prefetch = (direction: 1 | -1) => {
     const next = rangeFor(search.view, shiftDate(search.date, search.view, direction), timeZone);
     void queryClient.prefetchQuery(
-      calendarQuery({ from: next.from, to: next.to, staffIds: apiStaffIds }),
+      calendarQuery({ from: next.from, to: next.to, staffIds: apiStaffIds, accessScope }),
     );
   };
   const onDay = (date: string, staffId?: string) =>
@@ -555,12 +582,37 @@ export function CalendarView({
                 setStatus("all");
                 setShowCancelled(false);
                 setText("");
+                setResource(null);
                 go({ staff: undefined, working: undefined });
               }}
             >
               {t("calendar.clearFilters")}
             </button>
           </section>
+          {resourceOptions.length > 0 && (
+            <section className="calendar-filter-section">
+              <h3>
+                <label htmlFor="calendar-resource">{t("calendar.resourceFilter")}</label>
+              </h3>
+              <select
+                id="calendar-resource"
+                className="calendar-filter-select"
+                value={resource?.id ?? ""}
+                onChange={(event) => {
+                  setResource(
+                    resourceOptions.find((option) => option.id === event.target.value) ?? null,
+                  );
+                }}
+              >
+                <option value="">{t("calendar.allResources")}</option>
+                {resourceOptions.map(({ id, label }) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </section>
+          )}
           {serviceNames.length > 0 && (
             <section className="calendar-filter-section calendar-service-legend">
               <h3>{t("calendar.serviceColors")}</h3>

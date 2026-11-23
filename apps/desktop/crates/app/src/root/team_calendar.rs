@@ -96,6 +96,7 @@ impl Root {
                             },
                             cx.listener(|root, _, _, cx| {
                                 root.week_working_only = !root.week_working_only;
+                                root.calendar_resources.take();
                                 cx.notify();
                             }),
                         )
@@ -280,7 +281,9 @@ impl Root {
         let rows: Vec<_> = column
             .items
             .iter()
-            .filter(|item| filter.matches(item))
+            .filter(|item| {
+                filter.matches(item) && self.includes_calendar_resource(&item.appointment)
+            })
             .collect();
         let staff_id = column.staff.id.clone();
         let count = i18n::fill(

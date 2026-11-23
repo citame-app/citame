@@ -265,6 +265,7 @@ fn overlay_calendar_outbox(
                         notes: str_of(p, "notes"),
                         version: 1,
                         services: picked,
+                        resources: Vec::new(),
                         service_badges: Vec::new(),
                         billing_review_reasons: Vec::new(),
                         externally_settled: false,

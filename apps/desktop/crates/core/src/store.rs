@@ -162,6 +162,21 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX local_calendar_ack_version ON local_calendar_ack(appointment_id,version);
     "#,
+    // Existing binaries can consume the server backfill before saving this projection.
+    // Fill this projection separately from calendar notices and the main cursor.
+    r#"
+    INSERT INTO meta (key, value)
+    SELECT 'booked_resources_cursor', '0' WHERE EXISTS (SELECT 1 FROM appointment);
+    "#,
+    // Replicas that already synced allocations by name must fetch their stable IDs.
+    r#"
+    INSERT INTO meta (key, value)
+    SELECT 'booked_resources_cursor', '0' WHERE EXISTS (
+        SELECT 1 FROM appointment, json_each(appointment.json, '$.resources') AS resource
+         WHERE json_type(resource.value, '$.resourceId') IS NULL
+    )
+    ON CONFLICT(key) DO UPDATE SET value = '0';
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -291,6 +306,17 @@ fn upsert(tx: &Transaction, c: &RawChange, alert: bool) -> Result<()> {
                     serde_json::to_string(&a)?
                 ],
             )?;
+            if a.resources
+                .iter()
+                .any(|resource| resource.resource_id.is_none())
+            {
+                // A fresh replica can see name-only allocations before its API is upgraded.
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('booked_resources_cursor', '0')
+                     ON CONFLICT(key) DO NOTHING",
+                    [],
+                )?;
+            }
             calendar_notices::apply(tx, &a.id, notice)?;
         }
         "client" => {
@@ -929,6 +955,60 @@ impl Store {
             .unwrap_or(0))
     }
 
+    pub(crate) fn booked_resources_cursor(&self) -> Result<Option<i64>> {
+        Ok(self
+            .get_meta("booked_resources_cursor")?
+            .and_then(|value| value.parse().ok()))
+    }
+
+    pub(crate) fn apply_booked_resource_page(
+        &mut self,
+        changes: &[RawChange],
+        next_cursor: i64,
+        has_more: bool,
+        generation: &str,
+    ) -> Result<usize> {
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            let mut updated = 0;
+            for change in changes {
+                if change.entity != "appointment" || change.op != "upsert" {
+                    continue;
+                }
+                let Some(data) = &change.data else { continue };
+                let Some(resources) = data.get("resources") else {
+                    continue;
+                };
+                let Some(version) = data.get("version").and_then(Value::as_i64) else {
+                    continue;
+                };
+                let resources: Vec<BookedResource> = serde_json::from_value(resources.clone())?;
+                updated += store.conn.execute(
+                    "UPDATE appointment SET json = json_set(json, '$.resources', json(?2))
+                     WHERE id = ?1 AND version = ?3 AND (
+                         json_type(json, '$.resources') IS NULL OR EXISTS (
+                             SELECT 1 FROM json_each(appointment.json, '$.resources') AS resource
+                             WHERE json_type(resource.value, '$.resourceId') IS NULL
+                         )
+                     )",
+                    params![change.id, serde_json::to_string(&resources)?, version],
+                )?;
+            }
+            if has_more {
+                Self::set_meta_at(
+                    &store.conn,
+                    "booked_resources_cursor",
+                    &next_cursor.to_string(),
+                )?;
+            } else {
+                store
+                    .conn
+                    .execute("DELETE FROM meta WHERE key = 'booked_resources_cursor'", [])?;
+            }
+            Ok(updated)
+        })
+    }
+
     /// Resume enrichment for legacy rows without rewinding the main change stream.
     pub(crate) fn client_groups_cursor(&self) -> Result<Option<i64>> {
         let missing: bool = self.conn.query_row(
@@ -1322,7 +1402,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;

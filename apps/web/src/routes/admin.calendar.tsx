@@ -38,8 +38,11 @@ export const Route = createFileRoute("/admin/calendar")({
     const { user, accessPreset } = context.session;
     const permissions = permissionsFor(user.role, accessPreset);
     const staffIds = permissions.allCalendars ? deps.staff?.split(",") : undefined;
+    const accessScope = calendarScope(context.session);
     await Promise.allSettled([
-      context.queryClient.ensureQueryData(calendarQuery({ from, to, staffIds }, routeEndpoints)),
+      context.queryClient.ensureQueryData(
+        calendarQuery({ from, to, staffIds, accessScope }, routeEndpoints),
+      ),
       context.queryClient.ensureQueryData(staffQuery(routeEndpoints)),
       ...(permissions.clients && permissions.editCalendar
         ? [
@@ -57,6 +60,15 @@ export const Route = createFileRoute("/admin/calendar")({
   component: CalendarPage,
 });
 
+function calendarScope(session: NonNullable<ReturnType<typeof Route.useRouteContext>["session"]>) {
+  return JSON.stringify([
+    session.user.id,
+    session.user.role,
+    session.accessPreset,
+    session.staffId,
+  ]);
+}
+
 function CalendarPage() {
   const { t, timeZone } = useI18n();
   const { session } = Route.useRouteContext();
@@ -64,6 +76,7 @@ function CalendarPage() {
   const navigate = useNavigate({ from: Route.fullPath });
   if (!session) return null;
   const permissions = permissionsFor(session.user.role, session.accessPreset);
+  const accessScope = calendarScope(session);
   const date = search.date ?? localDateOf(new Date().toISOString(), timeZone);
   return (
     <>
@@ -77,6 +90,8 @@ function CalendarPage() {
         </p>
       )}
       <CalendarView
+        key={accessScope}
+        accessScope={accessScope}
         userId={session.user.id}
         search={{
           view: search.view ?? "day",

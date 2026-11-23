@@ -4,7 +4,10 @@ import {
   appointmentContext,
   appointmentService,
   clientProfile,
+  resourcePool,
+  resourceReservation,
   service,
+  serviceResource,
   staffProfile,
 } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
@@ -152,6 +155,80 @@ test("an existing replica learns Booksy origin without an appointment edit", asy
   expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
     { id: imported.id, op: "delete", data: null },
   ]);
+});
+
+test("existing replicas receive confirmed resource quantities only for visible appointments", async () => {
+  const unallocated = await book(f.beaId);
+  const [room] = await t.db
+    .insert(resourcePool)
+    .values({
+      name: "Treatment room",
+      kind: "room",
+      capacity: 2,
+      idempotencyKey: "fixture-room",
+      requestHash: "fixture-room",
+    })
+    .returning();
+  if (!room) throw new Error("Missing resource pool");
+  await t.db
+    .insert(serviceResource)
+    .values({ serviceId: f.haircutId, resourceId: room.id, quantity: 2 });
+  const allocated = await book();
+  const cursor = await head();
+  const migration = await Bun.file(
+    new URL("../../../../../packages/db/drizzle/0124_sync_booked_resources.sql", import.meta.url),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    // The fixture already installed the change trigger. Replay only the historical backfill.
+    for (const statement of migration.split("--> statement-breakpoint").slice(-2)) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  for (const viewer of [owner, ana]) {
+    const page = await pull(t, viewer, { since: cursor });
+    expect(page.changes).toHaveLength(1);
+    expect(page.changes[0]).toMatchObject({
+      id: allocated.id,
+      entity: "appointment",
+      op: "upsert",
+      data: {
+        resources: [{ resourceId: room.id, name: "Treatment room", quantity: 2 }],
+        version: allocated.version,
+      },
+    });
+  }
+  expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
+    { id: allocated.id, op: "delete", data: null },
+  ]);
+  const full = await pullAll(t, owner);
+  const unrelated = full.changes.find((change) => change.id === unallocated.id);
+  expect(unrelated?.op).toBe("upsert");
+  expect(unrelated?.data).not.toHaveProperty("resources");
+
+  const beforeRename = await head();
+  const renamed = await call(owner, "PUT", `/admin/resources/${room.id}`, {
+    name: "Room 2",
+    kind: "room",
+    capacity: 2,
+    active: true,
+    version: room.version,
+  });
+  expect(renamed.status).toBe(200);
+  const updated = (await pull(t, ana, { since: beforeRename })).changes.find(
+    (change) => change.id === allocated.id,
+  );
+  expect(updated).toMatchObject({ data: { version: allocated.version } });
+  expect(updated?.data).toHaveProperty("resources", [
+    { resourceId: room.id, name: "Room 2", quantity: 2 },
+  ]);
+
+  const beforeRemoval = await head();
+  await t.db.delete(resourceReservation).where(eq(resourceReservation.appointmentId, allocated.id));
+  const cleared = (await pull(t, ana, { since: beforeRemoval })).changes.find(
+    (change) => change.id === allocated.id,
+  );
+  expect(cleared).toMatchObject({ op: "upsert", data: { version: allocated.version } });
+  expect(cleared?.data).not.toHaveProperty("resources");
 });
 
 test("billing holds and verified prices replicate without exposing the evidence reference or notes", async () => {
@@ -425,6 +502,7 @@ describe("snapshot (since=0)", () => {
     expect(page).toEqual({
       generation: "initial",
       giftCardsScope,
+      bookedResourceIds: true,
       changes: [],
       nextCursor: h,
       hasMore: false,

@@ -337,6 +337,7 @@ struct CalendarLayout {
 }
 
 struct CalendarColumnLayout {
+    item_indices: Vec<usize>,
     bounds: Vec<(f32, f32)>,
     lanes: Vec<(usize, usize)>,
     width: f32,
@@ -359,6 +360,8 @@ pub struct Root {
     overview_search: Entity<TextField>,
     overview_status: Option<AppointmentStatus>,
     overview_show_cancelled: bool,
+    calendar_resource: Option<(String, String)>,
+    calendar_resources: OnceCell<Vec<calendar_overview::ResourceOption>>,
 
     calendar_layout: OnceCell<CalendarLayout>,
     slot_drag: Option<slots::SlotDrag>,
@@ -445,6 +448,8 @@ impl Root {
             calendar_mode: CalendarMode::Day,
             period_views: vec![],
             overview_staff: BTreeSet::new(),
+            calendar_resource: None,
+            calendar_resources: OnceCell::new(),
             overview_search,
             overview_status: None,
             overview_show_cancelled: false,
@@ -641,6 +646,7 @@ impl Root {
         self.week_staff_id.clear();
         self.week_layout = team_calendar::WeekLayout::Timeline;
         self.overview_staff.clear();
+        self.calendar_resource = None;
         self.overview_search
             .update(cx, |field, cx| field.set_text("", cx));
         self.overview_status = None;
@@ -809,6 +815,7 @@ impl Root {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         self.calendar_layout.take();
+        self.calendar_resources.take();
         // Capture the version before reading the view. A sync commit during the reads must
         // still trigger a refresh on the next tick.
         self.data_version = self.svc.store.data_version().ok();
@@ -817,6 +824,7 @@ impl Root {
         if (self.calendar_scope.is_some() && self.calendar_scope != scope)
             || self.replica_generation != generation
         {
+            self.calendar_resource = None;
             if !self.preserve_open_salon_draft(cx)
                 && !self.preserve_open_booking_policy_draft(cx)
                 && !self.preserve_open_assignment_draft()
@@ -966,6 +974,7 @@ impl Root {
 
     fn set_week_staff(&mut self, id: String, cx: &mut Context<Self>) {
         self.calendar_layout.take();
+        self.calendar_resources.take();
         self.week_staff_id = id;
         if self.team_calendar_visible() {
             self.week_layout = team_calendar::WeekLayout::Timeline;
@@ -2247,15 +2256,18 @@ impl Root {
             let columns: Vec<_> = visible_columns
                 .iter()
                 .map(|(date, column)| {
-                    let bounds: Vec<_> = column
+                    let (item_indices, bounds): (Vec<_>, Vec<_>) = column
                         .items
                         .iter()
-                        .map(|item| appointment_bounds(item, *date, self.tz))
-                        .collect();
+                        .enumerate()
+                        .filter(|(_, item)| self.includes_calendar_resource(&item.appointment))
+                        .map(|(index, item)| (index, appointment_bounds(item, *date, self.tz)))
+                        .unzip();
                     let lanes = appointment_lanes(&bounds);
                     let width =
                         lanes.iter().map(|&(_, count)| count).max().unwrap_or(1) as f32 * 104.0;
                     CalendarColumnLayout {
+                        item_indices,
                         bounds,
                         lanes,
                         width: width.max(160.0),
@@ -2333,6 +2345,7 @@ impl Root {
             .enumerate()
             .map(|(index, (date, col))| {
                 let CalendarColumnLayout {
+                    item_indices,
                     bounds,
                     lanes,
                     width,
@@ -2413,8 +2426,9 @@ impl Root {
                             .map(|block| self.render_time_off(block, *date, first, last, cx)),
                     )
                     .children(
-                        col.items
+                        item_indices
                             .iter()
+                            .map(|&index| &col.items[index])
                             .zip(bounds.iter().copied().zip(lanes.iter().copied()))
                             .filter(|(_, ((start, end), _))| {
                                 *end >= visible_start - HOUR_PX && *start <= visible_end + HOUR_PX
@@ -3450,8 +3464,40 @@ impl Root {
                 )
             })
             .when_some(current.as_ref(), |body, appointment| {
-                body.child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
-                    .children(self.render_related_visit(appointment, d, cx))
+                body.when(!appointment.resources.is_empty(), |body| {
+                    let moved_locally = pending
+                        && self
+                            .svc
+                            .store
+                            .appointment(&appointment.id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|saved| {
+                                saved.starts_at != appointment.starts_at
+                                    || saved.staff_id != appointment.staff_id
+                            });
+                    let label = if moved_locally {
+                        Key::AppointmentResourcesPrevious
+                    } else {
+                        Key::AppointmentResources
+                    };
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .text_sm()
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child(self.t(label)))
+                            .children(appointment.resources.iter().map(|resource| {
+                                div().child(SharedString::from(format!(
+                                    "{} × {}",
+                                    resource.name, resource.quantity
+                                )))
+                            })),
+                    )
+                })
+                .child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
+                .children(self.render_related_visit(appointment, d, cx))
             })
             .when(
                 !pending
@@ -4359,6 +4405,7 @@ impl Render for Root {
                     base.flex()
                         .flex_col()
                         .child(self.render_header(cx))
+                        .children(self.render_calendar_resource_filter(cx))
                         .when(self.calendar_mode == CalendarMode::Week, |frame| {
                             frame.child(self.render_week_controls(cx))
                         })

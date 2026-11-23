@@ -12,7 +12,6 @@ for (const scheme of ["light", "dark"] as const) {
       const bookings: { id: string; version: number }[] = [];
       let resourceId: string | undefined;
       await signInThroughUi(page, fixture.ownerEmail, "/admin/services");
-      await page.getByRole("button", { name: "Resources", exact: true }).click();
       await expect(page).toHaveURL(/\/admin\/services$/);
       const catalog = await (await page.request.get("/api/admin/services")).json();
       const haircut = catalog.services.find((s: { id: string }) => s.id === fixture.haircut);
@@ -68,7 +67,7 @@ for (const scheme of ["light", "dark"] as const) {
         ).json();
         expect(
           calendar.appointments.find((a: { id: string }) => a.id === booking.id)?.resources,
-        ).toEqual([{ name, quantity: 1 }]);
+        ).toEqual([{ resourceId, name, quantity: 1 }]);
         await panel.getByRole("button", { name: `Edit ${name}`, exact: true }).click();
         await panel.getByLabel("Available units", { exact: true }).fill("2");
         await panel.getByRole("button", { name: "Save resource", exact: true }).click();
@@ -114,6 +113,16 @@ for (const scheme of ["light", "dark"] as const) {
           fullPage: true,
           animations: "disabled",
         });
+        const date = nextWeekday(5, [1]);
+        await page.goto(`/admin/calendar?date=${date}&view=list`);
+        const filters = page.getByRole("button", { name: "Filtros de agenda" });
+        if (await filters.isVisible()) await filters.click();
+        const bookedResource = page.getByLabel("Recurso reservado", { exact: true });
+        await bookedResource.selectOption({ label: name });
+        await expect(bookedResource).toHaveValue(resourceId ?? "");
+        await expect(page.getByRole("button", { name: /Resource browser client/ })).toBeVisible();
+        await expectNoHorizontalScroll(page);
+        await expectNoSeriousA11yViolations(page, `calendar resource filter ${scheme}`);
       } finally {
         for (const booking of bookings)
           await page.request.patch(`/api/appointments/${booking.id}`, {

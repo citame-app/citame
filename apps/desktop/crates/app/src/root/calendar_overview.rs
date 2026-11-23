@@ -97,9 +97,152 @@ pub(super) fn month_range(date: NaiveDate) -> Option<(NaiveDate, u32)> {
     ))
 }
 
+pub(super) struct ResourceOption {
+    id: String,
+    name: String,
+    label: String,
+}
+
 impl Root {
     pub(super) fn includes_calendar_staff(&self, id: &str) -> bool {
         self.overview_staff.is_empty() || self.overview_staff.contains(id)
+    }
+
+    pub(super) fn includes_calendar_resource(&self, appointment: &Appointment) -> bool {
+        self.calendar_resource.as_ref().is_none_or(|(id, _)| {
+            appointment
+                .resources
+                .iter()
+                .any(|resource| resource.resource_id.as_ref() == Some(id))
+        })
+    }
+
+    fn calendar_resource_options(&self) -> &[ResourceOption] {
+        self.calendar_resources.get_or_init(|| {
+            let mut names = HashMap::new();
+            if let Some((id, name)) = &self.calendar_resource {
+                names.insert(id.as_str(), name.as_str());
+            }
+            let columns: Vec<_> = if self.calendar_mode.is_overview() {
+                self.period_views
+                    .iter()
+                    .flat_map(|day| &day.columns)
+                    .filter(|column| self.includes_calendar_staff(&column.staff.id))
+                    .collect()
+            } else {
+                self.calendar_columns()
+                    .into_iter()
+                    .map(|(_, column)| column)
+                    .collect()
+            };
+            for resource in columns
+                .into_iter()
+                .flat_map(|column| &column.items)
+                .flat_map(|item| &item.appointment.resources)
+            {
+                if let Some(id) = &resource.resource_id {
+                    names.insert(id.as_str(), resource.name.as_str());
+                }
+            }
+            let mut counts = HashMap::new();
+            for name in names.values() {
+                *counts.entry(*name).or_insert(0) += 1;
+            }
+            let mut ordered: Vec<_> = names.into_iter().collect();
+            ordered.sort_by_cached_key(|(id, name)| (name.to_lowercase(), *id));
+            let mut ordinals = HashMap::new();
+            ordered
+                .into_iter()
+                .map(|(id, name)| {
+                    let ordinal = ordinals.entry(name).or_insert(0);
+                    *ordinal += 1;
+                    let label = if counts[name] > 1 {
+                        format!("{name} · {ordinal}")
+                    } else {
+                        name.to_owned()
+                    };
+                    ResourceOption {
+                        id: id.to_owned(),
+                        name: name.to_owned(),
+                        label,
+                    }
+                })
+                .collect()
+        })
+    }
+
+    fn select_calendar_resource(
+        &mut self,
+        selection: Option<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.calendar_resource = selection;
+        self.calendar_resources.take();
+        self.calendar_layout.take();
+        cx.notify();
+    }
+
+    pub(super) fn render_calendar_resource_filter(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let options = self.calendar_resource_options();
+        if options.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .id("calendar-resource-filter")
+                .flex()
+                .flex_none()
+                .min_w_0()
+                .overflow_x_scroll()
+                .items_center()
+                .gap_2()
+                .px_4()
+                .py_1()
+                .border_b_1()
+                .border_color(theme::line())
+                .bg(theme::panel())
+                .child(
+                    div()
+                        .flex_none()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::CalendarBookedResource)),
+                )
+                .child(div().flex_none().child(self.button(
+                    "calendar-all-resources",
+                    self.t(Key::CalendarAllResources),
+                    if self.calendar_resource.is_none() {
+                        Kind::Primary
+                    } else {
+                        Kind::Ghost
+                    },
+                    cx.listener(|root, _, _, cx| root.select_calendar_resource(None, cx)),
+                )))
+                .children(options.iter().map(|ResourceOption { id, name, label }| {
+                    let selection = (id.clone(), name.clone());
+                    div().flex_none().child(
+                        self.button(
+                            SharedString::from(format!("calendar-resource-{id}")),
+                            label.clone(),
+                            if self
+                                .calendar_resource
+                                .as_ref()
+                                .is_some_and(|(selected, _)| selected == id)
+                            {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |root, _, _, cx| {
+                                root.select_calendar_resource(Some(selection.clone()), cx)
+                            }),
+                        ),
+                    )
+                })),
+        )
     }
 
     pub(super) fn preferred_calendar_staff(&self) -> Option<&str> {
@@ -137,6 +280,7 @@ impl Root {
                 cx.listener(|root, _, _, cx| {
                     root.overview_staff.clear();
                     root.calendar_layout.take();
+                    root.calendar_resources.take();
                     cx.notify();
                 }),
             ))
@@ -164,6 +308,7 @@ impl Root {
                                     root.overview_staff.insert(id.clone());
                                 }
                                 root.calendar_layout.take();
+                                root.calendar_resources.take();
                                 cx.notify();
                             }),
                         )
@@ -279,7 +424,10 @@ impl Root {
                     column
                         .items
                         .iter()
-                        .filter(|item| filter.matches(item))
+                        .filter(|item| {
+                            filter.matches(item)
+                                && self.includes_calendar_resource(&item.appointment)
+                        })
                         .map(|item| (&column.staff, item)),
                 );
             }
@@ -651,6 +799,65 @@ mod tests {
             assert_eq!(root.calendar_mode, CalendarMode::Day);
             assert_eq!(root.calendar_columns().len(), 1);
             assert_eq!(root.calendar_columns()[0].1.staff.id, other);
+        });
+    }
+
+    #[gpui::test]
+    async fn matching_resource_ids_survive_calendar_view_changes(cx: &mut TestAppContext) {
+        let (_directory, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        root.update(cx, |root, cx| {
+            let mut first = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            first.resources = vec![BookedResource {
+                resource_id: Some("room-00000001".into()),
+                name: "Treatment room".into(),
+                quantity: 1,
+            }];
+            let mut second = first.clone();
+            second.id = uuid::Uuid::now_v7().to_string();
+            second.resources[0].resource_id = Some("room-00000002".into());
+            let mut fallback = first.clone();
+            fallback.id = uuid::Uuid::now_v7().to_string();
+            fallback.resources[0].resource_id = None;
+            let changes: Vec<_> = [&first, &second, &fallback]
+                .into_iter()
+                .enumerate()
+                .map(|(index, appointment)| RawChange {
+                    seq: 21 + index as i64,
+                    entity: "appointment".into(),
+                    id: appointment.id.clone(),
+                    op: "upsert".into(),
+                    data: Some(serde_json::to_value(appointment).unwrap()),
+                })
+                .collect();
+            root.svc.store.apply_page(&changes, 23).unwrap();
+            root.reload(cx);
+            assert_eq!(root.calendar_resource_options().len(), 2);
+            assert_ne!(
+                root.calendar_resource_options()[0].label,
+                root.calendar_resource_options()[1].label
+            );
+            root.select_calendar_resource(
+                Some(("room-00000002".into(), "Treatment room".into())),
+                cx,
+            );
+            assert!(!root.includes_calendar_resource(&first));
+            assert!(!root.includes_calendar_resource(&fallback));
+            for mode in [CalendarMode::Month, CalendarMode::List] {
+                root.set_calendar_mode(mode, cx);
+                let date = first.starts_at.with_timezone(&root.tz).date_naive();
+                let day = root
+                    .period_views
+                    .iter()
+                    .find(|day| day.date == date)
+                    .unwrap();
+                let found = root.overview_items(day, &calendar::OverviewFilter::default());
+                assert_eq!(found.len(), 1);
+                assert_eq!(found[0].1.appointment.id, second.id);
+            }
+            root.select_calendar_resource(None, cx);
+            assert!(root.includes_calendar_resource(&first));
+            assert!(root.includes_calendar_resource(&fallback));
         });
     }
 

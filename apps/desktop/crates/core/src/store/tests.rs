@@ -461,7 +461,7 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
 }
 
 #[test]
-fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
+fn upgrading_booked_resources_preserves_the_live_cursor_notices_and_unsent_work() {
     let mut conn = Connection::open_in_memory().unwrap();
     for sql in &MIGRATIONS[..9] {
         conn.execute_batch(sql).unwrap();
@@ -477,18 +477,88 @@ fn upgrading_calendar_notices_keeps_the_replica_cursor_and_unsent_work() {
     tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','1')", [])
         .unwrap();
     tx.execute(
+        "INSERT INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
+        [],
+    )
+    .unwrap();
+    tx.execute(
         "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
          VALUES ('queued','2026-11-21T09:00:00Z','appointment.cancel',?1,'{}')",
         [A1],
     )
     .unwrap();
     tx.commit().unwrap();
-    let store = Store::init(conn).unwrap();
+    let mut store = Store::init(conn).unwrap();
     assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(
+        store
+            .get_meta("calendar_snapshot_complete")
+            .unwrap()
+            .as_deref(),
+        Some("1")
+    );
+    assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+    let mut visit = appt_change(1, A1, 1);
+    visit.data.as_mut().unwrap()["resources"] = json!([{ "name": "Room", "quantity": 2 }]);
+    let mut unrelated = appt_change(2, A2, 1);
+    unrelated.data.as_mut().unwrap()["resources"] = json!([{ "name": "Other", "quantity": 1 }]);
+    assert_eq!(
+        store
+            .apply_booked_resource_page(&[visit, unrelated], 2, false, INITIAL_GENERATION)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0].quantity,
+        2
+    );
+    assert!(store.appointment(A2).unwrap().is_none());
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
     assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
     let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].1, CalendarNoticeKind::New);
     assert_eq!(notices[0].2.id, A1);
+}
+
+#[test]
+fn upgrading_allocations_saved_by_name_repairs_the_existing_appointment() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    let previous_schema = MIGRATIONS.len() - 1;
+    for sql in &MIGRATIONS[..previous_schema] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", previous_schema as i64)
+        .unwrap();
+    let mut visit = appt_change(1, A1, 1);
+    visit.data.as_mut().unwrap()["resources"] = json!([{ "name": "Room", "quantity": 2 }]);
+    let tx = conn.transaction().unwrap();
+    apply_change(&tx, &visit, false).unwrap();
+    tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','1')", [])
+        .unwrap();
+    tx.commit().unwrap();
+
+    let mut store = Store::init(conn).unwrap();
+    assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0].name,
+        "Room"
+    );
+
+    visit.data.as_mut().unwrap()["resources"] =
+        json!([{ "resourceId": "room-1", "name": "Room", "quantity": 2 }]);
+    store
+        .apply_booked_resource_page(&[visit], 1, false, INITIAL_GENERATION)
+        .unwrap();
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0]
+            .resource_id
+            .as_deref(),
+        Some("room-1")
+    );
 }
 
 #[test]
@@ -857,6 +927,33 @@ fn booksy_origin_refreshes_an_existing_appointment_at_the_same_version() {
     assert!(saved.imported_from_booksy);
     assert_eq!(saved.version, 1);
     assert_eq!(store.booking_notice_head().unwrap(), 0);
+}
+
+#[test]
+fn booked_resources_refresh_existing_replicas_and_survive_offline_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        let mut visit = appt_change(1, A1, 1);
+        store.apply_page(&[visit.clone()], 1).unwrap();
+        assert!(store.appointment(A1).unwrap().unwrap().resources.is_empty());
+
+        visit.seq = 2;
+        visit.data.as_mut().unwrap()["resources"] =
+            json!([{ "resourceId": "room-1", "name": "Treatment room", "quantity": 2 }]);
+        store
+            .apply_sync_page(&[visit], 2, true, true, &[], None)
+            .unwrap();
+        assert_eq!(store.booking_notice_head().unwrap(), 0);
+    }
+    let store = Store::open(&path).unwrap();
+    let visit = store.appointment(A1).unwrap().unwrap();
+    assert_eq!(visit.version, 1);
+    assert_eq!(visit.resources.len(), 1);
+    assert_eq!(visit.resources[0].resource_id.as_deref(), Some("room-1"));
+    assert_eq!(visit.resources[0].name, "Treatment room");
+    assert_eq!(visit.resources[0].quantity, 2);
 }
 
 #[test]

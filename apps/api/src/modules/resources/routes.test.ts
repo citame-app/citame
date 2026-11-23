@@ -356,7 +356,7 @@ test("calendar resource summaries retain the allocated quantities", async () => 
     (
       (await r.json()) as { appointments: { id: string; resources?: unknown[] }[] }
     ).appointments.find((b) => b.id === a.id)?.resources,
-  ).toEqual([{ name: "Treatment rooms", quantity: 2 }]);
+  ).toEqual([{ resourceId: resource.id, name: "Treatment rooms", quantity: 2 }]);
 });
 test("deposit expiry releases shared capacity even when it cancels outside the regular appointment command", async () => {
   const resource = await pool();
