@@ -728,6 +728,7 @@ keys! {
     CombinationUseCataloguePrices => ("Use catalogue prices", "Usar precios del catálogo"),
     CombinationVisibility => ("Booking visibility", "Visibilidad de la reserva"),
     CombinationInternal => ("Staff only", "Solo el equipo"),
+    CombinationAvailableToStaff => ("Available in the staff calendar", "Disponible en la agenda del equipo"),
     CombinationVisibilityUnreviewed => ("Visibility pending review", "Visibilidad pendiente de revisar"),
     CombinationFixedProfessionals => ("Professionals for this combination", "Profesionales para esta combinación"),
     CombinationArchiveBeforeRemovingPrice => ("Archive the staff-only combination before using catalogue prices.", "Archiva la combinación interna antes de usar precios del catálogo."),

@@ -6,6 +6,8 @@ use crate::combinations::{
 };
 use std::collections::BTreeSet;
 
+const LEGACY_CACHE: &str = "service_combinations";
+
 impl Store {
     pub(crate) fn reserve_combination_payloads(
         &mut self,
@@ -63,6 +65,7 @@ impl Store {
             generation: generation.into(),
             combinations: combinations.to_vec(),
         };
+        conn.execute("DELETE FROM meta WHERE key = ?1", [LEGACY_CACHE])?;
         Self::set_meta_at(conn, CACHE, &serde_json::to_string(&view)?)
     }
 
@@ -71,7 +74,10 @@ impl Store {
     }
 
     pub(super) fn forget_combinations_at(conn: &Connection) -> Result<()> {
-        conn.execute("DELETE FROM meta WHERE key = ?1", [CACHE])?;
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?1, ?2)",
+            [CACHE, LEGACY_CACHE],
+        )?;
         Ok(())
     }
 
@@ -153,7 +159,15 @@ impl Store {
                 let restored = conflict.requires_restored_review();
                 if conflict.reason == "conflict" && !restored {
                     let edit = serde_json::from_value::<PendingCombination>(conflict.payload)?;
-                    if current.is_none_or(|row| edit.version.is_none_or(|old| row.version <= old)) {
+                    if current.is_none_or(|row| {
+                        edit.version.is_none_or(|old| {
+                            let legacy_snapshot = row.version == old
+                                && edit.reviewed.as_ref().is_some_and(|reviewed| {
+                                    reviewed.lacked_fixed_terms(&row.draft)
+                                });
+                            row.version <= old && !legacy_snapshot
+                        })
+                    }) {
                         return Err(CoreError::CatalogueVersionChanged);
                     }
                 }
@@ -179,9 +193,8 @@ impl Store {
                         "Choose the visibility before publishing the combination".into(),
                     ));
                 }
-                if proposed.active
-                    && proposed.fixed_terms.is_none()
-                    && previous_terms.is_some_and(|terms| terms.online_booking == Some(false))
+                if proposed.fixed_terms.is_none()
+                    && previous_terms.is_some_and(|terms| !terms.can_remove(proposed.active))
                 {
                     return Err(CoreError::Invalid(
                         "Archive the internal combination first".into(),
@@ -210,10 +223,7 @@ impl Store {
                     proposed,
                     reviewed: current.map(|row| row.draft.clone()),
                 };
-                let mut payload = serde_json::to_value(&edit)?;
-                if edit.proposed.fixed_terms.is_none() && terms_changed {
-                    payload["fixedTerms"] = serde_json::Value::Null;
-                }
+                let payload = serde_json::to_value(edit)?;
                 if let Some(row) = pending_edit {
                     store.conn.execute(
                         "UPDATE outbox SET mutation_id = ?1, payload = ?2 WHERE mutation_id = ?3

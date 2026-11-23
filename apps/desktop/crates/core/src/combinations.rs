@@ -6,9 +6,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const CREATE: &str = "combination.create";
 pub const UPDATE: &str = "combination.update";
-pub(crate) const CACHE: &str = "service_combinations";
+pub(crate) const CACHE: &str = "service_combinations_with_fixed_terms";
 pub const LIMIT: usize = 100;
 pub const MAX_SERVICES: usize = 24;
+pub const MAX_FIXED_STAFF: usize = 100;
 pub const MAX_FIXED_PRICE_CENTS: u32 = 999_999_999;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -18,6 +19,12 @@ pub struct FixedCombinationTerms {
     pub staff_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online_booking: Option<bool>,
+}
+
+impl FixedCombinationTerms {
+    pub fn can_remove(&self, active: bool) -> bool {
+        !active || self.online_booking != Some(false)
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -32,6 +39,10 @@ pub struct CombinationDraft {
 }
 
 impl CombinationDraft {
+    pub fn lacked_fixed_terms(&self, current: &Self) -> bool {
+        self.fixed_terms.is_none() && current.fixed_terms.is_some()
+    }
+
     pub fn normalized(mut self) -> Self {
         self.name = crate::trim_like_javascript(&self.name).into();
         self.description = self
@@ -72,7 +83,7 @@ impl CombinationDraft {
                     .map(|cents| u64::from(*cents))
                     .sum::<u64>()
                     > u64::from(MAX_FIXED_PRICE_CENTS)
-                || !(1..=100).contains(&terms.staff_ids.len())
+                || !(1..=MAX_FIXED_STAFF).contains(&terms.staff_ids.len())
                 || terms
                     .staff_ids
                     .iter()
@@ -316,7 +327,7 @@ mod tests {
         assert!(wire.payload.get("fixedTerms").is_none());
         assert!(wire.payload.get("_reviewed").is_none());
 
-        entry.payload["fixedTerms"] = serde_json::Value::Null;
+        entry.payload.as_object_mut().unwrap().remove("fixedTerms");
         assert_eq!(
             entry.to_wire().payload.get("fixedTerms"),
             Some(&serde_json::Value::Null)

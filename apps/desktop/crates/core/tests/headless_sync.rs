@@ -863,7 +863,7 @@ fn native_resource_pool_creation_and_edits_resume_through_the_proxy() {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
-    use sob_core::combinations::{CombinationDraft, PendingCombination};
+    use sob_core::combinations::{CombinationDraft, FixedCombinationTerms, PendingCombination};
 
     let device = proxy_device();
     let web = Device::sign_in();
@@ -881,7 +881,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
         web.rest_post(
             "/admin/services",
             json!({
-                "name":name,"durationMinutes":30,"priceCents":2500,"staffIds":[staff],
+                "name":name,"durationMinutes":30,"priceCents":2500,"currency":"EUR","staffIds":[staff],
             }),
         )["id"]
             .as_str()
@@ -1030,6 +1030,182 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
     assert_eq!(row["serviceIds"], json!(cloud_order));
     assert_eq!(row["active"], false);
     assert!(store.conflicts().unwrap().is_empty());
+
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    let fixed = CombinationDraft {
+        active: true,
+        fixed_terms: Some(FixedCombinationTerms {
+            prices_cents: vec![1735, 1265],
+            staff_ids: vec![staff],
+            online_booking: Some(false),
+        }),
+        ..previous.draft.clone()
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.pending_combinations().unwrap()[0].edit.proposed,
+        fixed
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed);
+    assert!(previous.bookable);
+    let mut legacy = CombinationDraft {
+        fixed_terms: None,
+        ..fixed.clone()
+    };
+    let reviewed = legacy.clone();
+    legacy.name = "Legacy offline name".into();
+    legacy.service_ids.reverse();
+    let pending = PendingCombination {
+        id: id.clone(),
+        version: Some(previous.version),
+        proposed: legacy,
+        reviewed: Some(reviewed),
+    };
+    let outdated = store
+        .enqueue(
+            "combination.update",
+            &id,
+            serde_json::to_value(&pending).unwrap(),
+        )
+        .unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert_eq!(
+        store
+            .conflict(&outdated.mutation_id)
+            .unwrap()
+            .unwrap()
+            .reason,
+        "conflict"
+    );
+    let fixed = pending
+        .proposed
+        .rebase(pending.reviewed.as_ref().unwrap(), &previous.draft, false);
+    assert_eq!(fixed.service_ids, previous.draft.service_ids);
+    assert_eq!(fixed.fixed_terms, previous.draft.fixed_terms);
+    assert_eq!(fixed.name, "Legacy offline name");
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed.clone(),
+                None,
+                Some(&outdated.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed);
+    let fixed_archived = CombinationDraft {
+        active: false,
+        ..fixed
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed_archived.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed_archived);
+    let without_fixed_terms = CombinationDraft {
+        fixed_terms: None,
+        ..fixed_archived
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                without_fixed_terms.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, without_fixed_terms);
 }
 
 #[test]

@@ -28,6 +28,7 @@ struct Editor {
     service_ids: Vec<String>,
     active: bool,
     fixed: Option<FixedEditor>,
+    fixed_enabled: bool,
     conflict: Option<Recovery>,
 }
 
@@ -46,7 +47,6 @@ impl FixedEditor {
                 let price = terms
                     .prices_cents
                     .get(index)
-                    .filter(|&&price| price != u32::MAX)
                     .map(|&price| sob_core::reports::decimal_amount(u64::from(price)))
                     .unwrap_or_default();
                 (id.clone(), text_field("EUR", &price, cx))
@@ -57,6 +57,22 @@ impl FixedEditor {
             staff_ids: terms.staff_ids,
             online_booking: terms.online_booking,
         }
+    }
+
+    fn terms(&self, ids: &[String], cx: &App) -> Option<FixedCombinationTerms> {
+        let prices_cents = ids
+            .iter()
+            .map(|id| {
+                let field = self.prices.get(id)?;
+                sob_core::billing::parse_reviewed_amount(field.read(cx).text())
+                    .filter(|price| *price <= sob_core::combinations::MAX_FIXED_PRICE_CENTS)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(FixedCombinationTerms {
+            prices_cents,
+            staff_ids: self.staff_ids.clone(),
+            online_booking: self.online_booking,
+        })
     }
 }
 
@@ -84,41 +100,32 @@ impl Desk {
 }
 
 impl Editor {
-    fn draft(&self, cx: &App) -> CombinationDraft {
+    fn draft(&self, cx: &App) -> Option<CombinationDraft> {
         let description = self
             .description
             .iter()
             .map(|field| field.read(cx).text())
             .collect::<Vec<_>>()
             .join("\n");
-        CombinationDraft {
-            name: self.name.read(cx).text().into(),
-            description: Some(description),
-            service_ids: self.service_ids.clone(),
-            active: self.active,
-            fixed_terms: self.fixed.as_ref().map(|fixed| FixedCombinationTerms {
-                prices_cents: self
-                    .service_ids
-                    .iter()
-                    .map(|id| {
-                        fixed
-                            .prices
-                            .get(id)
-                            .and_then(|price| {
-                                sob_core::billing::parse_reviewed_amount(price.read(cx).text())
-                            })
-                            .unwrap_or(u32::MAX)
-                    })
-                    .collect(),
-                staff_ids: fixed.staff_ids.clone(),
-                online_booking: fixed.online_booking,
-            }),
-        }
-        .normalized()
+        let fixed_terms = if self.fixed_enabled {
+            Some(self.fixed.as_ref()?.terms(&self.service_ids, cx)?)
+        } else {
+            None
+        };
+        Some(
+            CombinationDraft {
+                name: self.name.read(cx).text().into(),
+                description: Some(description),
+                service_ids: self.service_ids.clone(),
+                active: self.active,
+                fixed_terms,
+            }
+            .normalized(),
+        )
     }
 
     fn dirty(&self, cx: &App) -> bool {
-        self.draft(cx) != self.opened.clone().normalized()
+        self.draft(cx).as_ref() != Some(&self.opened.clone().normalized())
     }
 
     fn current<'a>(&self, view: &'a CombinationCatalogue) -> Option<&'a ManagedCombination> {
@@ -133,6 +140,10 @@ impl Editor {
             })
     }
 
+    fn has_legacy_terms(&self, current: &ManagedCombination) -> bool {
+        self.version == Some(current.version) && self.original.lacked_fixed_terms(&current.draft)
+    }
+
     fn can_review(&self, view: &CombinationCatalogue) -> bool {
         let current = self.current(view);
         let changed_history = self.generation != view.generation;
@@ -144,13 +155,19 @@ impl Editor {
                     .conflict
                     .as_ref()
                     .and_then(|row| row.minimum_version)
-                    .is_none_or(|version| current.is_some_and(|row| row.version > version)))
+                    .is_none_or(|version| {
+                        current.is_some_and(|row| {
+                            row.version > version
+                                || (row.version == version && self.has_legacy_terms(row))
+                        })
+                    }))
     }
 
     fn populate(&mut self, draft: CombinationDraft, cx: &mut Context<Root>) {
         self.name
             .update(cx, |field, cx| field.set_text(&draft.name, cx));
         self.description = description_fields(draft.description.as_deref(), cx);
+        self.fixed_enabled = draft.fixed_terms.is_some();
         self.fixed = draft
             .fixed_terms
             .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx));
@@ -292,6 +309,7 @@ impl Root {
             name: text_field(self.t(Key::CombinationName), &draft.name, cx),
             description: description_fields(draft.description.as_deref(), cx),
             search: text_field(self.t(Key::CombinationFind), "", cx),
+            fixed_enabled: draft.fixed_terms.is_some(),
             fixed: draft
                 .fixed_terms
                 .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx)),
@@ -433,9 +451,16 @@ impl Root {
                 return;
             }
             let current = editor.current(view);
-            let draft = editor.draft(cx);
+            let Some(draft) = editor.draft(cx) else {
+                desk.notice = Some(Key::CombinationPriceUnreviewed);
+                return;
+            };
             let reviewed = current.map_or(draft.clone(), |row| {
-                draft.rebase(&editor.original, &row.draft, keep)
+                draft.rebase(
+                    &editor.original,
+                    &row.draft,
+                    keep && !editor.has_legacy_terms(row),
+                )
             });
             editor.original = current
                 .map(|row| row.draft.clone())
@@ -461,13 +486,18 @@ impl Root {
         if editor.needs_review(desk.catalogue.as_ref()) || desk.confirm_close {
             return;
         }
+        let Some(draft) = editor.draft(cx) else {
+            desk.notice = Some(Key::CombinationPriceUnreviewed);
+            cx.notify();
+            return;
+        };
         let replaces = editor.conflict.as_ref().map(|row| row.mutation_id.as_str());
         use sob_core::error::CoreError;
         match self.svc.store.queue_combination(
             &editor.generation,
             &editor.id,
             editor.version,
-            editor.draft(cx),
+            draft,
             editor.pending_id.as_deref(),
             replaces,
         ) {
@@ -543,19 +573,17 @@ impl Root {
             let Some(editor) = &mut desk.editor else {
                 return;
             };
-            if editor.fixed.is_some() {
-                if editor.active
-                    && editor
-                        .original
-                        .fixed_terms
-                        .as_ref()
-                        .is_some_and(|terms| terms.online_booking == Some(false))
+            if editor.fixed_enabled {
+                if editor
+                    .original
+                    .fixed_terms
+                    .as_ref()
+                    .is_some_and(|terms| !terms.can_remove(editor.active))
                 {
                     desk.notice = Some(Key::CombinationArchiveBeforeRemovingPrice);
                     return;
                 }
-                editor.fixed = None;
-            } else {
+            } else if editor.fixed.is_none() {
                 editor.fixed = Some(FixedEditor::from_terms(
                     &editor.service_ids,
                     FixedCombinationTerms {
@@ -566,6 +594,7 @@ impl Root {
                     cx,
                 ));
             }
+            editor.fixed_enabled = !editor.fixed_enabled;
             desk.notice = None;
         });
     }
@@ -604,7 +633,7 @@ mod tests {
                 }));
                 root.svc.store.apply_page(&changes, 1003).unwrap();
                 root.svc.store.set_meta(
-                    "service_combinations",
+                    "service_combinations_with_fixed_terms",
                     &serde_json::json!({"generation": generation, "combinations": []}).to_string(),
                 ).unwrap();
                 root.status.connectivity = Connectivity::Offline;
@@ -642,6 +671,8 @@ mod tests {
                     fixed.prices[first].update(cx, |price, cx| price.set_text("17,90", cx));
                     fixed.prices[second].update(cx, |price, cx| price.set_text("12.10", cx));
                 });
+                root.toggle_fixed_combination(cx);
+                root.toggle_fixed_combination(cx);
                 root.move_combination_service(0, 1, cx);
                 root.save_combination(cx);
                 let fixed = root.svc.store.pending_combinations().unwrap().remove(0);

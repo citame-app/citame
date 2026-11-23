@@ -154,6 +154,14 @@ impl Root {
                 let id = row.id.clone();
                 let status = if !row.draft.active {
                     Key::CombinationArchived
+                } else if row.bookable
+                    && row
+                        .draft
+                        .fixed_terms
+                        .as_ref()
+                        .is_some_and(|terms| terms.online_booking == Some(false))
+                {
+                    Key::CombinationAvailableToStaff
                 } else if row.bookable {
                     Key::CombinationLive
                 } else {
@@ -203,13 +211,7 @@ impl Root {
                 let prices = terms
                     .prices_cents
                     .iter()
-                    .map(|&cents| {
-                        if cents <= sob_core::combinations::MAX_FIXED_PRICE_CENTS {
-                            self.amount_label(i64::from(cents), "EUR")
-                        } else {
-                            self.t(Key::CombinationPriceUnreviewed).into()
-                        }
-                    })
+                    .map(|&cents| self.amount_label(i64::from(cents), "EUR"))
                     .collect::<Vec<_>>()
                     .join(" · ");
                 let professionals = terms
@@ -248,7 +250,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let needs_review = editor.needs_review(desk.catalogue.as_ref());
-        let draft = editor.draft(cx);
+        let fixed = editor.fixed.as_ref().filter(|_| editor.fixed_enabled);
         div()
             .id("combination-editor")
             .min_h_0()
@@ -257,7 +259,12 @@ impl Root {
             .flex_col()
             .gap_2()
             .when(needs_review, |view| {
-                view.child(self.render_combination_review(desk, editor, &draft, cx))
+                view.child(self.render_combination_review(
+                    desk,
+                    editor,
+                    editor.draft(cx).as_ref(),
+                    cx,
+                ))
             })
             .child(self.label(Key::CombinationName))
             .child(editor.name.clone())
@@ -323,7 +330,7 @@ impl Root {
             ))
             .child(self.button(
                 "combination-toggle-fixed-price",
-                self.t(if editor.fixed.is_some() {
+                self.t(if editor.fixed_enabled {
                     Key::CombinationUseCataloguePrices
                 } else {
                     Key::CombinationUseFixedPrice
@@ -331,14 +338,14 @@ impl Root {
                 Kind::Ghost,
                 cx.listener(|root, _, _, cx| root.toggle_fixed_combination(cx)),
             ))
-            .when_some(editor.fixed.as_ref(), |view, fixed| {
+            .when_some(fixed, |view, fixed| {
                 view.child(self.render_fixed_combination_fields(fixed, cx))
             })
             .child(self.label(Key::CombinationOrder))
             .children(editor.service_ids.iter().enumerate().map(|(index, id)| {
                 self.render_ordered_combination_service(index, editor.service_ids.len(), id, cx)
                     .when_some(
-                        editor.fixed.as_ref().and_then(|fixed| fixed.prices.get(id)),
+                        fixed.and_then(|fixed| fixed.prices.get(id)),
                         |row, price| row.child(div().w(px(105.)).child(price.clone())),
                     )
             }))
@@ -433,7 +440,10 @@ impl Root {
                                             fixed.staff_ids.iter().position(|staff| *staff == id)
                                         {
                                             fixed.staff_ids.remove(index);
-                                        } else if active && fixed.staff_ids.len() < 100 {
+                                        } else if active
+                                            && fixed.staff_ids.len()
+                                                < sob_core::combinations::MAX_FIXED_STAFF
+                                        {
                                             fixed.staff_ids.push(id.clone());
                                         }
                                     }
@@ -448,22 +458,25 @@ impl Root {
         &self,
         desk: &Desk,
         editor: &Editor,
-        draft: &CombinationDraft,
+        draft: Option<&CombinationDraft>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let view = desk.catalogue.as_ref();
         let current = view.and_then(|view| editor.current(view));
-        let can_review = view.is_some_and(|view| editor.can_review(view));
-        let overlaps = current.is_some_and(|row| {
-            draft.rebase(&editor.original, &row.draft, true)
-                != draft.rebase(&editor.original, &row.draft, false)
+        let can_review = draft.is_some() && view.is_some_and(|view| editor.can_review(view));
+        let overlaps = current.zip(draft).is_some_and(|(row, draft)| {
+            !editor.has_legacy_terms(row)
+                && draft.rebase(&editor.original, &row.draft, true)
+                    != draft.rebase(&editor.original, &row.draft, false)
         });
         div()
             .flex()
             .flex_col()
             .gap_2()
             .child(self.t(Key::CombinationChanged))
-            .child(self.combination_summary(draft, Key::CombinationDraft))
+            .when_some(draft, |view, draft| {
+                view.child(self.combination_summary(draft, Key::CombinationDraft))
+            })
             .when_some(current, |view, row| {
                 view.child(self.combination_summary(&row.draft, Key::CombinationCurrent))
             })
@@ -472,7 +485,11 @@ impl Root {
                 |view| view.child(self.t(Key::CombinationMissing)),
             )
             .when(!can_review, |view| {
-                view.child(self.t(Key::CombinationNeedsSync))
+                view.child(self.t(if draft.is_none() {
+                    Key::CombinationPriceUnreviewed
+                } else {
+                    Key::CombinationNeedsSync
+                }))
             })
             .when(can_review, |view| {
                 let action = if editor.version.is_some() && current.is_none() {
@@ -561,7 +578,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let query = editor.search.read(cx).text().trim().to_lowercase();
-        let fixed = editor.fixed.as_ref();
+        let fixed = editor.fixed.as_ref().filter(|_| editor.fixed_enabled);
         div().flex().flex_wrap().gap_1().children(
             self.services
                 .iter()
