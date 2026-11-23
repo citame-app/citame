@@ -13,6 +13,7 @@ export interface AuditEntry {
   entity: string;
   entityId?: string | null;
   metadata?: Record<string, unknown>;
+  createdAt?: Date;
 }
 
 const SECRET_KEY = /pass(word)?|token|secret|authorization|cookie|credential|hash/i;
@@ -44,5 +45,6 @@ export async function recordAudit(db: AuditExecutor, entry: AuditEntry): Promise
     entity: entry.entity,
     entityId: entry.entityId ?? null,
     metadata: redactMetadata(entry.metadata ?? {}),
+    createdAt: entry.createdAt,
   });
 }

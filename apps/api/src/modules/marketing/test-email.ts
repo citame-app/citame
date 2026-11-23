@@ -1,6 +1,6 @@
 import type { CampaignTestEmail, CampaignTestEmailReceipt } from "@sob/contracts";
 import { auditLog, type Database, user } from "@sob/db";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt, sql } from "drizzle-orm";
 import type { AppDeps } from "../../app";
 import { recordAudit } from "../../audit";
 import { requireRole } from "../../auth/policy";
@@ -8,7 +8,6 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { createSmtpProvider } from "../../notifications/providers/smtp";
 import { PermanentProviderError } from "../../notifications/providers/types";
-import type { RateLimiter } from "../../rate-limit";
 import type { Tx } from "../../tx";
 import { getSalonSettings } from "../settings/service";
 import { renderCampaignMessage } from "./message";
@@ -40,6 +39,7 @@ async function testAttempt(
   tx: Tx,
   scope: { actorUserId: string; entity: string; entityId: string },
   filter: { requestId: string } | { version: number },
+  now: number,
 ) {
   const metadata = sql`(case when jsonb_typeof(${auditLog.metadata}) = 'string'
       then (${auditLog.metadata} #>> '{}')::jsonb else ${auditLog.metadata} end)`;
@@ -47,7 +47,7 @@ async function testAttempt(
     .select({
       action: auditLog.action,
       metadata: auditLog.metadata,
-      interrupted: sql<boolean>`${auditLog.createdAt} < clock_timestamp() - interval '5 minutes'`,
+      interrupted: sql<boolean>`${auditLog.createdAt} < ${new Date(now - 5 * 60_000)}`,
     })
     .from(auditLog)
     .where(
@@ -77,8 +77,7 @@ async function testAttempt(
 }
 
 export async function requestCampaignTestEmail(
-  { db, config, disableEmailDeliveryTest }: AppDeps,
-  limiter: RateLimiter,
+  { db, config, disableEmailDeliveryTest, rateLimitNow = Date.now }: AppDeps,
   principal: Principal,
   id: string,
   input: CampaignTestEmail,
@@ -104,7 +103,8 @@ export async function requestCampaignTestEmail(
     if (draft.status !== "draft" || draft.channel === "sms" || !draft.subject || !draft.emailBody)
       throw new DomainError("invalid_state", "Save an email draft with a subject and message");
 
-    const repeated = await testAttempt(tx, audit, { requestId: input.requestId });
+    const checkedAt = rateLimitNow();
+    const repeated = await testAttempt(tx, audit, { requestId: input.requestId }, checkedAt);
     if (repeated) {
       if (repeated.version !== input.version)
         throw new DomainError("version_conflict", "Review this campaign version again");
@@ -112,20 +112,38 @@ export async function requestCampaignTestEmail(
     }
     if (input.mode === "check")
       return { status: "not_requested" as const, requestId: input.requestId };
-    const previous = await testAttempt(tx, audit, { version: input.version });
+    const previous = await testAttempt(tx, audit, { version: input.version }, checkedAt);
     if (
       previous?.status === "pending" ||
       (previous?.status === "unconfirmed" && input.mode !== "replace_unconfirmed")
     )
       return { status: previous.status, requestId: previous.requestId };
     const salon = await getSalonSettings(tx);
-    // Claim the quota only for a new send, after resolving replays under the draft lock.
-    const budget = await limiter.hit("marketing-campaign-test", principal.userId, {
-      max: 3,
-      windowSeconds: 60,
+    // Serialize new claims across this owner's drafts. The audit row is the durable quota debit.
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`marketing-campaign-test:${principal.userId}`}, 0))`,
+    );
+    const now = rateLimitNow();
+    const windowStart = Math.floor(now / 60_000) * 60_000;
+    const windowEnd = windowStart + 60_000;
+    const claims = await tx
+      .select({ id: auditLog.id })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.actorUserId, principal.userId),
+          eq(auditLog.action, actionFor.pending),
+          gte(auditLog.createdAt, new Date(windowStart)),
+          lt(auditLog.createdAt, new Date(windowEnd)),
+        ),
+      )
+      .limit(3);
+    if (claims.length === 3) return { retryAfterSeconds: Math.ceil((windowEnd - now) / 1000) };
+    await recordAudit(tx, {
+      ...audit,
+      action: actionFor.pending,
+      createdAt: new Date(now),
     });
-    if (!budget.allowed) return { retryAfterSeconds: budget.retryAfterSeconds };
-    await recordAudit(tx, { ...audit, action: actionFor.pending });
     return { draft, recipient, salonName: salon.name };
   });
   if (!("draft" in claim) || !claim.draft) return claim;
@@ -155,6 +173,10 @@ export async function requestCampaignTestEmail(
   } finally {
     await provider.close?.();
   }
-  await recordAudit(db, { ...audit, action: actionFor[status] });
+  await recordAudit(db, {
+    ...audit,
+    action: actionFor[status],
+    createdAt: new Date(rateLimitNow()),
+  });
   return { status, requestId: input.requestId };
 }

@@ -19,7 +19,6 @@ import type { AppEnv } from "../../auth/principal";
 import { clientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import { errorBody, parseOrThrow, readJson } from "../../http";
-import type { RateLimiter } from "../../rate-limit";
 import { marketingCapabilities } from "./audience";
 import { consentFor, setMarketingConsent, unsubscribeMarketing } from "./consent";
 import {
@@ -38,7 +37,7 @@ import { verifyMarketingOptOut } from "./tokens";
 
 const id = (value: string) => parseOrThrow(idSchema, value);
 
-export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
+export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {}) {
   const now = deps.now ?? (() => new Date());
   const routes = new Hono<AppEnv>()
     .use("*", async (c, next) => {
@@ -60,7 +59,7 @@ export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
       const capabilities = marketingCapabilities(deps.config.notifications);
       const principal = c.get("principal");
       const canTestEmail =
-        Boolean(limiter) &&
+        emailTests &&
         capabilities.email &&
         !deps.disableEmailDeliveryTest &&
         principal.role === "owner" &&
@@ -150,7 +149,7 @@ export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
         ),
       ),
     );
-  if (limiter)
+  if (emailTests)
     routes.post(
       "/campaigns/:id/test-email",
       bodyLimit({
@@ -161,7 +160,6 @@ export function marketingAdminRoutes(deps: AppDeps, limiter?: RateLimiter) {
       async (c) => {
         const result = await requestCampaignTestEmail(
           deps,
-          limiter,
           c.get("principal"),
           id(c.req.param("id")),
           parseOrThrow(campaignTestEmailSchema, await readJson(c)),

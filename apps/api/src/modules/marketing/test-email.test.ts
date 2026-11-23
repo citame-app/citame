@@ -86,8 +86,13 @@ async function prepareDraft() {
       staffProfileId: fixtures.anaId,
     }),
   ]);
+  return { owner, staff, id: await createDraft(owner.cookie), root };
+}
+
+const root = "/admin/marketing/campaigns";
+
+async function createDraft(cookie: string) {
   const id = crypto.randomUUID();
-  const root = "/admin/marketing/campaigns";
   const create = await json(
     t.app,
     root,
@@ -104,10 +109,10 @@ async function prepareDraft() {
       delayMinutes: 0,
       birthdayLeadDays: 0,
     },
-    owner.cookie,
+    cookie,
   );
   expect(create.status, await create.clone().text()).toBe(201);
-  return { owner, staff, id, root };
+  return id;
 }
 
 test("only the verified owner receives a reviewed test, with a safe replay", async () => {
@@ -140,7 +145,10 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   }
   const retry = await send(owner.cookie);
   expect(retry.status).toBe(200);
-  expect(await retry.json()).toEqual({ status: "accepted", requestId: packet.requestId });
+  expect(await retry.json()).toEqual({
+    status: "accepted",
+    requestId: packet.requestId,
+  });
   const audit = await t.db
     .select({ action: auditLog.action, metadata: auditLog.metadata })
     .from(auditLog)
@@ -159,8 +167,8 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
 test("test-email quota counts SMTP claims and permits replays after exhaustion", async () => {
   const { owner, id, root } = await prepareDraft();
   const path = `${root}/${id}/test-email`;
-  const send = (version: number, requestId = crypto.randomUUID()) =>
-    json(t.app, path, "POST", { version, requestId }, owner.cookie);
+  const send = (version: number, requestId = crypto.randomUUID(), target = path) =>
+    json(t.app, target, "POST", { version, requestId }, owner.cookie);
 
   for (let n = 0; n < 3; n++) expect((await send(2)).status).toBe(409);
   const first = crypto.randomUUID();
@@ -168,10 +176,29 @@ test("test-email quota counts SMTP claims and permits replays after exhaustion",
     expect(response.status, await response.clone().text()).toBe(200);
 
   expect((await send(1)).status).toBe(200);
+  await t.db.execute(sql`
+    create function fail_test_email_claim() returns trigger language plpgsql as $$
+    begin
+      raise exception 'test fixture rejects the send claim';
+    end
+    $$
+  `);
+  try {
+    await t.db.execute(sql`
+      create trigger fail_test_email_claim before insert on audit_log
+      for each row when (new.action = 'marketing.campaign_test_requested')
+      execute function fail_test_email_claim()
+    `);
+    expect((await send(1)).status).toBe(500);
+  } finally {
+    await t.db.execute(sql`drop function fail_test_email_claim() cascade`);
+  }
+  expect(messages).toHaveLength(2);
   expect((await send(1)).status).toBe(200);
   expect(messages).toHaveLength(3);
 
-  const limited = await send(1);
+  const secondDraft = `${root}/${await createDraft(owner.cookie)}/test-email`;
+  const limited = await send(1, crypto.randomUUID(), secondDraft);
   expect(limited.status).toBe(429);
   expect(limited.headers.get("Retry-After")).not.toBeNull();
 
@@ -179,6 +206,10 @@ test("test-email quota counts SMTP claims and permits replays after exhaustion",
   expect(replay.status).toBe(200);
   expect(await replay.json()).toEqual({ status: "accepted", requestId: first });
   expect(messages).toHaveLength(3);
+
+  t.clock.advance(60);
+  expect((await send(1, crypto.randomUUID(), secondDraft)).status).toBe(200);
+  expect(messages).toHaveLength(4);
 });
 
 test("an SMTP rejection permits a fresh test and an ambiguous send requires another explicit action", async () => {
@@ -188,7 +219,11 @@ test("an SMTP rejection permits a fresh test and an ambiguous send requires anot
       t.app,
       `${root}/${id}/test-email`,
       "POST",
-      { version: 1, requestId, mode: replaceUnconfirmed ? "replace_unconfirmed" : "send" },
+      {
+        version: 1,
+        requestId,
+        mode: replaceUnconfirmed ? "replace_unconfirmed" : "send",
+      },
       owner.cookie,
     );
     expect(response.status, await response.clone().text()).toBe(200);
@@ -235,13 +270,22 @@ test("a status check from another window never claims a new send", async () => {
   try {
     for (let i = 0; i < 100 && !messages.length; i += 1) await Bun.sleep(10);
     expect(messages).toHaveLength(1);
-    expect(await next(other, "send")).toEqual({ status: "pending", requestId: first });
+    expect(await next(other, "send")).toEqual({
+      status: "pending",
+      requestId: first,
+    });
   } finally {
     held.resolve();
     await send;
   }
-  expect(await next(first, "check")).toEqual({ status: "accepted", requestId: first });
-  expect(await next(other, "check")).toEqual({ status: "not_requested", requestId: other });
+  expect(await next(first, "check")).toEqual({
+    status: "accepted",
+    requestId: first,
+  });
+  expect(await next(other, "check")).toEqual({
+    status: "not_requested",
+    requestId: other,
+  });
   expect(messages).toHaveLength(1);
 });
 
