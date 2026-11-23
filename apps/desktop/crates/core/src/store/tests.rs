@@ -461,7 +461,7 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
 }
 
 #[test]
-fn upgrading_calendar_notices_and_resources_keeps_unsent_work_and_replays_silently() {
+fn upgrading_booked_resources_preserves_the_live_cursor_notices_and_unsent_work() {
     let mut conn = Connection::open_in_memory().unwrap();
     for sql in &MIGRATIONS[..9] {
         conn.execute_batch(sql).unwrap();
@@ -488,16 +488,36 @@ fn upgrading_calendar_notices_and_resources_keeps_unsent_work_and_replays_silent
     )
     .unwrap();
     tx.commit().unwrap();
-    let store = Store::init(conn).unwrap();
-    assert_eq!(store.cursor().unwrap(), 0);
-    assert!(
+    let mut store = Store::init(conn).unwrap();
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(
         store
             .get_meta("calendar_snapshot_complete")
             .unwrap()
-            .is_none()
+            .as_deref(),
+        Some("1")
     );
+    assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+    let mut visit = appt_change(1, A1, 1);
+    visit.data.as_mut().unwrap()["resources"] = json!([{ "name": "Room", "quantity": 2 }]);
+    let mut unrelated = appt_change(2, A2, 1);
+    unrelated.data.as_mut().unwrap()["resources"] = json!([{ "name": "Other", "quantity": 1 }]);
+    assert_eq!(
+        store
+            .apply_booked_resource_page(&[visit, unrelated], 2, false, INITIAL_GENERATION)
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        store.appointment(A1).unwrap().unwrap().resources[0].quantity,
+        2
+    );
+    assert!(store.appointment(A2).unwrap().is_none());
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
     assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
     let notices = store.booking_notices_after(0).unwrap();
+    assert_eq!(notices.len(), 1);
     assert_eq!(notices[0].1, CalendarNoticeKind::New);
     assert_eq!(notices[0].2.id, A1);
 }
