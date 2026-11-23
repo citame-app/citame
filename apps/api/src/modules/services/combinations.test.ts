@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { serviceCombinationSchema } from "@sob/contracts";
 import { service, serviceStaff, staffProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -220,4 +221,53 @@ test("a queued manager cannot create a combination after losing catalog access",
   }
   expect(await pending).toMatchObject({ code: "forbidden" });
   expect(await (await call("/admin/services/combinations")).json()).toEqual({ combinations: [] });
+});
+
+test("keeps a discounted combination draft and its booking-specific staff rights across older edits", async () => {
+  await t.db.delete(serviceStaff).where(eq(serviceStaff.serviceId, f.colorId));
+  const draft = {
+    ...input(),
+    active: false,
+    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId] },
+  };
+  const saved = await call("/admin/services/combinations", "POST", draft);
+  expect(saved.status).toBe(201);
+  const row = serviceCombinationSchema.parse(await saved.json());
+  expect(row).toMatchObject({ active: false, bookable: false, fixedTerms: draft.fixedTerms });
+  expect(await (await call("/services/combinations")).json()).toEqual({ combinations: [] });
+  expect(await (await call("/admin/services/combinations")).json()).toMatchObject({
+    combinations: [{ id: row.id, fixedTerms: draft.fixedTerms }],
+  });
+  const path = `/admin/services/combinations/${row.id}`;
+  const { idempotencyKey: _key, fixedTerms: _terms, ...fields } = draft;
+  const updated = await call(path, "PUT", { ...fields, name: "New title", version: row.version });
+  expect(updated.status).toBe(200);
+  expect(await updated.json()).toMatchObject({ fixedTerms: draft.fixedTerms });
+  expect(
+    (
+      await call(path, "PUT", {
+        ...fields,
+        serviceIds: [...fields.serviceIds].reverse(),
+        version: row.version + 1,
+      })
+    ).status,
+  ).toBe(409);
+});
+
+test("rejects incorrect price allocations and validates the combination's explicit staff list", async () => {
+  const draft = { ...input(), active: false };
+  for (const fixedTerms of [
+    { pricesCents: [1200], staffIds: [f.anaId] },
+    { pricesCents: [1200, 3400], staffIds: [] },
+    { pricesCents: [1200, 3400], staffIds: [crypto.randomUUID()] },
+  ]) {
+    const response = await call("/admin/services/combinations", "POST", { ...draft, fixedTerms });
+    expect([400, 404]).toContain(response.status);
+  }
+  const active = await call("/admin/services/combinations", "POST", {
+    ...draft,
+    active: true,
+    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId] },
+  });
+  expect(active.status).toBe(400);
 });

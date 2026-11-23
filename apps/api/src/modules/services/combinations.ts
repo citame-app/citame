@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
-import type { CombinationCreate, CombinationUpdate, Service } from "@sob/contracts";
-import { type Database, serviceCombination } from "@sob/db";
-import { and, asc, count, eq, sql } from "drizzle-orm";
+import type {
+  CombinationCreate,
+  CombinationUpdate,
+  FixedCombinationTerms,
+  Service,
+} from "@sob/contracts";
+import { type Database, serviceCombination, staffProfile } from "@sob/db";
+import { and, asc, count, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
@@ -42,7 +47,12 @@ function hasQualifiedTeam(services: Service[], assignments: ActiveAssignments): 
   return parts.length <= 8 && parts.every(qualified);
 }
 
-async function validate(db: Connection, ids: string[], requireOnline = false) {
+async function validate(
+  db: Connection,
+  ids: string[],
+  requireOnline = false,
+  fixed?: FixedCombinationTerms | null,
+) {
   const services = await getBookableServices(db, ids);
   if (requireOnline) {
     try {
@@ -52,13 +62,36 @@ async function validate(db: Connection, ids: string[], requireOnline = false) {
       throw new DomainError("validation_error", "Choose treatments available for online booking");
     }
   }
+  if (fixed) {
+    if (fixed.pricesCents.length !== services.length)
+      throw new DomainError("validation_error", "Enter one price for each treatment in order");
+    const members = await db
+      .select({ id: staffProfile.id })
+      .from(staffProfile)
+      .where(
+        and(
+          inArray(staffProfile.id, fixed.staffIds),
+          eq(staffProfile.active, true),
+          isNull(staffProfile.deletedAt),
+        ),
+      );
+    if (members.length !== fixed.staffIds.length)
+      throw new DomainError("not_found", "A professional for the combination is unavailable");
+    return;
+  }
   if (!hasQualifiedTeam(services, await activeAssignments(db, ids)))
     throw new DomainError(
       "validation_error",
       "Each treatment and its extras need a qualified professional",
     );
 }
+function fixedTerms(row: Row): FixedCombinationTerms | null {
+  return row.fixedPricesCents && row.fixedStaffIds
+    ? { pricesCents: Array.from(row.fixedPricesCents), staffIds: row.fixedStaffIds }
+    : null;
+}
 async function writtenView(db: Connection, row: Row) {
+  if (row.fixedPricesCents) return view(row, false);
   try {
     await validate(db, row.serviceIds, true);
     return view(row, true);
@@ -69,6 +102,7 @@ async function writtenView(db: Connection, row: Row) {
 }
 
 function view(row: Row, bookable: boolean) {
+  const fixed = fixedTerms(row);
   return {
     id: row.id,
     name: row.name,
@@ -77,6 +111,7 @@ function view(row: Row, bookable: boolean) {
     active: row.active,
     version: row.version,
     bookable,
+    ...(fixed ? { fixedTerms: fixed } : {}),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -96,6 +131,7 @@ export async function listCombinations(db: Database, principal?: Principal) {
     const assignments = await activeAssignments(tx, ids);
     return {
       combinations: rows.flatMap((row) => {
+        if (row.fixedPricesCents) return principal ? [view(row, false)] : [];
         const selected: Service[] = [];
         for (const id of row.serviceIds) {
           const service = services.get(id);
@@ -114,6 +150,14 @@ export async function listCombinations(db: Database, principal?: Principal) {
     };
   });
 }
+function requireDraft(active: boolean, fixed: FixedCombinationTerms | null | undefined) {
+  if (active && fixed)
+    throw new DomainError(
+      "validation_error",
+      "A fixed-price combination can only be stored as a draft",
+    );
+}
+
 export async function saveCombination(
   db: Database,
   input: CombinationCreate | CombinationUpdate,
@@ -144,17 +188,36 @@ export async function saveCombination(
       if (!row) throw new DomainError("not_found", "Combination not found");
       if (!("version" in input) || input.version !== row.version)
         throw new DomainError("version_conflict", "Combination changed; reload before saving");
-      if (input.active || JSON.stringify(input.serviceIds) !== JSON.stringify(row.serviceIds))
-        await validate(tx, input.serviceIds, target?.reviewOnline);
+      const selectionChanged = JSON.stringify(input.serviceIds) !== JSON.stringify(row.serviceIds);
+      const stored = fixedTerms(row);
+      if (stored && input.fixedTerms === undefined && selectionChanged)
+        throw new DomainError(
+          "version_conflict",
+          "Review the price and staff after changing the treatment order",
+        );
+      const fixed = input.fixedTerms === undefined ? stored : input.fixedTerms;
+      requireDraft(input.active, fixed);
+      if (input.active || selectionChanged || input.fixedTerms)
+        await validate(tx, input.serviceIds, target?.reviewOnline && !fixed, fixed);
       [row] = await tx
         .update(serviceCombination)
-        .set({ ...fields, version: row.version + 1, updatedAt: now })
+        .set({
+          ...fields,
+          fixedPricesCents: fixed?.pricesCents ?? null,
+          fixedStaffIds: fixed?.staffIds ?? null,
+          version: row.version + 1,
+          updatedAt: now,
+        })
         .where(eq(serviceCombination.id, id))
         .returning();
     } else {
       if (!("idempotencyKey" in input))
         throw new DomainError("validation_error", "A creation identifier is required");
-      const fingerprint = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
+      const fixed = input.fixedTerms;
+      requireDraft(input.active, fixed);
+      const fingerprint = createHash("sha256")
+        .update(JSON.stringify(fixed ? { ...fields, fixedTerms: fixed } : fields))
+        .digest("hex");
       [row] = await tx
         .select()
         .from(serviceCombination)
@@ -180,11 +243,13 @@ export async function saveCombination(
       const [total] = await tx.select({ total: count() }).from(serviceCombination);
       if ((total?.total ?? 0) >= 100)
         throw new DomainError("storage_limit", "The salon combination limit has been reached");
-      await validate(tx, input.serviceIds, target?.reviewOnline);
+      await validate(tx, input.serviceIds, target?.reviewOnline && !fixed, fixed);
       [row] = await tx
         .insert(serviceCombination)
         .values({
           ...fields,
+          fixedPricesCents: fixed?.pricesCents ?? null,
+          fixedStaffIds: fixed?.staffIds ?? null,
           ...(target ? { id: target.id } : {}),
           createdBy: p.userId,
           idempotencyKey: input.idempotencyKey,

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { booksyCombinationDrafts } from "../modules/booksy-transfer/combination-drafts";
 import { fingerprint } from "../modules/booksy-transfer/plan";
 import { sourceBooksyCombinationTerms } from "../modules/booksy-transfer/source-combinations";
 import { prepareBooksySourceReadModel } from "../modules/booksy-transfer/source-read-model";
@@ -24,10 +25,12 @@ if (import.meta.main) {
     const sourceOnly = (rows: typeof combinations) => rows.map(({ active: _, ...row }) => row);
     if (fingerprint(sourceOnly(combinations)) !== fingerprint(sourceOnly(rebuilt)))
       throw new Error("Combination terms differ from the archived catalogue");
+    const nativeDrafts = booksyCombinationDrafts(model);
     const receipt = {
       snapshotHash: hash,
       archiveArtifactsVerified: model.base.artifacts.length,
       combinations,
+      nativeDrafts,
       canCutOver: false,
     };
     const name = `combination-review-${fingerprint(receipt)}.json`;
@@ -38,6 +41,7 @@ if (import.meta.main) {
           receipt: name,
           archiveArtifactsVerified: receipt.archiveArtifactsVerified,
           combinations: combinations.length,
+          validNativeDrafts: nativeDrafts.filter(({ draft }) => draft != null).length,
           verifiedTerms: combinations.filter(({ terms }) => terms != null).length,
           canCutOver: receipt.canCutOver,
         },

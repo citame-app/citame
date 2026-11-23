@@ -197,8 +197,11 @@ from `apps/api`. The command verifies the snapshot's artifacts and compares its 
 a fresh projection of the archived catalogue. It writes a private `combination-review-*.json`
 receipt with ordered components, allocated prices, total price, duration, buffers and source
 staff. It also records the professionals qualified for every component individually.
-Ambiguous references and inconsistent totals are flagged. The review leaves the combination's
-publication status and appointments intact.
+Ambiguous references and inconsistent totals are flagged. The receipt also prepares inactive
+native drafts with stable identifiers for the ordered services, assigned professionals and
+the allocated prices. Drafts are visible through catalogue administration. A write from an
+older client preserves the terms unless the treatment order changes, which requires a review.
+The review leaves the combination's publication status and appointments intact.
 
 #### Conciliación de una candidata ya cargada
 

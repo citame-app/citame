@@ -1,6 +1,21 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
 
+export const fixedCombinationTermsSchema = z
+  .object({
+    pricesCents: z.array(z.number().int().min(0).max(999_999_999)).min(2).max(24),
+    staffIds: z
+      .array(idSchema)
+      .min(1)
+      .max(100)
+      .refine(
+        (ids) => new Set(ids.map((id) => id.toLowerCase())).size === ids.length,
+        "Choose unique professionals",
+      ),
+  })
+  .strict();
+export type FixedCombinationTerms = z.infer<typeof fixedCombinationTermsSchema>;
+
 const fields = {
   name: z
     .string()
@@ -22,13 +37,17 @@ const fields = {
     .refine((ids) => new Set(ids).size === ids.length, "Choose unique services"),
   active: z.boolean(),
 };
-export const combinationCreateSchema = z.object({ ...fields, idempotencyKey: idSchema }).strict();
+const writeFields = { ...fields, fixedTerms: fixedCombinationTermsSchema.nullable().optional() };
+export const combinationCreateSchema = z
+  .object({ ...writeFields, idempotencyKey: idSchema })
+  .strict();
 export const combinationUpdateSchema = z
-  .object({ ...fields, version: z.number().int().positive() })
+  .object({ ...writeFields, version: z.number().int().positive() })
   .strict();
 export const serviceCombinationSchema = z.object({
   id: idSchema,
   ...fields,
+  fixedTerms: fixedCombinationTermsSchema.optional(),
   version: z.number().int().positive(),
   bookable: z.boolean(),
   updatedAt: instantSchema,
