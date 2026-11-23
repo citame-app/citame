@@ -54,6 +54,10 @@ const envSchema = z.object({
   RATE_LIMIT_GLOBAL_WINDOW_SECONDS: positiveInt.default(60),
   RATE_LIMIT_AUTH_MAX: positiveInt.default(10),
   RATE_LIMIT_AUTH_WINDOW_SECONDS: positiveInt.default(60),
+  // Allow several accounts to hydrate from one office network, with a separate per-account cap.
+  SYNC_PULL_RATE_LIMIT_NETWORK_MAX: positiveInt.default(1200),
+  SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX: positiveInt.default(150),
+  SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS: positiveInt.default(60),
   /** New SSE connections per caller and window: reconnect storms must not exhaust the server. */
   SYNC_STREAM_RATE_LIMIT_MAX: positiveInt.default(30),
   SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS: positiveInt.default(60),
@@ -235,6 +239,8 @@ export interface AppConfig {
   rateLimit: {
     global: RateLimitRule;
     auth: RateLimitRule;
+    syncPullNetwork: RateLimitRule;
+    syncPullAccount: RateLimitRule;
     syncStream: RateLimitRule;
     oauth: RateLimitRule;
     oauthRegister: RateLimitRule;
@@ -450,6 +456,14 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
     rateLimit: {
       global: { max: e.RATE_LIMIT_GLOBAL_MAX, windowSeconds: e.RATE_LIMIT_GLOBAL_WINDOW_SECONDS },
       auth: { max: e.RATE_LIMIT_AUTH_MAX, windowSeconds: e.RATE_LIMIT_AUTH_WINDOW_SECONDS },
+      syncPullNetwork: {
+        max: e.SYNC_PULL_RATE_LIMIT_NETWORK_MAX,
+        windowSeconds: e.SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS,
+      },
+      syncPullAccount: {
+        max: e.SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX,
+        windowSeconds: e.SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS,
+      },
       syncStream: {
         max: e.SYNC_STREAM_RATE_LIMIT_MAX,
         windowSeconds: e.SYNC_STREAM_RATE_LIMIT_WINDOW_SECONDS,

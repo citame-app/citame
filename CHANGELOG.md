@@ -101,6 +101,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Signed-in customers can view and purchase available plans in their Packages and Memberships tabs.
 
+- Desktop calendar downloads use separate network and staff-account quotas so a team opening an empty replica on a shared network can keep using the web agenda and sign-in.
+
 - Re-running first-owner setup finishes authentication initialization before closing the database.
 
 - Web and Desktop let owners verify unknown imported appointment prices before reconciling external payments. The original payment and invoice holds remain in place until reconciliation.

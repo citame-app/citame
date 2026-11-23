@@ -1,4 +1,4 @@
-import type { Context, MiddlewareHandler } from "hono";
+import type { Context, Env, MiddlewareHandler } from "hono";
 import type { ValkeySecondaryStorage } from "./auth/secondary-storage";
 import type { RateLimitRule } from "./config";
 import { errorBody } from "./http";
@@ -67,12 +67,14 @@ export function clientIdentity(c: Context, trustProxy: boolean): string {
   return env?.requestIP?.(c.req.raw)?.address ?? "unknown";
 }
 
-export interface RateLimitOptions {
+export interface RateLimitOptions<E extends Env = Env> {
   limiter: RateLimiter;
   /** Counter namespace, for example `global` or `auth`. */
   scope: string;
   rule: RateLimitRule;
-  trustProxy: boolean;
+  trustProxy?: boolean;
+  /** Verified identity for routes that run this middleware after authentication. */
+  identity?: (c: Context<E>) => string;
   /**
    * What to do when the counter store (Valkey) errors. `true` logs and lets the request through
    * (availability over strictness: used by the global limiter); the default `false` rejects the
@@ -82,18 +84,20 @@ export interface RateLimitOptions {
   logger?: Logger;
 }
 
-export function rateLimit({
+export function rateLimit<E extends Env = Env>({
   limiter,
   scope,
   rule,
-  trustProxy,
+  trustProxy = false,
+  identity = (c) => clientIdentity(c, trustProxy),
   failOpen = false,
   logger = rootLogger,
-}: RateLimitOptions): MiddlewareHandler {
+}: RateLimitOptions<E>): MiddlewareHandler<E> {
   return async (c, next) => {
+    const caller = identity(c);
     let result: RateLimitResult;
     try {
-      result = await limiter.hit(scope, clientIdentity(c, trustProxy), rule);
+      result = await limiter.hit(scope, caller, rule);
     } catch (error) {
       if (!failOpen) throw error;
       logger.error("rate limit store failed, failing open", { scope, err: error });

@@ -60,6 +60,8 @@ Owner sees everything. Staff see appointments, working hours and time off of the
 
 Pull collapses multiple log entries for the same row inside one page into the latest one. `limit` bounds the log rows scanned (default 200, max 500); the cursor always advances over everything scanned, so pages that are fully filtered out do not stall.
 
+Sync pulls use separate network and verified staff account quotas. A group of desktops can download an empty replica from the same office network without using up the request budget for the calendar or other API actions. All pulls, including unauthenticated requests, count against the network quota. An owner or staff account shares its quota across sessions and devices. A throttled pull returns HTTP 429 with `Retry-After`.
+
 A cursor ahead of the server's head (database restored from a backup) is refused with `409 invalid_state`; the client discards its replica and resyncs from `since=0`. The migration backfills the log with all pre-existing rows, so `since=0` is always a full snapshot.
 
 ## Tombstone retention and compaction
