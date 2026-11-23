@@ -181,6 +181,35 @@ test("a matching checksum does not create a database for an unreadable archive",
   }
 });
 
+test("restore refuses a remote or configured Docker target before sending archive bytes", async () => {
+  const dump = join(dir, "docker-refused.dump");
+  const contents = "synthetic archive";
+  const checksum = new Bun.CryptoHasher("sha256").update(contents).digest("hex");
+  await Bun.write(dump, contents);
+  await Bun.write(`${dump}.sha256`, `${checksum}  docker-refused.dump\n`);
+  for (const target of [
+    "postgres://owner@remote.example.invalid/salon",
+    "postgres://owner@localhost/salon?sslmode=verify-full",
+  ]) {
+    const restored = run(
+      [
+        "bash",
+        "-c",
+        `docker() { echo "Docker received the archive" >&2; exit 97; }
+        export -f docker
+        exec bash scripts/restore.sh "$@"`,
+        "restore-test",
+        dump,
+        target,
+      ],
+      { PG_MODE: "docker", PG_CONTAINER: "synthetic-postgres" },
+    );
+    expect(restored.exitCode).not.toBe(0);
+    expect(restored.stderr.toString()).toContain("native PostgreSQL");
+    expect(restored.stderr.toString()).not.toContain("Docker received the archive");
+  }
+});
+
 test("restore refuses hidden tables and standalone objects in the target", async () => {
   const dump = join(dir, "restricted.dump");
   expect(run(["bash", "scripts/backup.sh", dump], { DATABASE_URL: source.url }).exitCode).toBe(0);

@@ -19,7 +19,7 @@ else
   exit 1
 fi
 
-if ! list_restore_archive < "$DUMP" > /dev/null; then
+if ! list_restore_archive "$TARGET" < "$DUMP" > /dev/null; then
   echo "restore refused: could not read the PostgreSQL archive table of contents for $DUMP" >&2
   exit 1
 fi
