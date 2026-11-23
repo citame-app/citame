@@ -204,9 +204,9 @@ for (const scheme of ["light", "dark"] as const)
         await switchLocale(page, "Español");
         await expectNoHorizontalScroll(page);
         await expectNoSeriousA11yViolations(page, `confirmed discounted deposit ${scheme}`);
-        await page.screenshot({
-          path: `/tmp/sob-booking-promotion-${scheme}-${info.project.name}.png`,
-          fullPage: true,
+        await info.attach("confirmed discounted booking", {
+          body: await page.screenshot({ fullPage: true }),
+          contentType: "image/png",
         });
 
         const paid = await owner.post(

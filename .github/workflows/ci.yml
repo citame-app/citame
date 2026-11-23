@@ -158,14 +158,20 @@ jobs:
           E2E_OWNER_EMAIL: ci-owner@example.com
           E2E_OWNER_PASSWORD: correct horse battery staple
           E2E_AUTH_SECRET: ${{ env.BETTER_AUTH_SECRET }}
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/general
       - name: Checkout and center management on the isolated fixture
         run: bun run --cwd apps/web e2e --output test-results/pos
         env:
           E2E_POS_FIXTURE: "true"
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pos
       - name: Flash offers and booking promotions on the isolated fixture
         run: bun run --cwd apps/web e2e:booking-promotions --output test-results/booking-promotions
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/booking-promotions
       - name: Automatic membership renewal on the isolated fixture
         run: bun run --cwd apps/web e2e:recurring --output test-results/recurring
+        env:
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/recurring
       - uses: grafana/setup-k6-action@v1
       - name: Booking contention on a fresh database
         run: |
@@ -204,6 +210,7 @@ jobs:
           name: playwright-report
           path: |
             apps/web/test-results
+            apps/web/playwright-report
             api.log
             web.log
             contention-api.log
