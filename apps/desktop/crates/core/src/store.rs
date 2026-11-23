@@ -1468,6 +1468,9 @@ impl Store {
         &self,
         date: chrono::NaiveDate,
     ) -> Result<Option<crate::resource_calendar::CachedResourceDay>> {
+        if self.resource_denial_marker_present()? {
+            return Ok(None);
+        }
         self.read_snapshot(|store| {
             if store.get_meta("calendar_scope")?.as_deref() != Some("all")
                 || store.get_meta(REBUILD_KEY)?.is_some()
@@ -1480,6 +1483,38 @@ impl Store {
                 .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
                 .transpose()
         })
+    }
+
+    fn resource_denial_marker(&self) -> Option<std::path::PathBuf> {
+        self.conn
+            .path()
+            .filter(|path| !path.is_empty())
+            .map(|path| std::path::Path::new(path).with_extension("resource-denied"))
+    }
+
+    fn resource_denial_marker_present(&self) -> Result<bool> {
+        self.resource_denial_marker().map_or(Ok(false), |marker| {
+            marker.try_exists().map_err(CoreError::from)
+        })
+    }
+
+    pub(crate) fn recover_resource_denial(&mut self, generation: &str) -> Result<()> {
+        if let Some(marker) = self.resource_denial_marker()
+            && marker.try_exists()?
+        {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::ensure_generation(&tx, Some(generation))?;
+            Self::invalidate_resource_days(&tx)?;
+            tx.commit()?;
+            match std::fs::remove_file(marker) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
     }
 
     fn resource_day_revision_at(conn: &Connection) -> Result<i64> {
@@ -1500,11 +1535,13 @@ impl Store {
         snapshot: &crate::resource_calendar::CachedResourceDay,
         session: Option<&crate::auth::SessionHandle>,
     ) -> Result<bool> {
+        let marker = self.resource_denial_marker();
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, Some(generation))?;
-        if Self::resource_day_revision_at(&tx)? != revision
+        if marker.map_or(Ok(false), |path| path.try_exists())?
+            || Self::resource_day_revision_at(&tx)? != revision
             || Self::meta_at(&tx, "calendar_scope")?.as_deref() != Some("all")
             || Self::meta_at(&tx, REBUILD_KEY)?.is_some()
         {
@@ -1550,14 +1587,53 @@ impl Store {
         Ok(())
     }
 
-    pub(crate) fn deny_resource_days(&mut self, generation: &str) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::ensure_generation(&tx, Some(generation))?;
-        Self::invalidate_resource_days(&tx)?;
-        tx.commit()?;
-        Ok(())
+    pub(crate) fn deny_resource_days(
+        &mut self,
+        generation: &str,
+        revision: i64,
+        session: Option<&crate::auth::SessionHandle>,
+    ) -> Result<bool> {
+        let attempt = (|| {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::ensure_generation(&tx, Some(generation))?;
+            if Self::resource_day_revision_at(&tx)? != revision {
+                return Ok(false);
+            }
+            let active = session.map(|handle| handle.read().expect("session lock"));
+            if active.as_deref().is_some_and(Option::is_none) {
+                return Ok(false);
+            }
+            Self::invalidate_resource_days(&tx)?;
+            tx.commit()?;
+            drop(active);
+            Ok(true)
+        })();
+        if matches!(&attempt, Err(CoreError::Db(_)))
+            && let Some(marker) = self.resource_denial_marker()
+        {
+            // SQLite can be busy while the service has already rejected the request. The
+            // account-private marker prevents offline reads until the denial can be recorded.
+            let active = session.map(|handle| handle.read().expect("session lock"));
+            if active.as_deref().is_some_and(Option::is_none)
+                || self.replica_generation()? != generation
+                || self.resource_day_revision()? != revision
+            {
+                return Ok(false);
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).write(true).truncate(false);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(marker)?.sync_all()?;
+            drop(active);
+            return Ok(true);
+        }
+        attempt
     }
 
     pub fn booking_notice_head(&self) -> Result<i64> {

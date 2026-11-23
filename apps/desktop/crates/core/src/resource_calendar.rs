@@ -216,6 +216,9 @@ pub fn refresh(
     let Ok(mut store) = Store::open(replica) else {
         return Refresh::RetryAfter(RETRY);
     };
+    if store.recover_resource_denial(generation).is_err() {
+        return Refresh::RetryAfter(RETRY);
+    }
     let Ok(revision) = store.resource_day_revision() else {
         return Refresh::RetryAfter(RETRY);
     };
@@ -233,10 +236,14 @@ pub fn refresh(
         }
         Ok(_) => Refresh::Unavailable,
         Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
-            if let Err(error) = store.deny_resource_days(generation) {
-                eprintln!("could not invalidate the resource calendar cache: {error}");
+            match store.deny_resource_days(generation, revision, Some(session)) {
+                Ok(true) => Refresh::Denied,
+                Ok(false) => Refresh::Unavailable,
+                Err(error) => {
+                    eprintln!("could not invalidate the resource calendar cache: {error}");
+                    Refresh::Denied
+                }
             }
-            Refresh::Denied
         }
         Err(TransportError::RateLimited(Some(delay))) => Refresh::RetryAfter(delay.max(RETRY)),
         Err(_) => Refresh::RetryAfter(RETRY),
