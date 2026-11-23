@@ -36,7 +36,7 @@ import { giftReplicaScope } from "../gift-cards/service";
 import { offlinePeakPriceSnapshot } from "../peak-prices/service";
 import { listResources } from "../resources/catalog";
 import { calendarResources } from "../resources/reservations";
-import { listCombinations } from "../services/combinations";
+import { bookingCombinationCatalogue, listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
 import { toReviewedSettings, toSalonResponse } from "../settings/service";
 
@@ -69,7 +69,7 @@ async function loadVisible(
   principal: Principal,
   entity: SyncEntity,
   ids: string[],
-  projection: Pick<SyncPullQuery, "booksyPaymentReview" | "clientGroups">,
+  projection: Pick<SyncPullQuery, "booksyPaymentReview" | "clientGroups" | "bookingCombinations">,
 ): Promise<Visible> {
   const out: Visible = new Map();
   const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
@@ -107,6 +107,13 @@ async function loadVisible(
         const bookedResources = resources.get(row.id);
         put(row.id, {
           ...toAppointment(row, snapshots.get(row.id) ?? []),
+          ...(projection.bookingCombinations && permissions.editCalendar && row.combinationStaffIds
+            ? {
+                combinationStaffIds: permissions.allCalendars
+                  ? row.combinationStaffIds
+                  : [row.staffId],
+              }
+            : {}),
           clientName,
           ...(bookedResources ? { resources: bookedResources } : {}),
           ...(itineraryId ? { itineraryId } : {}),
@@ -400,7 +407,48 @@ export async function pullChanges(
   const combinations =
     permissions.editCatalog &&
     (query.combinations === "full" || (query.combinations === "delta" && combinationsChanged))
-      ? (await listCombinations(db, principal)).combinations
+      ? (await listCombinations(db, principal, query.fixedCombinationTerms === "1")).combinations
+      : undefined;
+  const bookingStaffScope = permissions.allCalendars ? undefined : principal.staffId;
+  const bookingCombinationAccess = permissions.editCalendar && bookingStaffScope !== null;
+  const bookingCombinations =
+    bookingCombinationAccess &&
+    (query.bookingCombinations === "full" ||
+      (query.bookingCombinations === "delta" && combinationsChanged))
+      ? (await bookingCombinationCatalogue(db, principal)).combinations
+      : undefined;
+  const bookedCombinationTerms =
+    bookingCombinationAccess && query.bookingCombinations === "full"
+      ? (
+          await db
+            .select({
+              appointmentId: appointment.id,
+              version: appointment.version,
+              combinationId: appointment.combinationId,
+              staffIds: appointment.combinationStaffIds,
+              staffId: appointment.staffId,
+            })
+            .from(appointment)
+            .where(
+              and(
+                isNull(appointment.deletedAt),
+                eq(appointment.status, "booked"),
+                isNotNull(appointment.combinationId),
+                bookingStaffScope ? eq(appointment.staffId, bookingStaffScope) : undefined,
+              ),
+            )
+        ).flatMap(({ appointmentId, version, combinationId, staffIds, staffId }) =>
+          combinationId && staffIds
+            ? [
+                {
+                  appointmentId,
+                  version,
+                  combinationId,
+                  staffIds: permissions.allCalendars ? staffIds : [staffId],
+                },
+              ]
+            : [],
+        )
       : undefined;
   const peakPricesChanged = page.some(
     (row) =>
@@ -417,6 +465,9 @@ export async function pullChanges(
     ...(catalogColors ? { catalogColors } : {}),
     ...(resourcePools ? { resourcePools } : {}),
     ...(combinations ? { combinations } : {}),
+    ...(bookingCombinations ? { bookingCombinations } : {}),
+    ...(bookedCombinationTerms ? { bookedCombinationTerms } : {}),
+    ...(query.bookingCombinations ? { bookingCombinationAccess } : {}),
     ...(peakPrices ? { peakPrices } : {}),
     ...(query.peakPrices ? { peakPriceAccess: permissions.editCalendar } : {}),
     ...(refresh.size ? { refresh: [...refresh] } : {}),

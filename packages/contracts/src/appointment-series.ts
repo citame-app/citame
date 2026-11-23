@@ -5,7 +5,11 @@ import { idSchema, instantSchema, syncGenerationSchema } from "./common";
 import { peakPriceReviewSchema } from "./peak-prices";
 
 export const appointmentSeriesInputSchema = createAppointmentBaseSchema
-  .omit({ id: true, promotion: true })
+  .omit({
+    combination: true,
+    id: true,
+    promotion: true,
+  })
   .extend({
     cadence: z.enum(["weekly", "monthly"]),
     interval: z.number().int().min(1).max(12),

@@ -9,6 +9,7 @@ use crate::calendar::{
     effective_appointment, effective_appointments_between, effective_time_off, known_clients,
     service_work_windows,
 };
+use crate::combinations::{FixedCombinationReview, booking_calendar_allows};
 use crate::error::{CoreError, Result};
 use crate::model::{
     Appointment, AppointmentService, AppointmentStatus, Client, Service, ServiceOption, TimeOff,
@@ -262,7 +263,21 @@ pub fn create_appointment_reviewed(
     new: NewAppointment,
     review: Option<&str>,
 ) -> Result<String> {
-    store.write_transaction(|store| queue_appointment(store, new, review))
+    store.write_transaction(|store| queue_appointment(store, new, review, None))
+}
+
+pub fn create_combination_appointment(
+    store: &mut Store,
+    mut new: NewAppointment,
+    inline: Option<(&str, Option<&str>)>,
+    combination: &FixedCombinationReview,
+) -> Result<String> {
+    store.write_transaction(|store| {
+        if let Some((name, phone)) = inline {
+            new.client_id = create_client(store, name, phone)?;
+        }
+        queue_appointment(store, new, None, Some(combination))
+    })
 }
 
 pub fn offline_peak_quote(
@@ -290,6 +305,7 @@ fn queue_appointment(
     store: &mut Store,
     new: NewAppointment,
     review: Option<&str>,
+    combination: Option<&FixedCombinationReview>,
 ) -> Result<String> {
     let Some((_, client_name)) = known_clients(store)?
         .into_iter()
@@ -300,13 +316,21 @@ fn queue_appointment(
             new.client_id
         )));
     };
-    let (quotes, mut reviewed) = reviewed_service_terms(store, &new)?;
-    let prices = offline_peak_quote(store, new.starts_at, &new.service_ids)?;
+    let ReviewedBookingServices {
+        quotes,
+        mut services,
+        fixed_staff,
+    } = reviewed_service_terms(store, &new, combination)?;
+    let prices = if combination.is_none() {
+        offline_peak_quote(store, new.starts_at, &new.service_ids)?
+    } else {
+        None
+    };
     if prices.as_ref().and_then(|quote| quote.review.as_deref()) != review {
         return Err(CoreError::PeakPriceReviewChanged);
     }
     if let Some(prices) = prices.as_ref().filter(|quote| quote.review.is_some()) {
-        for (snapshot, line) in reviewed.iter_mut().zip(&prices.services) {
+        for (snapshot, line) in services.iter_mut().zip(&prices.services) {
             snapshot.price_cents = line.price_cents;
         }
     }
@@ -316,10 +340,16 @@ fn queue_appointment(
     p.insert("staffId".into(), json!(new.staff_id));
     p.insert("serviceIds".into(), json!(new.service_ids));
     p.insert("serviceQuotes".into(), json!(quotes));
+    if let Some(combination) = combination {
+        p.insert("combination".into(), json!(combination));
+    }
+    if let Some(fixed_staff) = fixed_staff {
+        p.insert("_combinationStaffIds".into(), json!(fixed_staff));
+    }
     if let Some(review) = review {
         p.insert("peakPriceReview".into(), json!(review));
     }
-    p.insert("_reviewedServices".into(), json!(reviewed));
+    p.insert("_reviewedServices".into(), json!(services));
     p.insert("startsAt".into(), json!(iso(new.starts_at)));
     p.insert("clientId".into(), json!(new.client_id));
     p.insert("_clientName".into(), json!(client_name));
@@ -383,10 +413,17 @@ pub fn validate_catalogue_selection<'a>(
     Ok(())
 }
 
+pub(crate) struct ReviewedBookingServices {
+    pub quotes: BTreeMap<String, String>,
+    pub services: Vec<AppointmentService>,
+    fixed_staff: Option<Vec<String>>,
+}
+
 pub(crate) fn reviewed_service_terms(
     store: &Store,
     new: &NewAppointment,
-) -> Result<(BTreeMap<String, String>, Vec<AppointmentService>)> {
+    combination: Option<&FixedCombinationReview>,
+) -> Result<ReviewedBookingServices> {
     if new.service_ids.is_empty() {
         return Err(CoreError::Invalid("pick at least one service".into()));
     }
@@ -404,18 +441,55 @@ pub(crate) fn reviewed_service_terms(
             return Err(CoreError::CatalogueEditPending);
         }
     }
-    if !store.staff()?.iter().any(|s| s.id == new.staff_id) {
+    let staff = store.staff()?;
+    if !staff.iter().any(|s| s.id == new.staff_id) {
         return Err(CoreError::Invalid(format!(
             "unknown staff member {}",
             new.staff_id
         )));
     }
-    let performed = performed_services(store, &new.staff_id)?;
-    if let Some(bad) = new.service_ids.iter().find(|id| !performed.contains(id)) {
-        return Err(CoreError::Invalid(format!(
-            "this staff member does not perform service {bad}"
-        )));
-    }
+    let fixed = if let Some(review) = combination {
+        if store
+            .pending_combinations()?
+            .iter()
+            .any(|pending| pending.edit.id == review.id)
+        {
+            return Err(CoreError::CatalogueEditPending);
+        }
+        if !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), &new.staff_id) {
+            return Err(CoreError::IncompatibleServices);
+        }
+        let row = store
+            .booking_combinations()?
+            .and_then(|view| {
+                view.combinations
+                    .into_iter()
+                    .find(|row| row.id == review.id)
+            })
+            .ok_or(CoreError::CombinationBookingChanged)?;
+        if row.draft.service_ids != new.service_ids
+            || row.booking_review(&catalog)? != *review
+            || !row.permits_staff(&new.staff_id)
+            || !staff
+                .iter()
+                .any(|person| person.id == new.staff_id && person.active)
+        {
+            return Err(CoreError::CombinationBookingChanged);
+        }
+        Some(
+            row.draft
+                .fixed_terms
+                .ok_or(CoreError::CombinationBookingChanged)?,
+        )
+    } else {
+        let performed = performed_services(store, &new.staff_id)?;
+        if let Some(bad) = new.service_ids.iter().find(|id| !performed.contains(id)) {
+            return Err(CoreError::Invalid(format!(
+                "this staff member does not perform service {bad}"
+            )));
+        }
+        None
+    };
     if let Some(notes) = &new.notes {
         check_len("notes", notes, MAX_NOTES)?;
     }
@@ -426,7 +500,7 @@ pub(crate) fn reviewed_service_terms(
         .collect();
     let mut quotes = BTreeMap::new();
     let mut reviewed = Vec::new();
-    for source in picked {
+    for (position, source) in picked.into_iter().enumerate() {
         let Some(hash) = &source.quote_hash else {
             return Err(CoreError::Invalid(
                 "Refresh the service catalogue before creating a booking".into(),
@@ -443,7 +517,9 @@ pub(crate) fn reviewed_service_terms(
             name: source.name.clone(),
             duration_minutes: source.duration_minutes,
             buffer_minutes: source.buffer_minutes,
-            price_cents: source.price_cents,
+            price_cents: fixed.as_ref().map_or(source.price_cents, |terms| {
+                i64::from(terms.prices_cents[position])
+            }),
             source_unpriced: false,
             currency: source.currency.clone(),
             processing: source.processing.clone(),
@@ -460,7 +536,11 @@ pub(crate) fn reviewed_service_terms(
         &service_work_windows(&reviewed),
         None,
     )?;
-    Ok((quotes, reviewed))
+    Ok(ReviewedBookingServices {
+        quotes,
+        services: reviewed,
+        fixed_staff: fixed.map(|terms| terms.staff_ids),
+    })
 }
 
 pub fn create_appointment_for_new_client(
@@ -481,7 +561,7 @@ pub fn create_appointment_for_new_client_reviewed(
 ) -> Result<String> {
     store.write_transaction(|store| {
         new.client_id = create_client(store, name, phone)?;
-        queue_appointment(store, new, review)
+        queue_appointment(store, new, review, None)
     })
 }
 
@@ -599,16 +679,34 @@ fn queue_reschedule(
     let start = starts_at.unwrap_or(current.starts_at);
     let target = staff_id.unwrap_or(&current.staff_id);
     if target != current.staff_id || start != current.starts_at {
-        let assigned = performed_services(store, target)?;
-        if current
-            .services
-            .iter()
-            .filter_map(|service| service.service_id.as_ref())
-            .any(|id| !assigned.contains(id))
-        {
-            return Err(CoreError::Invalid(
-                "This staff member does not perform every service in the appointment".into(),
-            ));
+        if current.combination_id.is_some() {
+            let permitted = current
+                .combination_staff_ids
+                .as_ref()
+                .map_or(target == current.staff_id, |ids| {
+                    ids.iter().any(|id| id == target)
+                });
+            if !permitted
+                || !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), target)
+                || !store
+                    .staff()?
+                    .iter()
+                    .any(|member| member.id == target && member.active)
+            {
+                return Err(CoreError::IncompatibleServices);
+            }
+        } else {
+            let assigned = performed_services(store, target)?;
+            if current
+                .services
+                .iter()
+                .filter_map(|service| service.service_id.as_ref())
+                .any(|id| !assigned.contains(id))
+            {
+                return Err(CoreError::Invalid(
+                    "This staff member does not perform every service in the appointment".into(),
+                ));
+            }
         }
     }
     ensure_local_slot(
@@ -909,7 +1007,30 @@ fn resolve_conflict_in_transaction(
                     if let Some(s) = staff_id {
                         p["staffId"] = json!(s);
                     }
-                    if let Some((staff_id, services)) = p
+                    if let Some(review) = p.get("combination") {
+                        let review =
+                            serde_json::from_value::<FixedCombinationReview>(review.clone())?;
+                        let fields = |key| {
+                            p.get(key)
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    CoreError::Protocol("Missing reviewed booking field".into())
+                                })
+                        };
+                        let new = NewAppointment {
+                            staff_id: fields("staffId")?,
+                            service_ids: serde_json::from_value(p["serviceIds"].clone())?,
+                            starts_at,
+                            client_id: fields("clientId")?,
+                            notes: p.get("notes").and_then(Value::as_str).map(str::to_owned),
+                            override_notice: p
+                                .get("override")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        };
+                        reviewed_service_terms(store, &new, Some(&review))?;
+                    } else if let Some((staff_id, services)) = p
                         .get("staffId")
                         .and_then(Value::as_str)
                         .zip(p.get("_reviewedServices"))

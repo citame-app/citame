@@ -242,12 +242,12 @@ fn a_reviewed_offline_service_edit_reopens_without_mutating_the_booking_replica(
     );
     let booking = new_appt("2026-03-10T13:00:00Z");
     assert!(matches!(
-        reviewed_service_terms(&reopened, &booking),
+        reviewed_service_terms(&reopened, &booking, None),
         Err(crate::error::CoreError::CatalogueEditPending)
     ));
     let mut unaffected_booking = booking;
     unaffected_booking.service_ids = vec![DRY.into()];
-    assert!(reviewed_service_terms(&reopened, &unaffected_booking).is_ok());
+    assert!(reviewed_service_terms(&reopened, &unaffected_booking, None).is_ok());
     let entry = reopened.outbox(1).unwrap().pop().unwrap();
     assert_eq!(
         entry.to_wire().payload,

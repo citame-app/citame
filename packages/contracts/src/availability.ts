@@ -4,6 +4,7 @@ import { idSchema, instantSchema, localDateSchema } from "./common";
 export const availabilityInputSchema = z.object({
   serviceIds: z.array(idSchema).min(1).max(24),
   staffId: idSchema.optional(),
+  combinationId: idSchema.optional(),
   date: localDateSchema,
 });
 

@@ -205,6 +205,9 @@ struct PullMetadata<'a> {
     catalogue_access: Option<bool>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
+    booking_combinations: Option<&'a [crate::combinations::ManagedCombination]>,
+    booking_combination_access: Option<bool>,
+    booked_combination_terms: Option<&'a [crate::combinations::BookedCombinationTerms]>,
     peak_prices: Option<&'a crate::booking::PeakPriceSnapshot>,
     peak_price_access: Option<bool>,
     inventory_access: Option<bool>,
@@ -1157,6 +1160,9 @@ impl Store {
                 catalogue_access: page.viewer_edit_catalogue,
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
+                booking_combinations: page.booking_combinations.as_deref(),
+                booking_combination_access: page.booking_combination_access,
+                booked_combination_terms: page.booked_combination_terms.as_deref(),
                 peak_prices: page.peak_prices.as_ref(),
                 peak_price_access: page.peak_price_access,
                 inventory_access: page.viewer_write_inventory,
@@ -1230,6 +1236,22 @@ impl Store {
             if allowed && let Some(combinations) = metadata.combinations {
                 Self::cache_combinations_at(&tx, combinations, &generation)?;
                 received_combinations = true;
+            }
+        }
+        if metadata.generation.is_some() {
+            if metadata.booking_combination_access != Some(true) {
+                Self::forget_booking_combinations_at(&tx)?;
+            } else {
+                if let Some(combinations) = metadata.booking_combinations {
+                    Self::cache_booking_combinations_at(
+                        &tx,
+                        combinations,
+                        &Self::generation_at(&tx)?,
+                    )?;
+                }
+                if let Some(terms) = metadata.booked_combination_terms {
+                    Self::backfill_booked_combination_terms(&tx, terms)?;
+                }
             }
         }
         let cursor = tx
@@ -1402,9 +1424,11 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
+        Self::forget_combinations_at(tx)?;
+        Self::forget_booking_combinations_at(tx)?;
         Self::invalidate_resource_days(tx)?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
@@ -1451,6 +1475,7 @@ impl Store {
             waitlist_cache::invalidate_visibility(&tx)?;
             if changes.iter().any(|(key, _)| *key == "calendar_scope") {
                 Self::invalidate_resource_days(&tx)?;
+                Self::forget_booking_combinations_at(&tx)?;
             }
         }
         for (key, scope) in changes {

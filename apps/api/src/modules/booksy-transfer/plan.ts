@@ -23,6 +23,8 @@ export function targetFingerprint(kind: string, row: Record<string, unknown>) {
     if (originalFields.sourceBusinessMessage === null) delete originalFields.sourceBusinessMessage;
     if (originalFields.sourceStaffWindow === null) delete originalFields.sourceStaffWindow;
     if (originalFields.sourceResourceWindow === null) delete originalFields.sourceResourceWindow;
+    if (originalFields.combinationId === null) delete originalFields.combinationId;
+    if (originalFields.combinationStaffIds === null) delete originalFields.combinationStaffIds;
     return fingerprint(originalFields);
   }
   if (kind === "services") {

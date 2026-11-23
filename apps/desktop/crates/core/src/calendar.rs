@@ -255,6 +255,10 @@ fn overlay_calendar_outbox(
                         id: e.entity_id.clone(),
                         visit_group_id: None,
                         itinerary_id: None,
+                        combination_id: p.get("combination").and_then(|value| str_of(value, "id")),
+                        combination_staff_ids: p
+                            .get("_combinationStaffIds")
+                            .and_then(|value| serde_json::from_value(value.clone()).ok()),
                         staff_id,
                         client_id,
                         client_name,

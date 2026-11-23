@@ -92,6 +92,9 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         peak_price_access: None,
         resource_pools: None,
         combinations: None,
+        booking_combinations: None,
+        booking_combination_access: None,
+        booked_combination_terms: None,
         viewer_write_inventory: None,
         portfolio_uploads: None,
         viewer_read_inventory: None,
@@ -234,17 +237,24 @@ fn restored_generation_rebuilds_even_when_the_old_cursor_is_still_valid() {
         Box::new(|since, limit| {
             let mut page = empty_pull(since, limit)?;
             page.generation = Some("restored-test".into());
-            page.next_cursor = 42;
+            page.next_cursor = if since == 0 { 21 } else { 42 };
+            page.has_more = since == 0;
             page.head_seq = 42;
+            page.booking_combination_access = Some(true);
+            if since == 0 {
+                page.booking_combinations = Some(vec![]);
+                page.booked_combination_terms = Some(vec![]);
+            }
             Ok(page)
         }),
     );
     let cycle = sync_cycle(&mut store, &peer).unwrap();
     assert!(cycle.pull.replica_reset);
     assert_eq!(cycle.pull.cursor, 42);
-    assert_eq!(peer.log(), ["push:100", "pull:40", "pull:0"]);
+    assert_eq!(peer.log(), ["push:100", "pull:40", "pull:0", "pull:21"]);
     drop(store);
     let mut store = Store::open(&path).unwrap();
+    assert!(store.booking_combinations().unwrap().is_some());
     assert_eq!(store.outbox_len().unwrap(), 0);
     let conflicts = store.conflicts().unwrap();
     assert_eq!(conflicts.len(), ids.len());
@@ -524,6 +534,9 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             peak_price_access: None,
             resource_pools: None,
             combinations: None,
+            booking_combinations: None,
+            booking_combination_access: None,
+            booked_combination_terms: None,
             viewer_write_inventory: None,
             portfolio_uploads: None,
             viewer_read_inventory: None,
@@ -656,6 +669,9 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 peak_price_access: None,
                 resource_pools: None,
                 combinations: None,
+                booking_combinations: None,
+                booking_combination_access: None,
+                booked_combination_terms: None,
                 viewer_write_inventory: None,
                 portfolio_uploads: None,
                 viewer_read_inventory: None,
@@ -725,6 +741,9 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 peak_price_access: None,
                 resource_pools: None,
                 combinations: None,
+                booking_combinations: None,
+                booking_combination_access: None,
+                booked_combination_terms: None,
                 viewer_write_inventory: None,
                 portfolio_uploads: None,
                 viewer_read_inventory: None,
@@ -806,6 +825,9 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 peak_price_access: None,
                 resource_pools: None,
                 combinations: None,
+                booking_combinations: None,
+                booking_combination_access: None,
+                booked_combination_terms: None,
                 viewer_write_inventory: None,
                 portfolio_uploads: None,
                 viewer_read_inventory: None,
@@ -843,6 +865,9 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 peak_price_access: None,
                 resource_pools: None,
                 combinations: None,
+                booking_combinations: None,
+                booking_combination_access: None,
+                booked_combination_terms: None,
                 viewer_write_inventory: None,
                 portfolio_uploads: None,
                 viewer_read_inventory: None,
@@ -996,6 +1021,9 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 peak_price_access: None,
                 resource_pools: None,
                 combinations: None,
+                booking_combinations: None,
+                booking_combination_access: None,
+                booked_combination_terms: None,
                 viewer_write_inventory: None,
                 portfolio_uploads: None,
                 viewer_read_inventory: None,

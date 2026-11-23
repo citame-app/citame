@@ -145,3 +145,13 @@ describe("canEnterStep", () => {
     expect(canEnterStep({ services: [A], staff: "any" }, "services")).toBe(true);
   });
 });
+
+test("fixed price choices survive navigation without accepting a multiple-professional journey", () => {
+  const selection = { services: `${B},${A}`, combinationId: STAFF, staff: "any" };
+  expect(serializeBookingSearch(parseBookingSearch(selection))).toEqual(selection);
+  expect(parseBookingSearch({ ...selection, staff: "multiple" }).staff).toBeUndefined();
+  expect(parseBookingSearch({ ...selection, combinationId: "unrecognized" })).toEqual({
+    services: [],
+  });
+  expect(toggleService(parseBookingSearch(selection), B)).toEqual({ services: [A] });
+});

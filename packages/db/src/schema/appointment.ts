@@ -14,6 +14,7 @@ import {
 import { clientProfile } from "./client";
 import { createdAt, deletedAt, primaryId, timestamptz, updatedAt } from "./helpers";
 import { service } from "./service";
+import { serviceCombination } from "./service-combination";
 import { staffProfile } from "./staff";
 
 export const appointmentStatus = pgEnum("appointment_status", [
@@ -39,6 +40,8 @@ export const appointment = pgTable(
       .references(() => clientProfile.id),
     /** Stable identity shared by the native lines of an imported visit. */
     visitGroupId: uuid(),
+    combinationId: uuid().references(() => serviceCombination.id),
+    combinationStaffIds: uuid().array(),
     /** Original capacity exception, populated only by the verified Booksy importer. */
     sourceStaffWindow: jsonb().$type<{ staffId: string; startsAt: string; endsAt: string }>(),
     /** Frozen equipment assignment eligible for a historical capacity exception. */
@@ -58,6 +61,15 @@ export const appointment = pgTable(
     deletedAt: deletedAt(),
   },
   (t) => [
+    check(
+      "appointment_combination_staff_valid",
+      sql`(${t.combinationId} is null and ${t.combinationStaffIds} is null) or (
+        ${t.combinationId} is not null and ${t.combinationStaffIds} is not null
+        and cardinality(${t.combinationStaffIds}) between 1 and 100
+        and array_position(${t.combinationStaffIds}, null) is null
+        and ${t.staffId} = any(${t.combinationStaffIds})
+      )`,
+    ),
     check("appointment_ends_after_starts", sql`${t.endsAt} > ${t.startsAt}`),
     index("appointment_staff_starts_idx").on(t.staffId, t.startsAt),
     index("appointment_client_idx").on(t.clientId),

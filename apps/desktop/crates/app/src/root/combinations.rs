@@ -2,8 +2,8 @@ mod view;
 
 use super::*;
 use sob_core::combinations::{
-    CREATE, CombinationCatalogue, CombinationDraft, MAX_SERVICES, ManagedCombination,
-    PendingCombination, QueuedCombination, UPDATE, online_service,
+    CREATE, CombinationCatalogue, CombinationDraft, FixedCombinationTerms, MAX_SERVICES,
+    ManagedCombination, PendingCombination, QueuedCombination, UPDATE, online_service,
 };
 
 pub(super) struct Desk {
@@ -22,19 +22,85 @@ struct Editor {
     original: CombinationDraft,
     opened: CombinationDraft,
     pending_id: Option<String>,
+    needs_pricing_save: bool,
     name: Entity<TextField>,
     description: Vec<Entity<TextField>>,
     search: Entity<TextField>,
     service_ids: Vec<String>,
     active: bool,
+    fixed: Option<FixedEditor>,
+    fixed_enabled: bool,
     conflict: Option<Recovery>,
+}
+
+struct FixedEditor {
+    prices: std::collections::BTreeMap<String, Entity<TextField>>,
+    staff_ids: Vec<String>,
+    online_booking: Option<bool>,
+}
+
+impl FixedEditor {
+    fn from_terms(ids: &[String], terms: FixedCombinationTerms, cx: &mut Context<Root>) -> Self {
+        let prices = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let price = terms
+                    .prices_cents
+                    .get(index)
+                    .map(|&price| sob_core::reports::decimal_amount(u64::from(price)))
+                    .unwrap_or_default();
+                (id.clone(), text_field("EUR", &price, cx))
+            })
+            .collect();
+        Self {
+            prices,
+            staff_ids: terms.staff_ids,
+            online_booking: terms.online_booking,
+        }
+    }
+
+    fn terms(&self, ids: &[String], cx: &App) -> Option<FixedCombinationTerms> {
+        let prices_cents = ids
+            .iter()
+            .map(|id| {
+                let field = self.prices.get(id)?;
+                sob_core::billing::parse_reviewed_amount(field.read(cx).text())
+                    .filter(|price| *price <= sob_core::combinations::MAX_FIXED_PRICE_CENTS)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(FixedCombinationTerms {
+            prices_cents,
+            staff_ids: self.staff_ids.clone(),
+            online_booking: self.online_booking,
+        })
+    }
 }
 
 struct Recovery {
     mutation_id: String,
     needs_review: bool,
-    minimum_version: Option<u64>,
+    rejected_baseline: Option<(u64, Option<CombinationDraft>)>,
     restored: bool,
+}
+
+impl Recovery {
+    fn rejected(
+        mutation_id: &str,
+        reason: &str,
+        restored: bool,
+        edit: &PendingCombination,
+    ) -> Self {
+        Self {
+            mutation_id: mutation_id.into(),
+            needs_review: true,
+            rejected_baseline: edit
+                .version
+                .filter(|_| reason == "conflict" && !restored)
+                .map(|version| (version, edit.reviewed.clone())),
+            restored,
+        }
+    }
 }
 
 impl Desk {
@@ -54,24 +120,33 @@ impl Desk {
 }
 
 impl Editor {
-    fn draft(&self, cx: &App) -> CombinationDraft {
+    fn draft(&self, cx: &App) -> Option<CombinationDraft> {
         let description = self
             .description
             .iter()
             .map(|field| field.read(cx).text())
             .collect::<Vec<_>>()
             .join("\n");
-        CombinationDraft {
-            name: self.name.read(cx).text().into(),
-            description: Some(description),
-            service_ids: self.service_ids.clone(),
-            active: self.active,
-        }
-        .normalized()
+        let fixed_terms = if self.fixed_enabled {
+            Some(self.fixed.as_ref()?.terms(&self.service_ids, cx)?)
+        } else {
+            None
+        };
+        Some(
+            CombinationDraft {
+                name: self.name.read(cx).text().into(),
+                description: Some(description),
+                service_ids: self.service_ids.clone(),
+                active: self.active,
+                fixed_terms,
+            }
+            .normalized(),
+        )
     }
 
     fn dirty(&self, cx: &App) -> bool {
-        self.draft(cx) != self.opened.clone().normalized()
+        self.needs_pricing_save
+            || self.draft(cx).as_ref() != Some(&self.opened.clone().normalized())
     }
 
     fn current<'a>(&self, view: &'a CombinationCatalogue) -> Option<&'a ManagedCombination> {
@@ -96,14 +171,22 @@ impl Editor {
                 || self
                     .conflict
                     .as_ref()
-                    .and_then(|row| row.minimum_version)
-                    .is_none_or(|version| current.is_some_and(|row| row.version > version)))
+                    .and_then(|row| row.rejected_baseline.as_ref())
+                    .is_none_or(|(version, reviewed)| {
+                        current.is_some_and(|row| {
+                            row.can_review_rejected_version(*version, reviewed.as_ref())
+                        })
+                    }))
     }
 
     fn populate(&mut self, draft: CombinationDraft, cx: &mut Context<Root>) {
         self.name
             .update(cx, |field, cx| field.set_text(&draft.name, cx));
         self.description = description_fields(draft.description.as_deref(), cx);
+        self.fixed_enabled = draft.fixed_terms.is_some();
+        self.fixed = draft
+            .fixed_terms
+            .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx));
         self.service_ids = draft.service_ids;
         self.active = draft.active;
     }
@@ -197,23 +280,15 @@ impl Root {
             if desk.pending.iter().any(|row| row.edit.id == edit.id) {
                 return;
             }
-            desk.editor = Some(
-                self.combination_editor(
-                    &desk,
-                    edit.id,
-                    edit.proposed,
-                    edit.reviewed.zip(edit.version),
-                    Some(Recovery {
-                        mutation_id: id.into(),
-                        needs_review: true,
-                        minimum_version: edit
-                            .version
-                            .filter(|_| saved.reason == "conflict" && !restored),
-                        restored,
-                    }),
-                    cx,
-                ),
-            );
+            let recovery = Recovery::rejected(id, &saved.reason, restored, &edit);
+            desk.editor = Some(self.combination_editor(
+                &desk,
+                edit.id,
+                edit.proposed,
+                edit.reviewed.zip(edit.version),
+                Some(recovery),
+                cx,
+            ));
         }
         self.overlay = Overlay::Combinations(Box::new(desk));
         cx.notify();
@@ -238,10 +313,15 @@ impl Root {
             original: baseline.map(|(draft, _)| draft).unwrap_or_else(new_draft),
             opened: draft.clone(),
             pending_id: None,
+            needs_pricing_save: false,
             id,
             name: text_field(self.t(Key::CombinationName), &draft.name, cx),
             description: description_fields(draft.description.as_deref(), cx),
             search: text_field(self.t(Key::CombinationFind), "", cx),
+            fixed_enabled: draft.fixed_terms.is_some(),
+            fixed: draft
+                .fixed_terms
+                .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx)),
             service_ids: draft.service_ids,
             active: draft.active,
             conflict,
@@ -258,7 +338,7 @@ impl Root {
         if desk.catalogue.is_none() || (id.is_none() && desk.at_limit()) {
             return;
         }
-        let (id, draft, baseline, pending_id) = match id {
+        let (id, draft, baseline, pending_id, needs_pricing_save) = match id {
             Some(id) => {
                 let current = desk.current(id);
                 let baseline = current.map(|row| (row.draft.clone(), row.version));
@@ -267,21 +347,32 @@ impl Root {
                     if pending.submitted || pending.edit.version != current.map(|row| row.version) {
                         return;
                     }
+                    let draft =
+                        current.and_then(|row| pending.edit.restore_reviewed_terms(&row.draft));
+                    let needs_pricing_save = draft.is_some();
                     (
                         id.into(),
-                        pending.edit.proposed.clone(),
+                        draft.unwrap_or_else(|| pending.edit.proposed.clone()),
                         baseline,
                         Some(pending.mutation_id.clone()),
+                        needs_pricing_save,
                     )
                 } else {
                     let Some(row) = current else { return };
-                    (id.into(), row.draft.clone(), baseline, None)
+                    (id.into(), row.draft.clone(), baseline, None, false)
                 }
             }
-            None => (uuid::Uuid::now_v7().to_string(), new_draft(), None, None),
+            None => (
+                uuid::Uuid::now_v7().to_string(),
+                new_draft(),
+                None,
+                None,
+                false,
+            ),
         };
         let mut editor = self.combination_editor(desk, id, draft, baseline, None, cx);
         editor.pending_id = pending_id;
+        editor.needs_pricing_save = needs_pricing_save;
         if let Overlay::Combinations(desk) = &mut self.overlay {
             desk.editor = Some(editor);
             desk.notice = None;
@@ -299,7 +390,7 @@ impl Root {
             && generation != Some(editor.generation.as_str())
             && let Some(recovery) = &mut editor.conflict
         {
-            recovery.minimum_version = None;
+            recovery.rejected_baseline = None;
             recovery.needs_review = true;
             recovery.restored = true;
         }
@@ -329,14 +420,14 @@ impl Root {
         {
             if let Ok(Some(conflict)) = self.svc.store.conflict(pending_id) {
                 let restored = conflict.requires_restored_review();
-                editor.conflict = Some(Recovery {
-                    mutation_id: pending_id.clone(),
-                    needs_review: true,
-                    minimum_version: editor
-                        .version
-                        .filter(|_| conflict.reason == "conflict" && !restored),
-                    restored,
-                });
+                if let Ok(edit) = serde_json::from_value::<PendingCombination>(conflict.payload) {
+                    editor.conflict = Some(Recovery::rejected(
+                        pending_id,
+                        &conflict.reason,
+                        restored,
+                        &edit,
+                    ));
+                }
             } else if desk
                 .catalogue
                 .as_ref()
@@ -346,6 +437,7 @@ impl Root {
                 editor.original = editor.opened.clone();
             }
             editor.pending_id = None;
+            editor.needs_pricing_save = false;
         }
         if let Some(view) = &desk.catalogue
             && let Some(editor) = &mut desk.editor
@@ -380,7 +472,10 @@ impl Root {
                 return;
             }
             let current = editor.current(view);
-            let draft = editor.draft(cx);
+            let Some(draft) = editor.draft(cx) else {
+                desk.notice = Some(Key::CombinationPriceUnreviewed);
+                return;
+            };
             let reviewed = current.map_or(draft.clone(), |row| {
                 draft.rebase(&editor.original, &row.draft, keep)
             });
@@ -408,13 +503,18 @@ impl Root {
         if editor.needs_review(desk.catalogue.as_ref()) || desk.confirm_close {
             return;
         }
+        let Some(draft) = editor.draft(cx) else {
+            desk.notice = Some(Key::CombinationPriceUnreviewed);
+            cx.notify();
+            return;
+        };
         let replaces = editor.conflict.as_ref().map(|row| row.mutation_id.as_str());
         use sob_core::error::CoreError;
         match self.svc.store.queue_combination(
             &editor.generation,
             &editor.id,
             editor.version,
-            editor.draft(cx),
+            draft,
             editor.pending_id.as_deref(),
             replaces,
         ) {
@@ -440,6 +540,9 @@ impl Root {
                 desk.notice = Some(Key::ErrIncompatibleServices)
             }
             Err(CoreError::CatalogueEditPending) => desk.notice = Some(Key::CatalogPending),
+            Err(CoreError::CombinationPricingNeedsReview) => {
+                desk.notice = Some(Key::CombinationSaveReviewedPricing)
+            }
             Err(_) => desk.notice = Some(Key::CombinationInvalid),
         }
         cx.notify();
@@ -484,12 +587,162 @@ impl Root {
             }
         });
     }
+
+    fn toggle_fixed_combination(&mut self, cx: &mut Context<Self>) {
+        self.edit_combination(cx, |desk, cx| {
+            let Some(editor) = &mut desk.editor else {
+                return;
+            };
+            if editor.fixed_enabled {
+                if editor.needs_pricing_save {
+                    desk.notice = Some(Key::CombinationSaveReviewedPricing);
+                    return;
+                }
+                if editor
+                    .original
+                    .fixed_terms
+                    .as_ref()
+                    .is_some_and(|terms| !terms.can_remove(editor.active))
+                {
+                    desk.notice = Some(Key::CombinationArchiveBeforeRemovingPrice);
+                    return;
+                }
+            } else if editor.fixed.is_none() {
+                editor.fixed = Some(FixedEditor::from_terms(
+                    &editor.service_ids,
+                    FixedCombinationTerms {
+                        prices_cents: vec![],
+                        staff_ids: vec![],
+                        online_booking: None,
+                    },
+                    cx,
+                ));
+            }
+            editor.fixed_enabled = !editor.fixed_enabled;
+            desk.notice = None;
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+    use sob_core::store::Store;
+
+    #[gpui::test]
+    async fn open_legacy_combination_drafts_keep_pricing_through_sync_results(
+        cx: &mut TestAppContext,
+    ) {
+        for rejected in [true, false] {
+            let (_directory, window) = super::super::tests::open(cx);
+            window
+                .update(cx, |root, _, cx| {
+                    let generation = root.svc.store.verified_reviewed_generation().unwrap();
+                    let id = uuid::Uuid::now_v7().to_string();
+                    let staff = root.svc.store.staff().unwrap().remove(0).id;
+                    let reviewed = CombinationDraft {
+                        name: "Original".into(),
+                        active: true,
+                        service_ids: (0..2).map(|_| uuid::Uuid::now_v7().to_string()).collect(),
+                        ..Default::default()
+                    };
+                    let mut proposed = reviewed.clone();
+                    proposed.name = "Queued name".into();
+                    if rejected {
+                        proposed.service_ids.reverse();
+                    }
+                    let fixed = CombinationDraft {
+                        fixed_terms: Some(FixedCombinationTerms {
+                            prices_cents: vec![1800, 990],
+                            staff_ids: vec![staff],
+                            online_booking: Some(true),
+                        }),
+                        ..reviewed.clone()
+                    };
+                    let write_catalogue = |store: &Store, version, draft: CombinationDraft| {
+                        store
+                            .set_meta(
+                                "service_combinations_with_fixed_terms",
+                                &serde_json::to_string(&CombinationCatalogue {
+                                    generation: generation.clone(),
+                                    combinations: vec![ManagedCombination {
+                                        id: id.clone(),
+                                        version,
+                                        bookable: true,
+                                        draft,
+                                    }],
+                                })
+                                .unwrap(),
+                            )
+                            .unwrap();
+                    };
+                    write_catalogue(&root.svc.store, 1, fixed.clone());
+                    let entry = root
+                        .svc
+                        .store
+                        .enqueue(
+                            UPDATE,
+                            &id,
+                            serde_json::to_value(PendingCombination {
+                                id: id.clone(),
+                                version: Some(1),
+                                proposed,
+                                reviewed: Some(reviewed),
+                            })
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    root.open_combinations(None, cx);
+                    root.choose_combination(Some(&id), cx);
+                    root.edit_combination(cx, |desk, cx| {
+                        let editor = desk.editor.as_ref().unwrap();
+                        assert!(editor.needs_pricing_save);
+                        editor
+                            .name
+                            .update(cx, |field, cx| field.set_text("Name while syncing", cx));
+                    });
+                    let mutation_id = entry.mutation_id.clone();
+                    let result = if rejected {
+                        MutationResult::Rejected {
+                            mutation_id,
+                            reason: "conflict".into(),
+                            message: String::new(),
+                            replayed: false,
+                        }
+                    } else {
+                        MutationResult::Applied {
+                            mutation_id,
+                            applied_seq: None,
+                            replayed: false,
+                        }
+                    };
+                    root.svc
+                        .store
+                        .apply_push_results(&[entry], &[result])
+                        .unwrap();
+                    let mut cloud = fixed.clone();
+                    if !rejected {
+                        cloud.name = "Queued name".into();
+                        cloud.fixed_terms.as_mut().unwrap().prices_cents[0] = 1250;
+                        write_catalogue(&root.svc.store, 3, cloud.clone());
+                    }
+                    root.data_version = Some(root.data_version.unwrap_or_default() + 1);
+                    root.refresh_combinations(cx);
+                    root.review_combination(true, cx);
+                    let Overlay::Combinations(desk) = &root.overlay else {
+                        unreachable!()
+                    };
+                    let editor = desk.editor.as_ref().unwrap();
+                    assert!(!editor.needs_review(desk.catalogue.as_ref()));
+                    let draft = editor.draft(cx).unwrap();
+                    assert_eq!(draft.name, "Name while syncing");
+                    assert_eq!(draft.service_ids, cloud.service_ids);
+                    assert_eq!(draft.fixed_terms, cloud.fixed_terms);
+                })
+                .unwrap();
+        }
+    }
 
     #[gpui::test]
     async fn a_native_combination_keeps_the_reviewed_order_in_the_outbox(cx: &mut TestAppContext) {
@@ -519,7 +772,7 @@ mod tests {
                 }));
                 root.svc.store.apply_page(&changes, 1003).unwrap();
                 root.svc.store.set_meta(
-                    "service_combinations",
+                    "service_combinations_with_fixed_terms",
                     &serde_json::json!({"generation": generation, "combinations": []}).to_string(),
                 ).unwrap();
                 root.status.connectivity = Connectivity::Offline;
@@ -548,6 +801,24 @@ mod tests {
                 assert_ne!(revised[0].mutation_id, entries[0].mutation_id);
                 assert_eq!(revised[0].edit.proposed.service_ids, [first, second]);
                 assert!(root.svc.store.managed_combinations().unwrap().unwrap().combinations.is_empty());
+                root.choose_combination(Some(&revised[0].edit.id), cx);
+                root.toggle_fixed_combination(cx);
+                root.edit_combination(cx, |desk, cx| {
+                    let fixed = desk.editor.as_mut().unwrap().fixed.as_mut().unwrap();
+                    fixed.staff_ids.push(staff);
+                    fixed.online_booking = Some(false);
+                    fixed.prices[first].update(cx, |price, cx| price.set_text("17,90", cx));
+                    fixed.prices[second].update(cx, |price, cx| price.set_text("12.10", cx));
+                });
+                root.toggle_fixed_combination(cx);
+                root.toggle_fixed_combination(cx);
+                root.move_combination_service(0, 1, cx);
+                root.save_combination(cx);
+                let fixed = root.svc.store.pending_combinations().unwrap().remove(0);
+                assert_eq!(fixed.edit.proposed.service_ids, [second, first]);
+                let terms = fixed.edit.proposed.fixed_terms.unwrap();
+                assert_eq!(terms.prices_cents, [1210, 1790]);
+                assert_eq!(terms.online_booking, Some(false));
             })
             .unwrap();
     }

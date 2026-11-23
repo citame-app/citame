@@ -10,6 +10,7 @@ import { pageMeta } from "~/lib/seo";
 
 type BookingUrlSearch = {
   services?: string;
+  combinationId?: string;
   staff?: string;
   date?: string;
   slot?: string;

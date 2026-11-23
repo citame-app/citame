@@ -32,7 +32,9 @@ function ProfessionalStep() {
 
   const parts = visitSegments(search.services, booking.catalog);
   const multipleAvailable =
-    parts.length > 1 && canPlanVisit(search.services, booking.catalog, booking.staff);
+    !search.combinationId &&
+    parts.length > 1 &&
+    canPlanVisit(search.services, booking.catalog, booking.staff);
 
   function choose(staff: string) {
     // A different professional means different availability: forget date and slot.
@@ -40,6 +42,7 @@ function ProfessionalStep() {
       "professional",
       {
         services: search.services,
+        combinationId: search.combinationId,
         staff,
         ...(staff === "multiple" ? { professionals: parts.map(() => "any") } : {}),
       },
@@ -50,6 +53,8 @@ function ProfessionalStep() {
   return (
     <BookingFrame
       teamAccount={booking.teamAccount}
+      combinationUnavailable={booking.combinationUnavailable}
+      combinationLoad={booking.combinationLoad}
       step="professional"
       search={search}
       title={t("booking.professional.title")}
@@ -57,11 +62,17 @@ function ProfessionalStep() {
       summary={
         <BookingSummary
           services={selectedServices}
+          combinationName={booking.combination?.name}
           totals={totals}
           staffName={booking.staffName}
           timeZone={salon.timezone}
           ctaLabel={t("booking.cta.continue")}
-          ctaDisabled={!search.staff || (search.staff === "multiple" && !multipleAvailable)}
+          ctaDisabled={
+            !search.staff ||
+            (search.staff === "multiple"
+              ? !multipleAvailable
+              : !eligible.some((member) => search.staff === "any" || member.id === search.staff))
+          }
           onCta={() => booking.go("time", search)}
         />
       }

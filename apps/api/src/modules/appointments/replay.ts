@@ -46,6 +46,8 @@ export async function findAppointmentReplay(
   if (created.metadata.requestFingerprint !== undefined) {
     if (created.metadata.requestFingerprint !== appointmentIntentFingerprint(request)) {
       if (
+        created.metadata.combination ||
+        request.combination ||
         created.metadata.intakeConfirmed ||
         intakeBookingIdentity(request) ||
         created.metadata.promotionConfirmed ||
@@ -60,6 +62,7 @@ export async function findAppointmentReplay(
       return null;
     }
   } else if (
+    request.combination ||
     !request.clientId ||
     row.notes !== (request.notes ?? null) ||
     JSON.stringify(snapshots.map((s) => s.serviceId)) !==

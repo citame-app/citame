@@ -185,6 +185,7 @@ export async function getCalendar(
         ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
         ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
         ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
+        ...(row.combinationId ? { combinationId: row.combinationId } : {}),
         id: row.id,
         staffId: row.staffId,
         clientId: row.clientId,

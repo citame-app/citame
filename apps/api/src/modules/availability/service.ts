@@ -1,9 +1,10 @@
 import type { AvailabilityQuery, AvailabilityResponse } from "@sob/contracts";
 import { type Database, staffProfile, timeOff, workingHours } from "@sob/db";
-import { and, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, lt } from "drizzle-orm";
 import type { Tx } from "../../tx";
 import type { TimedService } from "../resources/reservations";
 import { filterResourceAvailability } from "../resources/reservations";
+import { resolveFixedCombination } from "../services/combination-booking";
 import { getBookableServices } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 import { asDatedHours, loadShiftRows } from "../staff/date-hours";
@@ -20,17 +21,32 @@ export async function findAvailability(
   options: {
     excludeAppointmentId?: string;
     services?: TimedService[];
+    staffIds?: string[];
+    publicOnlyFixed?: boolean;
     granularityMinutes?: number;
   } = {},
 ): Promise<AvailabilityResponse> {
   const settings = await getSalonSettings(db);
-  const services = options.services ?? (await getBookableServices(db, query.serviceIds));
+  const fixed = query.combinationId
+    ? await resolveFixedCombination(
+        db,
+        query.combinationId,
+        query.serviceIds,
+        undefined,
+        options.publicOnlyFixed,
+      )
+    : undefined;
+  const services =
+    options.services ?? fixed?.services ?? (await getBookableServices(db, query.serviceIds));
   if (query.staffId) await assertStaffExists(db, query.staffId);
 
-  let staffIds = await staffQualifiedFor(
-    db,
-    services.map((s) => s.id),
-  );
+  let staffIds =
+    options.staffIds ??
+    fixed?.staffIds ??
+    (await staffQualifiedFor(
+      db,
+      services.map((s) => s.id),
+    ));
   if (query.staffId) staffIds = staffIds.filter((id) => id === query.staffId);
 
   const base = { date: query.date, timezone: settings.timezone };
@@ -60,7 +76,13 @@ export async function findAvailability(
     db
       .select({ id: staffProfile.id, capacity: staffProfile.maxConcurrent })
       .from(staffProfile)
-      .where(inArray(staffProfile.id, staffIds)),
+      .where(
+        and(
+          inArray(staffProfile.id, staffIds),
+          eq(staffProfile.active, true),
+          isNull(staffProfile.deletedAt),
+        ),
+      ),
     loadShiftRows(db, staffIds, query.date, query.date),
   ]);
 
@@ -76,9 +98,9 @@ export async function findAvailability(
     now,
     blockMinutes: totalBlockMinutes(services),
     workWindows: serviceWorkWindows(services),
-    staff: staffIds.map((staffId) => ({
+    staff: members.map(({ id: staffId, capacity }) => ({
       staffId,
-      capacity: members.find((s) => s.id === staffId)?.capacity ?? 1,
+      capacity,
       datedWorkingHours: asDatedHours(dated, staffId),
       workingHours: hours
         .filter((h) => h.staffId === staffId)

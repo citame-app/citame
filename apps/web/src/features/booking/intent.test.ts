@@ -31,3 +31,23 @@ test("walk-in identity binds supplied contact details without depending on objec
   );
   expect(intent({ ...core, clientId: "saved-client" })).not.toBe(first);
 });
+
+test("a fixed combination uses a distinct booking identifier and keeps it when its terms refresh", () => {
+  let next = 0;
+  const intent = createBookingIntent(() => String(++next));
+  const core = {
+    staffId: "ana",
+    serviceIds: ["cut", "colour"],
+    startsAt: "2026-03-09T12:00:00.000Z",
+  };
+  const first = intent(core);
+  const combination = { id: "cut-and-colour", version: 1, reviewHash: "a".repeat(64) };
+  const fixed = intent({ ...core, combination });
+  expect(fixed).not.toBe(first);
+  expect(
+    intent({ ...core, combination: { ...combination, version: 2, reviewHash: "b".repeat(64) } }),
+  ).toBe(fixed);
+  expect(intent({ ...core, combination: { ...combination, id: "another-combination" } })).not.toBe(
+    fixed,
+  );
+});

@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { checkoutSchema, publicFlashOffersSchema } from "@sob/contracts";
+import {
+  checkoutSchema,
+  peakPriceQuoteSchema,
+  publicFlashOffersSchema,
+  serviceCombinationSchema,
+} from "@sob/contracts";
 import {
   appointment,
   checkout,
@@ -229,6 +234,55 @@ test("the booking review quotes its own current offer and creates one server-pri
   expect((await call(client, "/appointments", "POST", input)).status).toBe(201);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
 });
+test("a booking promotion discounts the fixed combination total instead of catalogue rates", async () => {
+  await offer();
+  const serviceIds = [f.haircutId, f.colorId];
+  const comboResponse = await call(owner, "/admin/services/combinations", "POST", {
+    name: "Reviewed price combination",
+    description: null,
+    active: true,
+    serviceIds,
+    idempotencyKey: crypto.randomUUID(),
+    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId], onlineBooking: true },
+  });
+  expect(comboResponse.status).toBe(201);
+  const selected = serviceCombinationSchema.parse(await comboResponse.json());
+  const query = new URLSearchParams({
+    serviceIds: serviceIds.join(","),
+    startsAt: MONDAY_0900,
+    combinationId: selected.id,
+  });
+  const price = await call(null, `/availability/peak-price?${query}`);
+  expect(price.status).toBe(200);
+  const combination = peakPriceQuoteSchema.parse(await price.json()).combination;
+  if (!combination) throw new Error("Missing combination review");
+  const catalogue = (await (await call(null, "/services")).json()) as {
+    services: { id: string; quoteHash: string }[];
+  };
+  const serviceQuotes = Object.fromEntries(
+    catalogue.services
+      .filter((item) => serviceIds.includes(item.id))
+      .map((item) => [item.id, item.quoteHash]),
+  );
+  const scope = { serviceIds, serviceQuotes, combination };
+  const promotion = await quote(client, scope);
+  expect(promotion).toMatchObject({
+    currentTotalCents: 4600,
+    newTotalCents: 4140,
+    discountCents: 460,
+  });
+  const input = request(promotion.reviewHash, scope);
+  const booking = await call(client, "/appointments", "POST", input);
+  expect(booking.status, await booking.clone().text()).toBe(201);
+  expect(await booking.json()).toMatchObject({
+    combinationId: selected.id,
+    services: [{ priceCents: 1200 }, { priceCents: 3400 }],
+    bookingPrice: { subtotalCents: 4600, discountCents: 460, totalCents: 4140 },
+  });
+  const [receipt] = await t.db.select().from(checkout).where(eq(checkout.appointmentId, input.id));
+  expect(receipt).toMatchObject({ subtotalCents: 4600, discountCents: 460, totalCents: 4140 });
+});
+
 test("appointment reports preserve the offer used at booking and count the visit by current status", async () => {
   const promotion = await offer();
   const input = request((await quote()).reviewHash);

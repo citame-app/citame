@@ -2,6 +2,7 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { PageContainer } from "~/components/pages";
 import { buttonClasses } from "~/components/ui/button";
+import { ErrorState } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { Stepper, type StepperStep } from "./components";
 import {
@@ -23,6 +24,8 @@ export function BookingFrame({
   children,
   summary,
   teamAccount = false,
+  combinationUnavailable = false,
+  combinationLoad,
 }: {
   step: BookingStep;
   search: BookingSearch;
@@ -31,6 +34,8 @@ export function BookingFrame({
   children: ReactNode;
   summary: ReactNode;
   teamAccount?: boolean;
+  combinationUnavailable?: boolean;
+  combinationLoad?: { error: unknown; retry: () => void };
 }) {
   const { t } = useI18n();
   const current = ORDER.indexOf(step);
@@ -79,7 +84,18 @@ export function BookingFrame({
                 </Link>
               </aside>
             )}
-            {children}
+            {combinationLoad ? (
+              <ErrorState error={combinationLoad.error} onRetry={combinationLoad.retry} />
+            ) : combinationUnavailable ? (
+              <div className="space-y-3 rounded-lg border border-line p-4">
+                <p role="alert">{t("combinations.unavailable")}</p>
+                <Link to="/book" search={{}} className={buttonClasses({ variant: "secondary" })}>
+                  {t("booking.professional.none.back")}
+                </Link>
+              </div>
+            ) : (
+              children
+            )}
           </section>
           {summary}
         </div>

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { idSchema, instantSchema } from "./common";
 import { rewardQuoteSchema } from "./rewards";
+import { fixedCombinationReviewSchema } from "./service-combinations";
 
 const code = z
   .string()
@@ -14,6 +15,7 @@ export const bookingPromotionQuoteRequestSchema = z
   .object({
     code,
     staffId: idSchema,
+    combination: fixedCombinationReviewSchema.optional(),
     serviceIds: z.array(idSchema).min(1).max(24),
     serviceQuotes: z
       .record(idSchema, z.string().regex(/^[a-f0-9]{64}$/))

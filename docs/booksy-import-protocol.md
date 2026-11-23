@@ -197,8 +197,35 @@ from `apps/api`. The command verifies the snapshot's artifacts and compares its 
 a fresh projection of the archived catalogue. It writes a private `combination-review-*.json`
 receipt with ordered components, allocated prices, total price, duration, buffers and source
 staff. It also records the professionals qualified for every component individually.
-Ambiguous references and inconsistent totals are flagged. The review leaves the combination's
-publication status and appointments intact.
+Ambiguous references and inconsistent totals are flagged. The receipt also prepares inactive
+native drafts with stable identifiers for the ordered services, assigned professionals and
+the allocated prices. The catalogue administration API returns drafts after a separate
+catalogue write. A write from an older client preserves the terms unless the treatment
+order changes, which requires a review.
+The review leaves the combination's publication status and appointments intact.
+
+Clients that support fixed-price combinations request `fixedTerms=1` from the
+combination catalogue. A published combination selects a single assigned professional
+and preserves the order of the EUR-priced components. Publishing a draft requires an
+explicit online-visibility choice, including when it predates the visibility setting.
+For a public combination, use its ID on availability and price queries. Centre accounts
+can discover eligible combinations at `/appointments/combinations` and use
+`/appointments/combination-availability` and `/appointments/peak-price` for internal options.
+The price response carries the version and review hash required when submitting a booking.
+Fixed prices exclude catalogue peak surcharges. Checkout uses the component amounts frozen on
+the appointment. A move uses the booked professional list and the original service amounts.
+
+In Web, open **Services → Combinations** to enter the EUR amounts in treatment order,
+choose the assigned professionals and set the visibility. Customers retain a fixed
+combination through service, professional and slot selection. To book an internal
+combination, choose it in **Calendar → New appointment**. A fixed combination keeps its
+allocated price through checkout and appears only on the booking surfaces allowed by its
+visibility.
+
+Desktop can select the same options in **Calendar → New appointment** after syncing its
+scoped booking catalogue. Online and queued offline bookings send the same reviewed price
+and professional allocation. If the offer changes before delivery, the proposal remains
+in **Sync conflicts** for review.
 
 #### Conciliación de una candidata ya cargada
 

@@ -863,7 +863,7 @@ fn native_resource_pool_creation_and_edits_resume_through_the_proxy() {
 #[test]
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
-    use sob_core::combinations::{CombinationDraft, PendingCombination};
+    use sob_core::combinations::{CombinationDraft, FixedCombinationTerms, PendingCombination};
 
     let device = proxy_device();
     let web = Device::sign_in();
@@ -881,7 +881,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
         web.rest_post(
             "/admin/services",
             json!({
-                "name":name,"durationMinutes":30,"priceCents":2500,"staffIds":[staff],
+                "name":name,"durationMinutes":30,"priceCents":2500,"currency":"EUR","staffIds":[staff],
             }),
         )["id"]
             .as_str()
@@ -897,6 +897,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
         description: Some("Line one\n\nLine three".into()),
         service_ids,
         active: true,
+        fixed_terms: None,
     };
     assert!(
         store
@@ -1029,6 +1030,408 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
     assert_eq!(row["serviceIds"], json!(cloud_order));
     assert_eq!(row["active"], false);
     assert!(store.conflicts().unwrap().is_empty());
+
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    let fixed = CombinationDraft {
+        active: true,
+        fixed_terms: Some(FixedCombinationTerms {
+            prices_cents: vec![1735, 1265],
+            staff_ids: vec![staff],
+            online_booking: Some(false),
+        }),
+        ..previous.draft.clone()
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    drop(store);
+    let mut store = Store::open(&path).unwrap();
+    assert_eq!(
+        store.pending_combinations().unwrap()[0].edit.proposed,
+        fixed
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed);
+    assert!(previous.bookable);
+    let mut legacy = CombinationDraft {
+        fixed_terms: None,
+        ..fixed.clone()
+    };
+    let reviewed = legacy.clone();
+    legacy.name = "Legacy offline name".into();
+    legacy.service_ids.reverse();
+    let pending = PendingCombination {
+        id: id.clone(),
+        version: Some(previous.version),
+        proposed: legacy,
+        reviewed: Some(reviewed),
+    };
+    let outdated = store
+        .enqueue(
+            "combination.update",
+            &id,
+            serde_json::to_value(&pending).unwrap(),
+        )
+        .unwrap();
+    let reviewed_proposal = pending.restore_reviewed_terms(&previous.draft).unwrap();
+    assert_eq!(reviewed_proposal.fixed_terms, previous.draft.fixed_terms);
+    assert!(matches!(
+        store.queue_combination(
+            &catalogue.generation,
+            &id,
+            Some(previous.version),
+            pending.proposed.clone(),
+            Some(&outdated.mutation_id),
+            None,
+        ),
+        Err(sob_core::error::CoreError::CombinationPricingNeedsReview)
+    ));
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .rejected,
+        1
+    );
+    assert_eq!(
+        store
+            .conflict(&outdated.mutation_id)
+            .unwrap()
+            .unwrap()
+            .reason,
+        "conflict"
+    );
+    let fixed = pending
+        .proposed
+        .rebase(pending.reviewed.as_ref().unwrap(), &previous.draft, true);
+    assert_eq!(fixed.service_ids, previous.draft.service_ids);
+    assert_eq!(fixed.fixed_terms, previous.draft.fixed_terms);
+    assert_eq!(fixed.name, "Legacy offline name");
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed.clone(),
+                None,
+                Some(&outdated.mutation_id)
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed);
+    let fixed_archived = CombinationDraft {
+        active: false,
+        ..fixed
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                fixed_archived.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, fixed_archived);
+    let without_fixed_terms = CombinationDraft {
+        fixed_terms: None,
+        ..fixed_archived
+    };
+    assert!(
+        store
+            .queue_combination(
+                &catalogue.generation,
+                &id,
+                Some(previous.version),
+                without_fixed_terms.clone(),
+                None,
+                None
+            )
+            .unwrap()
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    let catalogue = store.managed_combinations().unwrap().unwrap();
+    let previous = catalogue
+        .combinations
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap();
+    assert_eq!(previous.draft, without_fixed_terms);
+}
+
+#[test]
+#[ignore = "needs the real API behind the web gateway (see README)"]
+fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
+    use sob_core::booking::BookingTerms;
+    use sob_core::intake::IntakeSelection;
+
+    let device = proxy_device();
+    let mut browser = Device::sign_in();
+    browser.sync();
+    let catalog = catalog(&browser);
+    let client = ops::create_client(&mut browser.store, "Combination rehearsal", None).unwrap();
+    browser.sync();
+    let services = ["First fixed session", "Second fixed session"].map(|name| {
+        browser.rest_post(
+            "/admin/services",
+            json!({
+                "name": name, "durationMinutes": 30, "priceCents": 3500,
+                "currency": "EUR", "staffIds": [catalog.other_staff]
+            }),
+        )["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    });
+    let combination = browser.rest_post(
+        "/admin/services/combinations",
+        json!({
+            "idempotencyKey": uuid::Uuid::now_v7(), "name": "Centre-only treatment sequence",
+            "description": null, "serviceIds": services, "active": true,
+            "fixedTerms": {
+                "pricesCents": [1790, 1210], "staffIds": [catalog.staff], "onlineBooking": false
+            }
+        }),
+    );
+    let combination_id = combination["id"].as_str().unwrap();
+    browser.sync();
+    let starts = free_slot(&browser, &catalog.staff);
+    let directory = tempfile::tempdir().unwrap();
+    let file = directory.path().join("offline-combinations.sqlite");
+    let mut store = Store::open(&file).unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    let offer = store
+        .booking_combinations()
+        .unwrap()
+        .unwrap()
+        .combinations
+        .into_iter()
+        .find(|row| row.id == combination_id)
+        .unwrap();
+    let review = offer.booking_review(&store.services().unwrap()).unwrap();
+    let booking = |starts_at| NewAppointment {
+        staff_id: catalog.staff.clone(),
+        service_ids: services.to_vec(),
+        starts_at,
+        client_id: client.clone(),
+        notes: None,
+        override_notice: false,
+    };
+    let terms =
+        BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)).unwrap();
+    let timezone = salon_tz(&store).unwrap();
+    let availability = device
+        .transport
+        .combination_slots(
+            combination_id,
+            &catalog.staff,
+            starts.with_timezone(&timezone).date_naive(),
+            &services,
+        )
+        .unwrap();
+    assert!(availability.contains(&starts));
+    store
+        .set_meta("calendar_scope", &catalog.other_staff)
+        .unwrap();
+    assert!(matches!(
+        BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)),
+        Err(sob_core::error::CoreError::IncompatibleServices)
+    ));
+    store.set_meta("calendar_scope", "all").unwrap();
+    let quote = device.transport.booking_peak_price(&terms).unwrap();
+    assert!(terms.matches_price_quote(&quote));
+    assert_eq!(quote.combination, Some(review.clone()));
+    let id =
+        ops::create_combination_appointment(&mut store, booking(starts), None, &review).unwrap();
+    drop(store);
+    let mut store = Store::open(&file).unwrap();
+    let check = |appointment: Appointment, time| {
+        assert_eq!(appointment.staff_id, catalog.staff);
+        assert_eq!(appointment.combination_id.as_deref(), Some(combination_id));
+        assert_eq!(
+            appointment.combination_staff_ids,
+            Some(vec![catalog.staff.clone()])
+        );
+        assert_eq!(appointment.starts_at, time);
+        assert_eq!(
+            appointment
+                .services
+                .iter()
+                .map(|service| service.price_cents)
+                .collect::<Vec<_>>(),
+            [1790, 1210]
+        );
+    };
+    check(
+        calendar::effective_appointment(&store, &id)
+            .unwrap()
+            .unwrap(),
+        starts,
+    );
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    browser.sync();
+    check(store.appointment(&id).unwrap().unwrap(), starts);
+    let cursor = store.cursor().unwrap();
+    let legacy = rusqlite::Connection::open(&file).unwrap();
+    legacy.execute("UPDATE appointment SET json = json_remove(json, '$.combinationId', '$.combinationStaffIds') WHERE id = ?1", [&id]).unwrap();
+    legacy
+        .execute(
+            "DELETE FROM meta WHERE key = 'booked_combination_terms_generation'",
+            [],
+        )
+        .unwrap();
+    drop(legacy);
+    assert!(store.booking_combinations().unwrap().is_some());
+    assert!(
+        store
+            .appointment(&id)
+            .unwrap()
+            .unwrap()
+            .combination_id
+            .is_none()
+    );
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    assert_eq!(store.cursor().unwrap(), cursor);
+    check(store.appointment(&id).unwrap().unwrap(), starts);
+
+    let online_start = free_slot(&browser, &catalog.staff);
+    let online =
+        BookingTerms::prepare_reviewed(&store, booking(online_start), None, Some(&review)).unwrap();
+    let intake = device
+        .transport
+        .direct_booking_requirements(&online)
+        .unwrap();
+    assert!(intake.forms.is_empty());
+    let receipt = device
+        .transport
+        .create_reviewed_booking(&online.reviewed(intake.review_hash, IntakeSelection::default()))
+        .unwrap();
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    check(
+        store.appointment(&receipt.id).unwrap().unwrap(),
+        online_start,
+    );
+
+    let view = store.managed_combinations().unwrap().unwrap();
+    let mut archived = offer.draft;
+    archived.active = false;
+    store
+        .queue_combination(
+            &view.generation,
+            combination_id,
+            Some(offer.version),
+            archived,
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(matches!(
+        ops::create_combination_appointment(&mut store, booking(online_start), None, &review),
+        Err(sob_core::error::CoreError::CatalogueEditPending)
+    ));
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    assert!(
+        store
+            .booking_combinations()
+            .unwrap()
+            .unwrap()
+            .combinations
+            .iter()
+            .all(|row| row.id != combination_id)
+    );
+    assert!(matches!(
+        ops::create_combination_appointment(&mut store, booking(online_start), None, &review),
+        Err(sob_core::error::CoreError::CombinationBookingChanged)
+    ));
+    browser.sync();
+    let moved_to = free_slot(&browser, &catalog.staff);
+    assert!(
+        ops::reschedule_appointment(&mut store, &id, Some(moved_to), Some(&catalog.other_staff))
+            .is_err()
+    );
+    ops::reschedule_appointment(&mut store, &id, Some(moved_to), None).unwrap();
+    assert_eq!(
+        sync::sync_cycle(&mut store, &*device.transport)
+            .unwrap()
+            .push
+            .applied,
+        1
+    );
+    check(store.appointment(&id).unwrap().unwrap(), moved_to);
 }
 
 #[test]

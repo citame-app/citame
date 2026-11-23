@@ -1,9 +1,14 @@
 use super::*;
 use crate::combinations::{
-    CACHE, CREATE, CombinationCatalogue, CombinationDraft, LIMIT, ManagedCombination,
-    PendingCombination, QueuedCombination, UPDATE, validate_online_selection,
+    BookedCombinationTerms, CACHE, CREATE, CombinationCatalogue, CombinationDraft, LIMIT,
+    ManagedCombination, PendingCombination, QueuedCombination, UPDATE, validate_fixed_selection,
+    validate_online_selection,
 };
 use std::collections::BTreeSet;
+
+const LEGACY_CACHE: &str = "service_combinations";
+const BOOKING_CACHE: &str = "booking_combination_catalogue";
+const BOOKED_TERMS_GENERATION: &str = "booked_combination_terms_generation";
 
 impl Store {
     pub(crate) fn reserve_combination_payloads(
@@ -47,6 +52,37 @@ impl Store {
         combinations: &[ManagedCombination],
         generation: &str,
     ) -> Result<()> {
+        conn.execute("DELETE FROM meta WHERE key = ?1", [LEGACY_CACHE])?;
+        Self::cache_combination_view_at(conn, CACHE, combinations, generation)
+    }
+
+    pub(super) fn cache_booking_combinations_at(
+        conn: &Connection,
+        combinations: &[ManagedCombination],
+        generation: &str,
+    ) -> Result<()> {
+        if combinations.iter().any(|row| {
+            !row.bookable
+                || !row.draft.active
+                || row
+                    .draft
+                    .fixed_terms
+                    .as_ref()
+                    .is_none_or(|fixed| fixed.online_booking.is_none())
+        }) {
+            return Err(CoreError::Protocol(
+                "Invalid booking combination catalogue".into(),
+            ));
+        }
+        Self::cache_combination_view_at(conn, BOOKING_CACHE, combinations, generation)
+    }
+
+    fn cache_combination_view_at(
+        conn: &Connection,
+        key: &str,
+        combinations: &[ManagedCombination],
+        generation: &str,
+    ) -> Result<()> {
         let ids: BTreeSet<_> = combinations.iter().map(|row| &row.id).collect();
         if combinations.len() > LIMIT
             || ids.len() != combinations.len()
@@ -62,7 +98,7 @@ impl Store {
             generation: generation.into(),
             combinations: combinations.to_vec(),
         };
-        Self::set_meta_at(conn, CACHE, &serde_json::to_string(&view)?)
+        Self::set_meta_at(conn, key, &serde_json::to_string(&view)?)
     }
 
     pub(crate) fn needs_combination_snapshot(&self) -> Result<bool> {
@@ -70,14 +106,73 @@ impl Store {
     }
 
     pub(super) fn forget_combinations_at(conn: &Connection) -> Result<()> {
-        conn.execute("DELETE FROM meta WHERE key = ?1", [CACHE])?;
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?1, ?2)",
+            [CACHE, LEGACY_CACHE],
+        )?;
         Ok(())
     }
 
     pub fn managed_combinations(&self) -> Result<Option<CombinationCatalogue>> {
+        self.combination_view(CACHE)
+    }
+
+    pub(crate) fn needs_booking_combination_snapshot(&self) -> Result<bool> {
+        Ok(self.get_meta(BOOKING_CACHE)?.is_none()
+            || self.get_meta(BOOKED_TERMS_GENERATION)?.as_deref()
+                != Some(self.replica_generation()?.as_str()))
+    }
+
+    pub(super) fn forget_booking_combinations_at(conn: &Connection) -> Result<()> {
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?1, ?2)",
+            [BOOKING_CACHE, BOOKED_TERMS_GENERATION],
+        )?;
+        Ok(())
+    }
+
+    pub fn booking_combinations(&self) -> Result<Option<CombinationCatalogue>> {
+        self.combination_view(BOOKING_CACHE)
+    }
+
+    pub(super) fn backfill_booked_combination_terms(
+        conn: &Connection,
+        terms: &[BookedCombinationTerms],
+    ) -> Result<()> {
+        let mut update = conn.prepare(
+            "UPDATE appointment SET json = json_set(json, '$.combinationId', ?3, '$.combinationStaffIds', json(?4))
+             WHERE id = ?1 AND version = ?2 AND status = 'booked'
+               AND json_type(json, '$.combinationStaffIds') IS NULL",
+        )?;
+        for row in terms {
+            if row.version <= 0
+                || uuid::Uuid::parse_str(&row.appointment_id).is_err()
+                || uuid::Uuid::parse_str(&row.combination_id).is_err()
+                || row.staff_ids.is_empty()
+                || row.staff_ids.len() > crate::combinations::MAX_FIXED_STAFF
+                || row
+                    .staff_ids
+                    .iter()
+                    .any(|id| uuid::Uuid::parse_str(id).is_err())
+            {
+                return Err(CoreError::Protocol(
+                    "Invalid booked combination terms".into(),
+                ));
+            }
+            update.execute(params![
+                row.appointment_id,
+                row.version,
+                row.combination_id,
+                serde_json::to_string(&row.staff_ids)?
+            ])?;
+        }
+        Self::set_meta_at(conn, BOOKED_TERMS_GENERATION, &Self::generation_at(conn)?)
+    }
+
+    fn combination_view(&self, key: &str) -> Result<Option<CombinationCatalogue>> {
         let generation = self.verified_reviewed_generation()?;
         Ok(self
-            .get_meta(CACHE)?
+            .get_meta(key)?
             .map(|raw| serde_json::from_str::<CombinationCatalogue>(&raw))
             .transpose()?
             .filter(|view| view.generation == generation))
@@ -152,7 +247,9 @@ impl Store {
                 let restored = conflict.requires_restored_review();
                 if conflict.reason == "conflict" && !restored {
                     let edit = serde_json::from_value::<PendingCombination>(conflict.payload)?;
-                    if current.is_none_or(|row| edit.version.is_none_or(|old| row.version <= old)) {
+                    if !current.zip(edit.version).is_some_and(|(row, old)| {
+                        row.can_review_rejected_version(old, edit.reviewed.as_ref())
+                    }) {
                         return Err(CoreError::CatalogueVersionChanged);
                     }
                 }
@@ -164,15 +261,54 @@ impl Store {
                         "The salon combination limit has been reached".into(),
                     ));
                 }
-                if proposed.active
-                    || current.is_none_or(|row| row.draft.service_ids != proposed.service_ids)
+                let previous_terms = current.and_then(|row| row.draft.fixed_terms.as_ref());
+                if proposed.fixed_terms.is_none()
+                    && current.zip(pending_edit).is_some_and(|(row, pending)| {
+                        pending
+                            .edit
+                            .reviewed
+                            .as_ref()
+                            .is_some_and(|draft| draft.lacked_fixed_terms(&row.draft))
+                    })
                 {
-                    validate_online_selection(
-                        &proposed.service_ids,
-                        &store.services()?,
-                        &store.staff()?,
-                        &store.service_staff()?,
-                    )?;
+                    return Err(CoreError::CombinationPricingNeedsReview);
+                }
+                let selection_changed =
+                    current.is_none_or(|row| row.draft.service_ids != proposed.service_ids);
+                let terms_changed = previous_terms != proposed.fixed_terms.as_ref();
+                if proposed.active
+                    && proposed
+                        .fixed_terms
+                        .as_ref()
+                        .is_some_and(|terms| terms.online_booking.is_none())
+                {
+                    return Err(CoreError::Invalid(
+                        "Choose the visibility before publishing the combination".into(),
+                    ));
+                }
+                if proposed.fixed_terms.is_none()
+                    && previous_terms.is_some_and(|terms| !terms.can_remove(proposed.active))
+                {
+                    return Err(CoreError::Invalid(
+                        "Archive the internal combination first".into(),
+                    ));
+                }
+                if proposed.active
+                    || selection_changed
+                    || (terms_changed && proposed.fixed_terms.is_some())
+                {
+                    let catalogue = store.services()?;
+                    let staff = store.staff()?;
+                    if let Some(terms) = &proposed.fixed_terms {
+                        validate_fixed_selection(&proposed, terms, &catalogue, &staff)?;
+                    } else {
+                        validate_online_selection(
+                            &proposed.service_ids,
+                            &catalogue,
+                            &staff,
+                            &store.service_staff()?,
+                        )?;
+                    }
                 }
                 let edit = PendingCombination {
                     id: id.into(),
@@ -225,6 +361,7 @@ mod tests {
             name: "Rehearsal combination".into(),
             description: None,
             active: true,
+            fixed_terms: None,
             service_ids: (0..2).map(|_| uuid::Uuid::now_v7().to_string()).collect(),
         };
         let entry = PendingCombination {

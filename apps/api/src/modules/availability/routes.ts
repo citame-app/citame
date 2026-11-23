@@ -7,6 +7,6 @@ import { findAvailability } from "./service";
 export function availabilityRoutes({ db, now = () => new Date() }: AppDeps) {
   return new Hono().get("/", async (c) => {
     const query = parseOrThrow(availabilityQuerySchema, c.req.query());
-    return c.json(await findAvailability(db, query, now()));
+    return c.json(await findAvailability(db, query, now(), { publicOnlyFixed: true }));
   });
 }

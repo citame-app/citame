@@ -6,6 +6,7 @@ import { idSchema, instantSchema, localDateSchema } from "@sob/contracts";
  */
 export interface BookingSearch {
   services: string[];
+  combinationId?: string;
   /** A professional id, or `any` for "first available". */
   staff?: string;
   professionals?: string[];
@@ -36,8 +37,11 @@ function parseServices(value: unknown): string[] {
 
 export function parseBookingSearch(raw: Record<string, unknown>): BookingSearch {
   const search: BookingSearch = { services: parseServices(raw.services) };
+  const combinationId = valid<string>(idSchema, raw.combinationId);
+  if (raw.combinationId !== undefined && !combinationId) return { services: [] };
+  if (combinationId) search.combinationId = combinationId;
   const staff =
-    raw.staff === "any" || raw.staff === "multiple"
+    raw.staff === "any" || (raw.staff === "multiple" && !combinationId)
       ? raw.staff
       : valid<string>(idSchema, raw.staff);
   if (staff) search.staff = staff;
@@ -67,6 +71,7 @@ export function parseBookingSearch(raw: Record<string, unknown>): BookingSearch 
 export function serializeBookingSearch(search: BookingSearch): Record<string, string> {
   const out: Record<string, string> = {};
   if (search.services.length > 0) out.services = search.services.join(",");
+  if (search.combinationId) out.combinationId = search.combinationId;
   if (search.staff) out.staff = search.staff;
   if (search.staff === "multiple" && search.professionals?.length)
     out.professionals = search.professionals.join(",");

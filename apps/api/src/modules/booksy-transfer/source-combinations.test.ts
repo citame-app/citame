@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
+import { booksyCombinationDrafts } from "./combination-drafts";
 import { transferFixture } from "./fixtures";
+import { sourceUuid } from "./plan";
 import { reviewBooksyCombinations, sourceBooksyCombinationTerms } from "./source-combinations";
 
 function fixture() {
@@ -109,4 +111,50 @@ test("projected component drift and source processing gaps are not verified as m
     terms: null,
     issue: "unsupported_processing",
   });
+});
+
+test("native combination drafts bind source services and staff to stable ordered identifiers", () => {
+  const { first, second, combination } = fixture();
+  const base = transferFixture();
+  const staff = base.staff[0];
+  if (!staff) throw new Error("Missing professional fixture");
+  base.staff = [{ ...staff, sourceId: "1" }];
+  base.services = [first, second, combination];
+  const model = { base, businessId: base.businessId };
+  const [draft] = booksyCombinationDrafts(model);
+  if (!draft?.draft) throw new Error("Missing native draft");
+  expect(draft).toMatchObject({
+    issue: null,
+    id: sourceUuid(model.businessId, "serviceCombinations", combination.sourceId),
+    originallyPublic: true,
+    draft: {
+      active: false,
+      serviceIds: [
+        sourceUuid(model.businessId, "services", second.sourceId),
+        sourceUuid(model.businessId, "services", first.sourceId),
+      ],
+      fixedTerms: {
+        pricesCents: [4500, 5000],
+        staffIds: [sourceUuid(model.businessId, "staff", "1")],
+      },
+      idempotencyKey: sourceUuid(model.businessId, "combination-draft-write", combination.sourceId),
+    },
+  });
+  expect(booksyCombinationDrafts(model)).toEqual([draft]);
+  base.staff = [{ ...staff, sourceId: "1", active: false }];
+  expect(booksyCombinationDrafts(model)[0]).toMatchObject({
+    draft: null,
+    issue: "inactive_source_reference",
+  });
+  base.staff = [{ ...staff, sourceId: "1" }];
+  base.services = [{ ...first, active: false }, second, combination];
+  expect(booksyCombinationDrafts(model)[0]).toMatchObject({
+    draft: null,
+    issue: "inactive_source_reference",
+  });
+  base.services = [first, second, combination];
+  base.staff = [];
+  expect(booksyCombinationDrafts(model)).toEqual([
+    { sourceId: combination.sourceId, draft: null, issue: "unmapped_staff" },
+  ]);
 });

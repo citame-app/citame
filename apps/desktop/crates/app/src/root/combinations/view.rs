@@ -91,7 +91,9 @@ impl Root {
                         );
                 }
                 if desk.catalogue.is_none() {
-                    return view.child(self.t(Key::CombinationNeedsSync));
+                    return view
+                        .child(self.t(Key::CombinationNeedsSync))
+                        .child(self.render_combination_list(desk, cx));
                 }
                 view.when(!desk.at_limit(), |view| {
                     view.child(self.button(
@@ -122,7 +124,8 @@ impl Root {
             .filter(|row| !desk.pending.iter().any(|pending| pending.edit.id == row.id));
         let pending = desk.pending.iter().map(|row| {
             let id = row.edit.id.clone();
-            let editable = !row.submitted
+            let editable = desk.catalogue.is_some()
+                && !row.submitted
                 && desk.current(&id).map(|current| current.version) == row.edit.version;
             self.combination_summary(&row.edit.proposed, Key::CatalogPending)
                 .when(editable, |item| {
@@ -154,6 +157,14 @@ impl Root {
                 let id = row.id.clone();
                 let status = if !row.draft.active {
                     Key::CombinationArchived
+                } else if row.bookable
+                    && row
+                        .draft
+                        .fixed_terms
+                        .as_ref()
+                        .is_some_and(|terms| terms.online_booking == Some(false))
+                {
+                    Key::CombinationAvailableToStaff
                 } else if row.bookable {
                     Key::CombinationLive
                 } else {
@@ -199,6 +210,32 @@ impl Root {
                 view.child(div().text_sm().child(value.clone()))
             })
             .child(div().text_sm().child(order))
+            .when_some(draft.fixed_terms.as_ref(), |view, terms| {
+                let prices = terms
+                    .prices_cents
+                    .iter()
+                    .map(|&cents| self.amount_label(i64::from(cents), "EUR"))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                let professionals = terms
+                    .staff_ids
+                    .iter()
+                    .map(|id| {
+                        self.staff
+                            .iter()
+                            .find(|person| person.id == *id)
+                            .map_or(id.as_str(), |person| person.display_name.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                view.child(
+                    div()
+                        .text_sm()
+                        .child(self.t(combination_visibility(terms.online_booking))),
+                )
+                .child(div().text_sm().child(prices))
+                .child(div().text_sm().child(professionals))
+            })
     }
 
     fn combination_service_name<'a>(&'a self, id: &str) -> &'a str {
@@ -216,7 +253,7 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let needs_review = editor.needs_review(desk.catalogue.as_ref());
-        let draft = editor.draft(cx);
+        let fixed = editor.fixed.as_ref().filter(|_| editor.fixed_enabled);
         div()
             .id("combination-editor")
             .min_h_0()
@@ -225,7 +262,12 @@ impl Root {
             .flex_col()
             .gap_2()
             .when(needs_review, |view| {
-                view.child(self.render_combination_review(desk, editor, &draft, cx))
+                view.child(self.render_combination_review(
+                    desk,
+                    editor,
+                    editor.draft(cx).as_ref(),
+                    cx,
+                ))
             })
             .child(self.label(Key::CombinationName))
             .child(editor.name.clone())
@@ -272,7 +314,7 @@ impl Root {
             .child(self.button(
                 "combination-active",
                 self.t(if editor.active {
-                    Key::CombinationOnline
+                    Key::CombinationActive
                 } else {
                     Key::CombinationArchived
                 }),
@@ -289,9 +331,26 @@ impl Root {
                     })
                 }),
             ))
+            .child(self.button(
+                "combination-toggle-fixed-price",
+                self.t(if editor.fixed_enabled {
+                    Key::CombinationUseCataloguePrices
+                } else {
+                    Key::CombinationUseFixedPrice
+                }),
+                Kind::Ghost,
+                cx.listener(|root, _, _, cx| root.toggle_fixed_combination(cx)),
+            ))
+            .when_some(fixed, |view, fixed| {
+                view.child(self.render_fixed_combination_fields(fixed, cx))
+            })
             .child(self.label(Key::CombinationOrder))
             .children(editor.service_ids.iter().enumerate().map(|(index, id)| {
                 self.render_ordered_combination_service(index, editor.service_ids.len(), id, cx)
+                    .when_some(
+                        fixed.and_then(|fixed| fixed.prices.get(id)),
+                        |row, price| row.child(div().w(px(105.)).child(price.clone())),
+                    )
             }))
             .when(editor.service_ids.len() < MAX_SERVICES, |view| {
                 view.child(editor.search.clone())
@@ -299,17 +358,116 @@ impl Root {
             })
     }
 
+    fn render_fixed_combination_fields(
+        &self,
+        fixed: &FixedEditor,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let mut professionals = self
+            .staff
+            .iter()
+            .filter(|person| person.active || fixed.staff_ids.contains(&person.id))
+            .map(|person| (person.id.clone(), person.display_name.clone()))
+            .collect::<Vec<_>>();
+        professionals.extend(
+            fixed
+                .staff_ids
+                .iter()
+                .filter(|id| self.staff.iter().all(|person| &person.id != *id))
+                .map(|id| (id.clone(), id.clone())),
+        );
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.label(Key::CombinationVisibility))
+            .when(fixed.online_booking.is_none(), |view| {
+                view.child(
+                    div()
+                        .text_sm()
+                        .child(self.t(Key::CombinationVisibilityUnreviewed)),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children([false, true].into_iter().map(|online| {
+                        self.button(
+                            ("combination-visibility", usize::from(online)),
+                            self.t(combination_visibility(Some(online))),
+                            if fixed.online_booking == Some(online) {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |root, _, _, cx| {
+                                root.edit_combination(cx, |desk, _| {
+                                    if let Some(fixed) = desk
+                                        .editor
+                                        .as_mut()
+                                        .and_then(|editor| editor.fixed.as_mut())
+                                    {
+                                        fixed.online_booking = Some(online);
+                                    }
+                                })
+                            }),
+                        )
+                    })),
+            )
+            .child(self.label(Key::CombinationFixedProfessionals))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(professionals.into_iter().map(|(id, name)| {
+                        let selected = fixed.staff_ids.contains(&id);
+                        self.button(
+                            SharedString::from(format!("combination-staff-{id}")),
+                            name,
+                            if selected { Kind::Primary } else { Kind::Ghost },
+                            cx.listener(move |root, _, _, cx| {
+                                let active = root
+                                    .staff
+                                    .iter()
+                                    .any(|person| person.id == id && person.active);
+                                root.edit_combination(cx, |desk, _| {
+                                    if let Some(fixed) = desk
+                                        .editor
+                                        .as_mut()
+                                        .and_then(|editor| editor.fixed.as_mut())
+                                    {
+                                        if let Some(index) =
+                                            fixed.staff_ids.iter().position(|staff| *staff == id)
+                                        {
+                                            fixed.staff_ids.remove(index);
+                                        } else if active
+                                            && fixed.staff_ids.len()
+                                                < sob_core::combinations::MAX_FIXED_STAFF
+                                        {
+                                            fixed.staff_ids.push(id.clone());
+                                        }
+                                    }
+                                });
+                            }),
+                        )
+                    })),
+            )
+    }
+
     fn render_combination_review(
         &self,
         desk: &Desk,
         editor: &Editor,
-        draft: &CombinationDraft,
+        draft: Option<&CombinationDraft>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let view = desk.catalogue.as_ref();
         let current = view.and_then(|view| editor.current(view));
-        let can_review = view.is_some_and(|view| editor.can_review(view));
-        let overlaps = current.is_some_and(|row| {
+        let can_review = draft.is_some() && view.is_some_and(|view| editor.can_review(view));
+        let overlaps = current.zip(draft).is_some_and(|(row, draft)| {
             draft.rebase(&editor.original, &row.draft, true)
                 != draft.rebase(&editor.original, &row.draft, false)
         });
@@ -318,7 +476,9 @@ impl Root {
             .flex_col()
             .gap_2()
             .child(self.t(Key::CombinationChanged))
-            .child(self.combination_summary(draft, Key::CombinationDraft))
+            .when_some(draft, |view, draft| {
+                view.child(self.combination_summary(draft, Key::CombinationDraft))
+            })
             .when_some(current, |view, row| {
                 view.child(self.combination_summary(&row.draft, Key::CombinationCurrent))
             })
@@ -327,7 +487,11 @@ impl Root {
                 |view| view.child(self.t(Key::CombinationMissing)),
             )
             .when(!can_review, |view| {
-                view.child(self.t(Key::CombinationNeedsSync))
+                view.child(self.t(if draft.is_none() {
+                    Key::CombinationPriceUnreviewed
+                } else {
+                    Key::CombinationNeedsSync
+                }))
             })
             .when(can_review, |view| {
                 let action = if editor.version.is_some() && current.is_none() {
@@ -400,7 +564,10 @@ impl Root {
                         if let Some(editor) = &mut desk.editor
                             && index < editor.service_ids.len()
                         {
-                            editor.service_ids.remove(index);
+                            let id = editor.service_ids.remove(index);
+                            if let Some(fixed) = &mut editor.fixed {
+                                fixed.prices.remove(&id);
+                            }
                         }
                     })
                 }),
@@ -413,11 +580,16 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let query = editor.search.read(cx).text().trim().to_lowercase();
+        let fixed = editor.fixed.as_ref().filter(|_| editor.fixed_enabled);
         div().flex().flex_wrap().gap_1().children(
             self.services
                 .iter()
                 .filter(|service| {
-                    online_service(service, &self.services)
+                    (if fixed.is_some_and(|terms| terms.online_booking != Some(true)) {
+                        service.active
+                    } else {
+                        online_service(service, &self.services)
+                    }) && (fixed.is_none() || service.currency == "EUR")
                         && !editor.service_ids.contains(&service.id)
                         && (query.is_empty() || service.name.to_lowercase().contains(&query))
                 })
@@ -428,17 +600,28 @@ impl Root {
                         service.name.clone(),
                         Kind::Ghost,
                         cx.listener(move |root, _, _, cx| {
-                            root.edit_combination(cx, |desk, _| {
+                            root.edit_combination(cx, |desk, cx| {
                                 if let Some(editor) = &mut desk.editor
                                     && editor.service_ids.len() < MAX_SERVICES
                                     && !editor.service_ids.contains(&id)
                                 {
                                     editor.service_ids.push(id.clone());
+                                    if let Some(fixed) = &mut editor.fixed {
+                                        fixed.prices.insert(id.clone(), text_field("EUR", "", cx));
+                                    }
                                 }
                             })
                         }),
                     )
                 }),
         )
+    }
+}
+
+fn combination_visibility(online: Option<bool>) -> Key {
+    match online {
+        Some(true) => Key::CombinationOnline,
+        Some(false) => Key::CombinationInternal,
+        None => Key::CombinationVisibilityUnreviewed,
     }
 }

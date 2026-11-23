@@ -208,6 +208,7 @@ export function requireAuth(
           "/me",
           "/me/desktop-workspaces",
           "/appointments/peak-price",
+          "/appointments/combination-availability",
           "/admin/reports/staff-work",
           "/admin/whatsapp/desk",
           "/admin/whatsapp/templates",

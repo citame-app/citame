@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  type FixedCombinationReview,
   type PeakPricePolicy,
   type PeakPriceQuote,
   type PeakPriceRule,
@@ -14,6 +15,7 @@ import { requirePermission } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
+import { resolveFixedCombination } from "../services/combination-booking";
 import { getBookableServices, onlineServicesByIds } from "../services/service";
 import { getSalonSettings } from "../settings/service";
 
@@ -178,7 +180,13 @@ export async function quotePeakSlot(
   services: Service[],
   startsAt: Date,
   timeZone: string,
-) {
+  combination?: FixedCombinationReview,
+): Promise<PeakPriceQuote> {
+  if (combination)
+    return {
+      ...pricePeakSlot({ version: 0, rules: [] }, services, startsAt, timeZone),
+      combination,
+    };
   const policy = await loadPeakPriceRules(db);
   return pricePeakSlot(policy, services, startsAt, timeZone);
 }
@@ -188,14 +196,22 @@ export async function previewPeakSlot(
   serviceIds: string[],
   startsAt: string,
   publicOnly: boolean,
+  combinationId?: string,
 ) {
   return db.transaction(
     async (tx) => {
-      const services = await getBookableServices(tx, serviceIds);
-      if (publicOnly && (await onlineServicesByIds(tx, serviceIds)).length !== services.length)
+      const fixed = combinationId
+        ? await resolveFixedCombination(tx, combinationId, serviceIds, undefined, publicOnly)
+        : undefined;
+      const services = fixed?.services ?? (await getBookableServices(tx, serviceIds));
+      if (
+        publicOnly &&
+        !fixed &&
+        (await onlineServicesByIds(tx, serviceIds)).length !== services.length
+      )
         throw new DomainError("not_found", "Service unavailable for online booking");
       const { timezone } = await getSalonSettings(tx);
-      return quotePeakSlot(tx, services, new Date(startsAt), timezone);
+      return quotePeakSlot(tx, services, new Date(startsAt), timezone, fixed?.review);
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );

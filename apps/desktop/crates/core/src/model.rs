@@ -196,6 +196,10 @@ pub struct Appointment {
     pub visit_group_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub itinerary_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combination_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub combination_staff_ids: Option<Vec<String>>,
     pub staff_id: String,
     pub client_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,6 +481,12 @@ pub struct PullResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub combinations: Option<Vec<crate::combinations::ManagedCombination>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booking_combinations: Option<Vec<crate::combinations::ManagedCombination>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booking_combination_access: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booked_combination_terms: Option<Vec<crate::combinations::BookedCombinationTerms>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_prices: Option<crate::booking::PeakPriceSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_price_access: Option<bool>,
@@ -576,6 +586,7 @@ impl OutboxEntry {
         {
             fields.remove("_reviewedServices");
             fields.remove("_clientName");
+            fields.remove("_combinationStaffIds");
         } else if self.kind == crate::store::SERVICE_EDIT_KIND
             && let Some(fields) = payload.as_object_mut()
         {
@@ -599,7 +610,16 @@ impl OutboxEntry {
             crate::combinations::CREATE | crate::combinations::UPDATE
         ) && let Some(fields) = payload.as_object_mut()
         {
-            fields.remove("_reviewed");
+            if let Some(reviewed) = fields.remove("_reviewed") {
+                if reviewed.get("fixedTerms").is_some() && !fields.contains_key("fixedTerms") {
+                    fields.insert("fixedTerms".into(), Value::Null);
+                } else if fields.get("active").and_then(Value::as_bool) == Some(false)
+                    && fields.get("serviceIds") == reviewed.get("serviceIds")
+                    && fields.get("fixedTerms") == reviewed.get("fixedTerms")
+                {
+                    fields.remove("fixedTerms");
+                }
+            }
         } else if matches!(
             self.kind.as_str(),
             crate::product_editor::CREATE | crate::product_editor::UPDATE

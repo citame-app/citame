@@ -18,6 +18,10 @@ pub enum CoreError {
     CatalogueVersionChanged,
     #[error("the selected service has booking details waiting to sync")]
     CatalogueEditPending,
+    #[error("save the reviewed pricing before removing it")]
+    CombinationPricingNeedsReview,
+    #[error("the reviewed treatment combination changed")]
+    CombinationBookingChanged,
     #[error("the reviewed peak-time price changed")]
     PeakPriceReviewChanged,
     #[error("a team photo is being saved in another window")]

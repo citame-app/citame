@@ -876,6 +876,20 @@
       "when": 1795398000000,
       "tag": "0124_sync_booked_resources",
       "breakpoints": true
+    },
+    {
+      "idx": 125,
+      "version": "7",
+      "when": 1795398060000,
+      "tag": "0125_fixed_combination_terms",
+      "breakpoints": true
+    },
+    {
+      "idx": 126,
+      "version": "7",
+      "when": 1795398120000,
+      "tag": "0126_booked_fixed_combinations",
+      "breakpoints": true
     }
   ]
 }

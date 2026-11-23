@@ -33,7 +33,11 @@ export const Route = createFileRoute("/book/time")({
     }
   },
   // Prefetch the visible days on the server so the first paint already shows times.
-  loaderDeps: ({ search }) => ({ services: search.services, staff: search.staff }),
+  loaderDeps: ({ search }) => ({
+    services: search.services,
+    staff: search.staff,
+    combinationId: search.combinationId,
+  }),
   loader: async ({ context, deps }) => {
     const parsed = parseBookingSearch(deps);
     if (parsed.services.length === 0) return;
@@ -43,7 +47,14 @@ export const Route = createFileRoute("/book/time")({
     await Promise.all(
       dates.map((date) =>
         context.queryClient
-          .ensureQueryData(availabilityQuery({ serviceIds: parsed.services, staffId, date }))
+          .ensureQueryData(
+            availabilityQuery({
+              serviceIds: parsed.services,
+              staffId,
+              date,
+              combinationId: parsed.combinationId,
+            }),
+          )
           .catch(() => undefined),
       ),
     );
@@ -78,6 +89,8 @@ function SingleTimeStep() {
   return (
     <BookingFrame
       teamAccount={booking.teamAccount}
+      combinationUnavailable={booking.combinationUnavailable}
+      combinationLoad={booking.combinationLoad}
       step="time"
       search={search}
       title={t("booking.time.title")}
@@ -85,12 +98,13 @@ function SingleTimeStep() {
       summary={
         <BookingSummary
           services={selectedServices}
+          combinationName={booking.combination?.name}
           totals={totals}
           staffName={booking.staffName}
           slot={search.slot ? { startsAt: search.slot } : undefined}
           timeZone={salon.timezone}
           ctaLabel={t("booking.cta.continue")}
-          ctaDisabled={!search.slot || !search.slotStaff}
+          ctaDisabled={!search.slot || !search.slotStaff || selectedServices.length === 0}
           onCta={() => booking.go("review", search)}
         />
       }
@@ -107,6 +121,7 @@ function SingleTimeStep() {
         )}
         <SlotPicker
           serviceIds={search.services}
+          combinationId={search.combinationId}
           staffId={staffId}
           dates={dates}
           timeZone={salon.timezone}
@@ -136,7 +151,7 @@ function SingleTimeStep() {
             );
           }}
         />
-        {(!session || session.user.role === "client") && (
+        {!search.combinationId && (!session || session.user.role === "client") && (
           <Link
             to="/account/waitlist"
             search={{

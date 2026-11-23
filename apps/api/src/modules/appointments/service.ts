@@ -60,6 +60,7 @@ import { applyBookingPromotion } from "../rewards/booking";
 import { awardAppointmentStamp, reverseAppointmentStamp } from "../rewards/stamps";
 import { assertPromotionReschedule } from "../rewards/timing";
 import { releaseUnfulfilledAppointmentRewards } from "../rewards/value";
+import { assertCombinationStaff, resolveBookingSelection } from "../services/combination-booking";
 import { assertOnlineServices, getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { loadDatedHours } from "../staff/date-hours";
@@ -101,6 +102,7 @@ export function toAppointment(
     notes: row.notes,
     version: row.version,
     ...(row.workWindows ? { workWindows: row.workWindows } : {}),
+    ...(row.combinationId ? { combinationId: row.combinationId } : {}),
     services: snapshots
       .sort((a, b) => a.position - b.position)
       .map((s) => ({
@@ -193,12 +195,14 @@ export async function createAppointment(
 ): Promise<Appointment> {
   const now = options.now ?? new Date();
   await assertStaffExists(db, request.staffId);
-  const services = await getBookableServices(db, request.serviceIds, request.serviceQuotes);
-  await assertStaffPerforms(
-    db,
-    request.staffId,
-    services.map((s) => s.id),
-  );
+  if (!request.combination) {
+    const services = await getBookableServices(db, request.serviceIds, request.serviceQuotes);
+    await assertStaffPerforms(
+      db,
+      request.staffId,
+      services.map((s) => s.id),
+    );
+  }
 
   const startsAt = new Date(request.startsAt);
 
@@ -209,8 +213,18 @@ export async function createAppointment(
       const settings = await getSalonSettings(tx, actor?.role === "client" ? "share" : undefined);
       assertOnlineBookingEnabled(settings, actor?.role);
       const onlineCustomer = await assertOnlineServices(tx, request.serviceIds, actor?.userId);
-      const services = await getBookableServices(tx, request.serviceIds, request.serviceQuotes);
-      const peak = await quotePeakSlot(tx, services, startsAt, settings.timezone);
+      const { services, fixed } = await resolveBookingSelection(tx, request);
+      if (fixed && onlineCustomer && !fixed.onlineBooking)
+        throw new DomainError("not_found", "Combination unavailable for online booking");
+      if (fixed) await assertCombinationStaff(tx, request.staffId, fixed.staffIds);
+      else
+        await assertStaffPerforms(
+          tx,
+          request.staffId,
+          services.map((s) => s.id),
+          true,
+        );
+      const peak = await quotePeakSlot(tx, services, startsAt, settings.timezone, fixed?.review);
       assertPeakReview(peak, request.peakPriceReview);
       const prices = new Map(peak.services.map((line) => [line.serviceId, line]));
       if (
@@ -235,17 +249,12 @@ export async function createAppointment(
           tx,
           { date, serviceIds: request.serviceIds, staffId: request.staffId },
           now,
+          fixed ? { services, staffIds: fixed.staffIds } : undefined,
         );
         if (!availability.slots.some((slot) => Date.parse(slot.startsAt) === startsAt.getTime()))
           throw new DomainError("validation_error", "Choose a start time offered for this service");
       }
       const endsAt = new Date(startsAt.getTime() + totalBlockMinutes(services) * MS_PER_MINUTE);
-      await assertStaffPerforms(
-        tx,
-        request.staffId,
-        services.map((s) => s.id),
-        true,
-      );
       const noticeOverridden = await assertBookable(tx, {
         staffId: request.staffId,
         startsAt,
@@ -275,6 +284,7 @@ export async function createAppointment(
           startsAt,
           endsAt,
           notes: request.notes,
+          ...(fixed ? { combinationId: fixed.review.id, combinationStaffIds: fixed.staffIds } : {}),
           requestedStaffId: request.professionalPreference === "specific" ? request.staffId : null,
           customerComment: actor?.role === "client" ? request.notes?.trim() || null : null,
           ...(request.promotion ? { createdAt: now } : {}),
@@ -319,6 +329,7 @@ export async function createAppointment(
           entityId: row.id,
           metadata: {
             requestFingerprint: appointmentIntentFingerprint(request),
+            ...(fixed ? { combination: fixed.review } : {}),
             ...(request.priceTermsAccepted
               ? {
                   priceTermsConfirmed: true,
@@ -533,6 +544,7 @@ export async function getAppointmentOwnership(db: Database, id: string) {
       status: appointment.status,
       startsAt: appointment.startsAt,
       version: appointment.version,
+      combinationStaffIds: appointment.combinationStaffIds,
     })
     .from(appointment)
     .where(and(eq(appointment.id, id), isNull(appointment.deletedAt)));
@@ -700,10 +712,14 @@ export async function updateAppointment(
   }
 
   const staffId = request.staffId ?? current.staffId;
+  const serviceIds = snapshots.flatMap((s) => (s.serviceId ? [s.serviceId] : []));
   if (request.staffId && request.staffId !== current.staffId) {
-    await assertStaffExists(db, request.staffId);
-    const serviceIds = snapshots.flatMap((s) => (s.serviceId ? [s.serviceId] : []));
-    if (serviceIds.length > 0) await assertStaffPerforms(db, request.staffId, serviceIds);
+    if (current.combinationStaffIds)
+      await assertCombinationStaff(db, request.staffId, current.combinationStaffIds);
+    else {
+      await assertStaffExists(db, request.staffId);
+      if (serviceIds.length > 0) await assertStaffPerforms(db, request.staffId, serviceIds);
+    }
   }
 
   const durationMs = current.endsAt.getTime() - current.startsAt.getTime();
@@ -719,13 +735,11 @@ export async function updateAppointment(
       await lockProtectionReceipt(tx, id);
       await lockScheduling(tx);
       await lockCalendars(tx, [current.staffId, staffId]);
-      if (slotChanges)
-        await assertStaffPerforms(
-          tx,
-          staffId,
-          snapshots.flatMap((s) => (s.serviceId ? [s.serviceId] : [])),
-          true,
-        );
+      if (slotChanges) {
+        if (current.combinationStaffIds)
+          await assertCombinationStaff(tx, staffId, current.combinationStaffIds);
+        else await assertStaffPerforms(tx, staffId, serviceIds, true);
+      }
       if (slotChanges) await assertClientCanBook(tx, current.clientId);
       if (slotChanges)
         await assertPromotionReschedule(tx, id, { startsAt, createdAt: current.createdAt });
