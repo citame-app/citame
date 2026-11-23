@@ -12,6 +12,10 @@ pub const MAX_SERVICES: usize = 24;
 pub const MAX_FIXED_STAFF: usize = 100;
 pub const MAX_FIXED_PRICE_CENTS: u32 = 999_999_999;
 
+pub fn booking_calendar_allows(scope: Option<&str>, staff_id: &str) -> bool {
+    scope.is_some_and(|scope| scope == "all" || (scope != "none" && scope == staff_id))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FixedCombinationTerms {
@@ -27,6 +31,15 @@ pub struct FixedCombinationReview {
     pub id: String,
     pub version: u64,
     pub review_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookedCombinationTerms {
+    pub appointment_id: String,
+    pub version: i64,
+    pub combination_id: String,
+    pub staff_ids: Vec<String>,
 }
 
 impl FixedCombinationTerms {

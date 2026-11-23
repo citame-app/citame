@@ -485,6 +485,8 @@ pub struct PullResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub booking_combination_access: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booked_combination_terms: Option<Vec<crate::combinations::BookedCombinationTerms>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_prices: Option<crate::booking::PeakPriceSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peak_price_access: Option<bool>,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::combinations::{
-    CACHE, CREATE, CombinationCatalogue, CombinationDraft, LIMIT, ManagedCombination,
-    PendingCombination, QueuedCombination, UPDATE, validate_fixed_selection,
+    BookedCombinationTerms, CACHE, CREATE, CombinationCatalogue, CombinationDraft, LIMIT,
+    ManagedCombination, PendingCombination, QueuedCombination, UPDATE, validate_fixed_selection,
     validate_online_selection,
 };
 use std::collections::BTreeSet;
@@ -127,6 +127,40 @@ impl Store {
 
     pub fn booking_combinations(&self) -> Result<Option<CombinationCatalogue>> {
         self.combination_view(BOOKING_CACHE)
+    }
+
+    pub(super) fn backfill_booked_combination_terms(
+        conn: &Connection,
+        terms: &[BookedCombinationTerms],
+    ) -> Result<()> {
+        let mut update = conn.prepare(
+            "UPDATE appointment SET json = json_set(json, '$.combinationId', ?3, '$.combinationStaffIds', json(?4))
+             WHERE id = ?1 AND version = ?2 AND status = 'booked'
+               AND json_type(json, '$.combinationStaffIds') IS NULL",
+        )?;
+        for row in terms {
+            if row.version <= 0
+                || uuid::Uuid::parse_str(&row.appointment_id).is_err()
+                || uuid::Uuid::parse_str(&row.combination_id).is_err()
+                || row.staff_ids.is_empty()
+                || row.staff_ids.len() > crate::combinations::MAX_FIXED_STAFF
+                || row
+                    .staff_ids
+                    .iter()
+                    .any(|id| uuid::Uuid::parse_str(id).is_err())
+            {
+                return Err(CoreError::Protocol(
+                    "Invalid booked combination terms".into(),
+                ));
+            }
+            update.execute(params![
+                row.appointment_id,
+                row.version,
+                row.combination_id,
+                serde_json::to_string(&row.staff_ids)?
+            ])?;
+        }
+        Ok(())
     }
 
     fn combination_view(&self, key: &str) -> Result<Option<CombinationCatalogue>> {

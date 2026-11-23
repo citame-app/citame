@@ -78,6 +78,7 @@ impl Transport for Scripted {
             combinations: None,
             booking_combinations: None,
             booking_combination_access: None,
+            booked_combination_terms: None,
             viewer_write_inventory: None,
             portfolio_uploads: None,
             viewer_read_inventory: None,

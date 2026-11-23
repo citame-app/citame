@@ -698,6 +698,16 @@ export const syncPullResponseSchema = z.object({
   combinations: z.array(serviceCombinationSchema).max(100).optional(),
   bookingCombinations: z.array(serviceCombinationSchema).max(100).optional(),
   bookingCombinationAccess: z.boolean().optional(),
+  bookedCombinationTerms: z
+    .array(
+      z.object({
+        appointmentId: idSchema,
+        version: z.number().int().positive(),
+        combinationId: idSchema,
+        staffIds: z.array(idSchema).min(1).max(100),
+      }),
+    )
+    .optional(),
   peakPrices: peakPriceSnapshotSchema.optional(),
   peakPriceAccess: z.boolean().optional(),
   changes: z.array(syncChangeSchema),

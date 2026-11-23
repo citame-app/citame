@@ -1,9 +1,20 @@
 use super::*;
-use sob_core::combinations::{FixedCombinationReview, ManagedCombination};
+use sob_core::combinations::{FixedCombinationReview, ManagedCombination, booking_calendar_allows};
 
 pub(super) struct BookingCombination {
     pub(super) offer: ManagedCombination,
     pub(super) review: FixedCombinationReview,
+    pub(super) override_notice: bool,
+}
+
+pub(super) fn eligible_combination_staff<'a>(
+    staff: &'a [Staff],
+    scope: Option<&'a str>,
+    offer: &'a ManagedCombination,
+) -> impl Iterator<Item = &'a Staff> {
+    staff.iter().filter(move |member| {
+        booking_calendar_allows(scope, &member.id) && offer.permits_staff(&member.id)
+    })
 }
 
 impl Root {
@@ -22,21 +33,18 @@ impl Root {
             cx.notify();
             return;
         };
-        let mut eligible = self
-            .staff
-            .iter()
-            .filter(|staff| offer.permits_staff(&staff.id));
+        let mut eligible =
+            eligible_combination_staff(&self.staff, self.calendar_scope.as_deref(), offer);
         let Some(first_eligible) = eligible.next() else {
             form.error = Some(Key::CombinationBookingChanged);
             cx.notify();
             return;
         };
         let old_staff = form.staff_id.clone();
-        if form
-            .staff_id
-            .as_deref()
-            .is_none_or(|staff| !offer.permits_staff(staff))
-        {
+        if form.staff_id.as_deref().is_none_or(|staff| {
+            !offer.permits_staff(staff)
+                || !booking_calendar_allows(self.calendar_scope.as_deref(), staff)
+        }) {
             form.staff_id = eligible.next().is_none().then(|| first_eligible.id.clone());
         }
         form.services.clone_from(&offer.draft.service_ids);
@@ -49,6 +57,7 @@ impl Root {
         form.combination = Some(BookingCombination {
             offer: offer.clone(),
             review,
+            override_notice: true,
         });
         if old_staff != form.staff_id {
             form.selected_end = None;
@@ -114,6 +123,24 @@ impl Root {
                             }),
                     )
                     .child(
+                        self.chip(
+                            "new-combination-override",
+                            self.t(Key::SeriesOverrideNotice),
+                            selection.override_notice,
+                            cx.listener(|root, _, _, cx| {
+                                if let Overlay::New(form) = &mut root.overlay
+                                    && let Some(selection) = &mut form.combination
+                                {
+                                    selection.override_notice = !selection.override_notice;
+                                    form.error = None;
+                                }
+                                cx.notify();
+                            }),
+                        )
+                        .tab_index(0)
+                        .focus(|view| view.border_color(theme::text())),
+                    )
+                    .child(
                         self.button(
                             "new-combination-clear",
                             self.t(Key::ClearBookingCombination),
@@ -141,10 +168,13 @@ impl Root {
             .iter()
             .filter(|offer| {
                 (search.is_empty() || offer.draft.name.to_lowercase().contains(search))
-                    && self
-                        .staff
-                        .iter()
-                        .any(|staff| offer.permits_staff(&staff.id))
+                    && eligible_combination_staff(
+                        &self.staff,
+                        self.calendar_scope.as_deref(),
+                        offer,
+                    )
+                    .next()
+                    .is_some()
             })
             .collect::<Vec<_>>();
         if eligible.is_empty() {

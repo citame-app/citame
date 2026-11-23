@@ -348,6 +348,10 @@ impl Root {
                             return;
                         }
                     }
+                    Err(TransportError::BadRequest(_)) if review.terms.combination().is_some() => {
+                        form.error = Some(Key::CombinationBookingChanged);
+                        root.svc.wake(Wake::Manual);
+                    }
                     Err(_) => form.error = Some(Key::BookingIntakeUnavailable),
                 }
                 cx.notify();

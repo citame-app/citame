@@ -409,13 +409,46 @@ export async function pullChanges(
     (query.combinations === "full" || (query.combinations === "delta" && combinationsChanged))
       ? (await listCombinations(db, principal, query.fixedCombinationTerms === "1")).combinations
       : undefined;
-  const bookingCombinationAccess =
-    permissions.editCalendar && (permissions.allCalendars || principal.staffId !== null);
+  const bookingStaffScope = permissions.allCalendars ? undefined : principal.staffId;
+  const bookingCombinationAccess = permissions.editCalendar && bookingStaffScope !== null;
   const bookingCombinations =
     bookingCombinationAccess &&
     (query.bookingCombinations === "full" ||
       (query.bookingCombinations === "delta" && combinationsChanged))
       ? (await bookingCombinationCatalogue(db, principal)).combinations
+      : undefined;
+  const bookedCombinationTerms =
+    bookingCombinationAccess && query.bookingCombinations === "full"
+      ? (
+          await db
+            .select({
+              appointmentId: appointment.id,
+              version: appointment.version,
+              combinationId: appointment.combinationId,
+              staffIds: appointment.combinationStaffIds,
+              staffId: appointment.staffId,
+            })
+            .from(appointment)
+            .where(
+              and(
+                isNull(appointment.deletedAt),
+                eq(appointment.status, "booked"),
+                isNotNull(appointment.combinationId),
+                bookingStaffScope ? eq(appointment.staffId, bookingStaffScope) : undefined,
+              ),
+            )
+        ).flatMap(({ appointmentId, version, combinationId, staffIds, staffId }) =>
+          combinationId && staffIds
+            ? [
+                {
+                  appointmentId,
+                  version,
+                  combinationId,
+                  staffIds: permissions.allCalendars ? staffIds : [staffId],
+                },
+              ]
+            : [],
+        )
       : undefined;
   const peakPricesChanged = page.some(
     (row) =>
@@ -433,6 +466,7 @@ export async function pullChanges(
     ...(resourcePools ? { resourcePools } : {}),
     ...(combinations ? { combinations } : {}),
     ...(bookingCombinations ? { bookingCombinations } : {}),
+    ...(bookedCombinationTerms ? { bookedCombinationTerms } : {}),
     ...(query.bookingCombinations ? { bookingCombinationAccess } : {}),
     ...(peakPrices ? { peakPrices } : {}),
     ...(query.peakPrices ? { peakPriceAccess: permissions.editCalendar } : {}),

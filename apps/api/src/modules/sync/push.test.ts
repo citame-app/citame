@@ -604,6 +604,10 @@ test("offline combo bookings use the exact reviewed allocation and the operator'
     .where(eq(appointmentService.appointmentId, appointmentId))
     .orderBy(appointmentService.position);
   expect(lines.map(({ priceCents }) => priceCents)).toEqual([1790, 1210]);
+  expect((await pull(t, bea, { bookingCombinations: "full" })).bookedCombinationTerms).toEqual([
+    { appointmentId, version: 1, combinationId: id, staffIds: [f.beaId] },
+  ]);
+  expect((await pull(t, ana, { bookingCombinations: "full" })).bookedCombinationTerms).toEqual([]);
   expect(
     (await push(t, owner, [save({ ...fixedTerms, pricesCents: [2500, 2000] }, 1)])).body.results[0],
   ).toMatchObject({ status: "applied" });

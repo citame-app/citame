@@ -1281,6 +1281,14 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
     };
     let terms =
         BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)).unwrap();
+    store
+        .set_meta("calendar_scope", &catalog.other_staff)
+        .unwrap();
+    assert!(matches!(
+        BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)),
+        Err(sob_core::error::CoreError::IncompatibleServices)
+    ));
+    store.set_meta("calendar_scope", "all").unwrap();
     let quote = device.transport.booking_peak_price(&terms).unwrap();
     assert!(terms.matches_price_quote(&quote));
     assert_eq!(quote.combination, Some(review.clone()));
@@ -1320,6 +1328,27 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
     );
     browser.sync();
     check(store.appointment(&id).unwrap().unwrap(), starts);
+    let cursor = store.cursor().unwrap();
+    let legacy = rusqlite::Connection::open(&file).unwrap();
+    legacy.execute("UPDATE appointment SET json = json_remove(json, '$.combinationId', '$.combinationStaffIds') WHERE id = ?1", [&id]).unwrap();
+    legacy
+        .execute(
+            "DELETE FROM meta WHERE key = 'booking_combination_catalogue'",
+            [],
+        )
+        .unwrap();
+    drop(legacy);
+    assert!(
+        store
+            .appointment(&id)
+            .unwrap()
+            .unwrap()
+            .combination_id
+            .is_none()
+    );
+    sync::pull_all(&mut store, &*device.transport).unwrap();
+    assert_eq!(store.cursor().unwrap(), cursor);
+    check(store.appointment(&id).unwrap().unwrap(), starts);
 
     let online_start = free_slot(&browser, &catalog.staff);
     let online =
@@ -1352,6 +1381,10 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
             None,
         )
         .unwrap();
+    assert!(matches!(
+        ops::create_combination_appointment(&mut store, booking(online_start), None, &review),
+        Err(sob_core::error::CoreError::CatalogueEditPending)
+    ));
     assert_eq!(
         sync::sync_cycle(&mut store, &*device.transport)
             .unwrap()

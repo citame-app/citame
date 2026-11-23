@@ -207,6 +207,7 @@ struct PullMetadata<'a> {
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     booking_combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     booking_combination_access: Option<bool>,
+    booked_combination_terms: Option<&'a [crate::combinations::BookedCombinationTerms]>,
     peak_prices: Option<&'a crate::booking::PeakPriceSnapshot>,
     peak_price_access: Option<bool>,
     inventory_access: Option<bool>,
@@ -1161,6 +1162,7 @@ impl Store {
                 combinations: page.combinations.as_deref(),
                 booking_combinations: page.booking_combinations.as_deref(),
                 booking_combination_access: page.booking_combination_access,
+                booked_combination_terms: page.booked_combination_terms.as_deref(),
                 peak_prices: page.peak_prices.as_ref(),
                 peak_price_access: page.peak_price_access,
                 inventory_access: page.viewer_write_inventory,
@@ -1239,8 +1241,17 @@ impl Store {
         if metadata.generation.is_some() {
             if metadata.booking_combination_access != Some(true) {
                 Self::forget_booking_combinations_at(&tx)?;
-            } else if let Some(combinations) = metadata.booking_combinations {
-                Self::cache_booking_combinations_at(&tx, combinations, &Self::generation_at(&tx)?)?;
+            } else {
+                if let Some(combinations) = metadata.booking_combinations {
+                    Self::cache_booking_combinations_at(
+                        &tx,
+                        combinations,
+                        &Self::generation_at(&tx)?,
+                    )?;
+                }
+                if let Some(terms) = metadata.booked_combination_terms {
+                    Self::backfill_booked_combination_terms(&tx, terms)?;
+                }
             }
         }
         let cursor = tx

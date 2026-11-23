@@ -9,7 +9,7 @@ use crate::calendar::{
     effective_appointment, effective_appointments_between, effective_time_off, known_clients,
     service_work_windows,
 };
-use crate::combinations::FixedCombinationReview;
+use crate::combinations::{FixedCombinationReview, booking_calendar_allows};
 use crate::error::{CoreError, Result};
 use crate::model::{
     Appointment, AppointmentService, AppointmentStatus, Client, Service, ServiceOption, TimeOff,
@@ -449,6 +449,16 @@ pub(crate) fn reviewed_service_terms(
         )));
     }
     let fixed = if let Some(review) = combination {
+        if store
+            .pending_combinations()?
+            .iter()
+            .any(|pending| pending.edit.id == review.id)
+        {
+            return Err(CoreError::CatalogueEditPending);
+        }
+        if !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), &new.staff_id) {
+            return Err(CoreError::IncompatibleServices);
+        }
         let row = store
             .booking_combinations()?
             .and_then(|view| {
@@ -677,6 +687,7 @@ fn queue_reschedule(
                     ids.iter().any(|id| id == target)
                 });
             if !permitted
+                || !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), target)
                 || !store
                     .staff()?
                     .iter()
@@ -996,7 +1007,30 @@ fn resolve_conflict_in_transaction(
                     if let Some(s) = staff_id {
                         p["staffId"] = json!(s);
                     }
-                    if let Some((staff_id, services)) = p
+                    if let Some(review) = p.get("combination") {
+                        let review =
+                            serde_json::from_value::<FixedCombinationReview>(review.clone())?;
+                        let fields = |key| {
+                            p.get(key)
+                                .and_then(Value::as_str)
+                                .map(str::to_owned)
+                                .ok_or_else(|| {
+                                    CoreError::Protocol("Missing reviewed booking field".into())
+                                })
+                        };
+                        let new = NewAppointment {
+                            staff_id: fields("staffId")?,
+                            service_ids: serde_json::from_value(p["serviceIds"].clone())?,
+                            starts_at,
+                            client_id: fields("clientId")?,
+                            notes: p.get("notes").and_then(Value::as_str).map(str::to_owned),
+                            override_notice: p
+                                .get("override")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
+                        };
+                        reviewed_service_terms(store, &new, Some(&review))?;
+                    } else if let Some((staff_id, services)) = p
                         .get("staffId")
                         .and_then(Value::as_str)
                         .zip(p.get("_reviewedServices"))

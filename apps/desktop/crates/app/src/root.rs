@@ -1166,7 +1166,12 @@ impl Root {
     fn pick_new_staff(&mut self, id: String, cx: &mut Context<Self>) {
         if let Overlay::New(f) = &mut self.overlay {
             if let Some(selection) = &f.combination {
-                if !selection.offer.permits_staff(&id) {
+                if !selection.offer.permits_staff(&id)
+                    || !sob_core::combinations::booking_calendar_allows(
+                        self.calendar_scope.as_deref(),
+                        &id,
+                    )
+                {
                     return;
                 }
                 if f.staff_id.as_deref() != Some(id.as_str()) {
@@ -1271,7 +1276,11 @@ impl Root {
             starts_at,
             client_id: chosen.unwrap_or_default(),
             notes: (!notes.is_empty()).then_some(notes),
-            override_notice: form.recurrence.is_some() && form.series_override,
+            override_notice: form
+                .combination
+                .as_ref()
+                .is_some_and(|selection| selection.override_notice)
+                || (form.recurrence.is_some() && form.series_override),
         };
         if self.status.connectivity == Connectivity::Online && self.svc.transport().is_some() {
             match sob_core::booking::BookingTerms::prepare_reviewed(
@@ -2919,11 +2928,13 @@ impl Root {
         );
         let staff = f.staff_id.as_deref().unwrap_or_default();
         let combination_staff = f.combination.as_ref().map(|selection| {
-            self.staff
-                .iter()
-                .filter(|staff| selection.offer.permits_staff(&staff.id))
-                .cloned()
-                .collect::<Vec<_>>()
+            combination_booking::eligible_combination_staff(
+                &self.staff,
+                self.calendar_scope.as_deref(),
+                &selection.offer,
+            )
+            .cloned()
+            .collect::<Vec<_>>()
         });
         let search = f.client_search.read(cx).text().trim().to_lowercase();
         let selected_client = self
@@ -5651,6 +5662,7 @@ mod tests {
                     &serde_json::to_string(&catalogue).unwrap(),
                 )
                 .unwrap();
+            root.svc.store.set_meta("calendar_scope", "all").unwrap();
             root.status.connectivity = Connectivity::Offline;
             root.reload(cx);
             root.open_new(window, cx);
