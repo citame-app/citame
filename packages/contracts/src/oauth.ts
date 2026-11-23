@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { UserRole } from "./auth";
 import { idSchema } from "./common";
 
 /**
@@ -31,6 +32,12 @@ export const isManagementScope = (scope: OAuthScope) =>
   MCP_MANAGEMENT_SCOPES.some((management) => scope === management);
 export const oauthScopeSchema = z.enum(OAUTH_SCOPES);
 export type OAuthScope = z.infer<typeof oauthScopeSchema>;
+
+export function mcpScopeAllowedForRole(role: UserRole, scope: OAuthScope): boolean {
+  if (scope === "billing:write") return role === "owner";
+  if (role !== "client") return true;
+  return scope !== "schedule:read" && !isManagementScope(scope);
+}
 
 /** Splits a space-separated scope string, keeping known scopes once, in order. */
 export function parseScopes(value: string | null | undefined): OAuthScope[] {

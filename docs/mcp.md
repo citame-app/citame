@@ -37,7 +37,7 @@ A token's powers are the intersection of its scopes, the current consent, the re
 
 ## Centre management
 
-Management permissions must be selected explicitly in the consent screen. They are unavailable to customer accounts. If a client was previously registered only with booking scopes, register it with the additional scopes and connect it again. A browser session cookie cannot call MCP.
+Management permissions must be selected explicitly in the consent screen. The OAuth server rejects management and staff schedule scopes for customer accounts at consent and token issuance. If a client was previously registered only with booking scopes, register it with the additional scopes and connect it again. A browser session cookie cannot call MCP.
 
 | Scope | Operations |
 | --- | --- |
@@ -53,6 +53,8 @@ Management permissions must be selected explicitly in the consent screen. They a
 | `settings:write` | Change owner settings, the booking, waiting-list and loyalty policies and WhatsApp appointment rules |
 
 The web service still enforces its own resource ownership, role checks, reviewed versions and replay keys. Managed responses wrap their validated result in `structuredContent.data`. Cash recording accepts only `cash` or `external_card`. Online charges, automatic membership renewals, refunds, issuing redemption codes, sending marketing campaigns, account and role administration, bulk exports and customer documents remain dashboard operations. The MCP profile strips internal notes and sensitive fields from its projections, including tax/address details in contact listings, waiting-list offer details in the general queue and bank references in checkout and commission summaries.
+
+Read weekly hours with `get_working_hours` and pass its revision as `body.expectedRevision` to `replace_working_hours`. This uses the same schedule editing permission as Web. Owners can read `get_centre_settings` and pass its revision and the proposed fields in `body: { expectedRevision, changes }` to `update_centre_settings`. If a tool reports a conflict, read the current values and review the change again.
 
 To turn a waiting-list offer into a booking, call `list_waitlist`, then `review_waitlist_offer` for one entry. Review its time, staff, total, expiry and deposit policy with the operator. With `schedule:write`, pass the exact offer ID, version, total and any applicable saved-form references to `accept_waitlist_offer`. Use `requeue_waitlist_offer` to release the slot and let the worker look for another one. New form answers and deposit waivers are handled in the web desk.
 
@@ -105,7 +107,7 @@ Appointment notes are written by clients, so staff and owner tokens receive `not
 - If you publish MCP at a custom host or path, forward that endpoint to API `/mcp`. Forward its advertised protected-resource metadata path to the API as well. The OAuth server, login and consent stay at `BETTER_AUTH_URL`.
 - Run migrations (`bun run db:migrate`): migration `0005` adds the OAuth tables.
 - Audit: `select action, actor_user_id, entity_id, metadata from audit_log where action like 'oauth.%' order by created_at desc;`
-- In **My account → Profile → Connected apps** the account holder can review scopes and revoke access for one client. Revocation removes the grant and refresh credentials. Access JWTs are bound to the original grant. After upgrading, hosts with older pre-binding access tokens need to refresh or reconnect once. Set `oauth_client.disabled = true` to block a client for everyone.
+- In **My account → Profile → Connected apps** the account holder can review scopes and revoke access for one client. Revocation removes the grant and refresh credentials. Authorization codes, refresh tokens and access JWTs are bound to the grant that authorized them. After upgrading, hosts with older unbound refresh tokens need to reconnect once. Set `oauth_client.disabled = true` to block a client for everyone.
 - `MCP_ALLOWED_ORIGINS` accepts a comma-separated list of exact browser origins, including scheme and port. The public auth and MCP origins are included automatically. This setting only applies to bearer-authenticated `/mcp` calls. OAuth discovery, registration and the token endpoint retain public CORS without credentials.
 - Administrative write attempts record the authenticated user, OAuth client and tool in `audit_log` with action `mcp.write_requested`. Normal business audits record successful mutations.
 - In production, `BETTER_AUTH_URL` and `MCP_RESOURCE_URL` require HTTPS. Loopback HTTP is supported for local testing. JWT access tokens are ES256, audience-bound and short-lived. Citame stops accepting MCP calls when its rate limiter cannot be reached.

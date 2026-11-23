@@ -23,7 +23,7 @@ import {
   workingHours,
 } from "@sob/db";
 import { and, asc, count, desc, eq, gt, inArray, isNull, lt, or, sql } from "drizzle-orm";
-import { recordAudit } from "../../audit";
+import { type McpAuditSource, recordAudit } from "../../audit";
 import { clientIdentityIds, requireClientRoot } from "../../client-identity";
 import { DomainError } from "../../errors";
 import {
@@ -78,7 +78,7 @@ export interface Actor {
   userId: string;
   role?: "owner" | "staff" | "client";
   /** Set when the change came through a delegated channel (an MCP client acting for the user). */
-  via?: { channel: string; clientId: string };
+  via?: McpAuditSource;
 }
 
 type AppointmentRow = typeof appointment.$inferSelect;

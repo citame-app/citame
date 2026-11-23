@@ -3,14 +3,12 @@ import * as C from "@sob/contracts";
 import { Hono } from "hono";
 import { z } from "zod";
 import type { AppDeps } from "../app";
-import { recordAudit } from "../audit";
 import type { AppEnv, Principal } from "../auth/principal";
 import { DomainError } from "../errors";
-import { parseOrThrow, respondError } from "../http";
+import { respondError } from "../http";
 import { accountingRoutes } from "../modules/accounting/routes";
 import { appointmentsRoutes } from "../modules/appointments/routes";
 import { clientAdminRoutes } from "../modules/clients/admin-routes";
-import { getIntakeRequirements } from "../modules/clients/intake";
 import { commerceAdminRoutes } from "../modules/commerce/routes";
 import { giftCardRoutes } from "../modules/gift-cards/routes";
 import { inventoryRoutes } from "../modules/inventory/routes";
@@ -23,13 +21,15 @@ import { serviceAdminRoutes } from "../modules/services/admin-routes";
 import { settingsAdminRoutes } from "../modules/settings/admin-routes";
 import { staffAdminRoutes } from "../modules/staff/admin-routes";
 import { waitlistAdminRoutes } from "../modules/waitlist/routes";
-import { entryRow, entryView } from "../modules/waitlist/service";
 import { notificationAdminRoutes } from "../notifications/routes";
 import { whatsappAdminRoutes } from "../notifications/whatsapp/routes";
+import { recordMcpWriteRequested } from "./audit";
 import { errorResult, toolFailure } from "./errors";
 import type { ToolContext } from "./tools";
 
-type InternalEnv = AppEnv & { Bindings: { principal: Principal } };
+type InternalEnv = AppEnv & {
+  Bindings: { principal: Principal; mcpAuditSource: ToolContext["via"] };
+};
 type Scope = (typeof C.MCP_MANAGEMENT_SCOPES)[number];
 type Method = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 type Operation = {
@@ -60,26 +60,10 @@ export function createManagementRouter(deps: AppDeps) {
   });
   app.use("*", async (c, next) => {
     c.set("principal", c.env.principal);
+    c.set("mcpAuditSource", c.env.mcpAuditSource);
     await next();
   });
   return app
-    .get("/waitlist-offer-review/:id", async (c) => {
-      const { db, now = () => new Date() } = deps;
-      const principal = c.get("principal");
-      const entry = await entryRow(db, parseOrThrow(C.idSchema, c.req.param("id")), principal);
-      const view = await entryView(db, entry, principal);
-      const at = now();
-      if (!view.canManage || !view.offer || Date.parse(view.offer.expiresAt) <= +at)
-        throw new DomainError("invalid_state", "This entry has no active offer on your calendar");
-      const intake = await getIntakeRequirements(
-        db,
-        entry.serviceIds,
-        principal,
-        at,
-        entry.clientId,
-      );
-      return c.json({ entry: { ...view, offer: view.offer }, intake });
-    })
     .route("/appointments", appointmentsRoutes(deps))
     .route("/staff", staffAdminRoutes(deps))
     .route("/services", serviceAdminRoutes(deps))
@@ -187,19 +171,6 @@ const giftCard = C.giftCardSchema.omit({ codeRevision: true });
 const commissionPayout = C.commissionPayoutSchema.omit({ reference: true });
 const page = z.number().int().min(1).max(100000).default(1);
 const waitlistEntry = C.waitlistEntrySchema.omit({ offer: true });
-const waitlistOfferReview = z.object({
-  entry: waitlistEntry.extend({ offer: C.waitlistOfferSchema }),
-  intake: C.intakeRequirementsSchema.extend({
-    forms: z.array(
-      C.intakeRequirementsSchema.shape.forms.element.pick({ id: true }).extend({
-        definition: z.object({
-          title: z.string(),
-          requiredAtBooking: z.boolean(),
-        }),
-      }),
-    ),
-  }),
-});
 const waitlistOfferAcceptance = C.waitlistAcceptSchema.omit({
   intakeResponses: true,
   protectionWaiverReason: true,
@@ -224,7 +195,6 @@ const campaigns = C.campaignListSchema.extend({
     }),
   ),
 });
-const appointmentWrite = C.updateAppointmentRequestSchema;
 const promotionWrite = C.promotionInputSchema.safeExtend({
   active: z.boolean(),
 });
@@ -290,18 +260,7 @@ export function registerManagementTools(
           for (const [key, value] of Object.entries(query ?? {})) {
             if (value !== undefined) url.searchParams.set(key, String(value));
           }
-          if (!readOnly) {
-            await recordAudit(ctx.db, {
-              actorUserId: ctx.principal.userId,
-              action: "mcp.write_requested",
-              entity: "mcp_tool",
-              metadata: {
-                tool: name,
-                oauthClientId: ctx.via.clientId,
-                scope: gate.scope,
-              },
-            });
-          }
+          if (!readOnly) await recordMcpWriteRequested(ctx, name, gate.scope);
           const response = await router.request(
             url,
             {
@@ -313,7 +272,7 @@ export function registerManagementTools(
                   }
                 : {}),
             },
-            { principal: ctx.principal },
+            { principal: ctx.principal, mcpAuditSource: ctx.via },
           );
           const payload: unknown = await response.json();
           if (!response.ok) {
@@ -382,20 +341,11 @@ export function registerManagementTools(
     "Find available start times for an existing booking on one local date. Pass its original service IDs in the same order. Review the new time and professional before moving the booking.",
     read("editCalendar"),
     "GET",
-    id.extend({
-      serviceIds: z.array(C.idSchema).min(1).max(24),
-      staffId: C.idSchema.optional(),
-      date: C.localDateSchema,
-    }),
+    id.extend(C.availabilityInputSchema.shape),
     C.availabilityResponseSchema,
     ({ id, serviceIds, staffId, date }) => ({
       path: `/appointments/${id}/availability`,
-      query: {
-        date,
-        serviceIds: serviceIds.join(","),
-        staffId:
-          staffId ?? (permissions.allCalendars ? undefined : (ctx.principal.staffId ?? undefined)),
-      },
+      query: { date, serviceIds: serviceIds.join(","), staffId },
     }),
   );
   add(
@@ -407,7 +357,7 @@ export function registerManagementTools(
       external: true,
     },
     "PATCH",
-    withBody(appointmentWrite),
+    withBody(C.mcpUpdateAppointmentInput),
     appointment,
     ({ id, body }) => ({ path: `/appointments/${id}`, body }),
   );
@@ -452,14 +402,10 @@ export function registerManagementTools(
   );
   add(
     "replace_working_hours",
-    "Replace the complete weekly schedule for a professional. Review the current hours first. Existing appointments are reported as conflicts.",
-    {
-      ...schedule,
-      owner: true,
-      destructive: true,
-    },
+    "Replace the complete weekly schedule for a professional using the revision returned by get_working_hours. Existing appointments are reported as conflicts.",
+    { scope: "schedule:write", permission: "editSchedules", destructive: true },
     "PUT",
-    withBody(C.setWorkingHoursRequestSchema),
+    withBody(C.mcpReplaceWorkingHoursInput),
     C.workingHoursResponseSchema,
     ({ id, body }) => ({ path: `/staff/${id}/working-hours`, body }),
   );
@@ -566,8 +512,8 @@ export function registerManagementTools(
     read("editCalendar"),
     "GET",
     id,
-    waitlistOfferReview,
-    ({ id }) => ({ path: `/waitlist-offer-review/${id}` }),
+    C.waitlistOfferReviewSchema,
+    ({ id }) => ({ path: `/waitlist/${id}/offer-review` }),
   );
   add(
     "accept_waitlist_offer",
@@ -956,7 +902,7 @@ export function registerManagementTools(
     "Close the cash session with the physical count. Confirm the session and amount, and pass its reviewed expected balance to detect intervening movements.",
     cashWrite,
     "POST",
-    withBody(C.cashCloseSchema),
+    withBody(C.mcpCloseCashSessionInput),
     cash,
     ({ id, body }) => ({ path: `/commerce/cash-sessions/${id}/close`, body }),
   );
@@ -1280,21 +1226,21 @@ export function registerManagementTools(
   );
   add(
     "get_centre_settings",
-    "Read owner-only calendar and reminder settings.",
+    "Read owner-only calendar and reminder settings and the revision needed to edit them.",
     { scope: "operations:read", owner: true },
     "GET",
     empty,
-    C.ownerSalonSettingsSchema,
-    () => ({ path: "/settings" }),
+    C.mcpCentreSettingsOutput,
+    () => ({ path: "/settings/desktop" }),
   );
   add(
     "update_centre_settings",
-    "Update booking limits, timezone or reminder timing. Confirm changes that affect future appointments.",
+    "Update booking limits, timezone or reminder timing using the revision from get_centre_settings. Confirm changes that affect future appointments.",
     { ...settings, destructive: true },
-    "PATCH",
-    z.strictObject({ body: C.updateSalonSettingsRequestSchema }),
-    C.ownerSalonSettingsSchema,
-    ({ body }) => ({ path: "/settings", body }),
+    "PUT",
+    z.strictObject({ body: C.mcpUpdateCentreSettingsInput }),
+    C.mcpCentreSettingsOutput,
+    ({ body }) => ({ path: "/settings/desktop", body }),
   );
   add(
     "list_calendar_notices",

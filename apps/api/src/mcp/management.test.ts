@@ -10,7 +10,7 @@ import {
   staffProfile,
   timeOff,
 } from "@sob/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import {
   actor,
   json,
@@ -20,7 +20,16 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../test/helpers";
-import { callTool, listTools, rpc, tokenFor, tokenRequest } from "../../test/oauth";
+import {
+  authorizeFlow,
+  callTool,
+  listTools,
+  obtainTokens,
+  registerClient,
+  rpc,
+  tokenFor,
+  tokenRequest,
+} from "../../test/oauth";
 import { createApp } from "../app";
 import { runWaitlist } from "../modules/waitlist/matching";
 
@@ -48,7 +57,8 @@ const block = {
 test("the personal booking grant cannot create or cancel centre appointments", async () => {
   const owner = await actor(t, "owner", "owner@example.com");
   const personal = (await tokenFor(t, owner, "mcp:read mcp:book")).tokens.access_token;
-  const manager = (await tokenFor(t, owner, "operations:read schedule:write")).tokens.access_token;
+  const { clientId, tokens } = await tokenFor(t, owner, "operations:read schedule:write");
+  const manager = tokens.access_token;
   const input = {
     clientId: f.clientId,
     serviceIds: [f.haircutId],
@@ -90,6 +100,25 @@ test("the personal booking grant cannot create or cancel centre appointments", a
     version,
   });
   expect(cancelled.data?.appointment?.status).toBe("cancelled");
+
+  const attempts = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "mcp.write_requested"));
+  expect(attempts.map(({ metadata }) => metadata.tool).sort()).toEqual([
+    "cancel_appointment",
+    "cancel_appointment",
+    "cancel_appointment",
+    "create_appointment",
+  ]);
+  for (const attempt of attempts) {
+    expect(attempt.actorUserId).toBe(owner.userId);
+    expect(attempt.metadata).toEqual({
+      tool: expect.any(String),
+      oauthClientId: clientId,
+      scope: "schedule:write",
+    });
+  }
 });
 
 test("the Booksy consultation copy refuses MCP mutations even with a valid management token", async () => {
@@ -198,6 +227,63 @@ test("owner read tools expose bounded summaries, and a read-only grant cannot wr
   }
 });
 
+test("a manager can replace reviewed weekly hours but cannot overwrite a newer schedule", async () => {
+  const manager = await actor(t, "staff", "hours-manager@example.com", { staffProfileId: f.anaId });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, f.anaId));
+  const { tokens } = await tokenFor(t, manager, "operations:read schedule:write");
+  const token = tokens.access_token;
+  expect(await listTools(t.app, token)).toContain("replace_working_hours");
+  const id = f.beaId;
+  const reviewed = await callTool(t.app, token, "get_working_hours", { id });
+  const revision = reviewed.data?.data?.revision;
+  expect(revision).toBeString();
+  const hours = [{ weekday: 1, startTime: "10:00", endTime: "17:00" }];
+  const missing = await callTool(t.app, token, "replace_working_hours", { id, body: { hours } });
+  expect(missing.isError || missing.rpcError !== null).toBe(true);
+  const saved = await callTool(t.app, token, "replace_working_hours", {
+    id,
+    body: { hours, expectedRevision: revision },
+  });
+  expect(saved.isError, saved.text).toBe(false);
+  expect(saved.data?.data?.hours).toEqual(hours);
+  const stale = await callTool(t.app, token, "replace_working_hours", {
+    id,
+    body: { hours: [], expectedRevision: revision },
+  });
+  expect(stale.data?.error?.code).toBe("version_conflict");
+  const current = await callTool(t.app, token, "get_working_hours", { id });
+  expect(current.data?.data?.hours).toEqual(hours);
+});
+
+test("centre settings require a current reviewed revision", async () => {
+  const owner = await actor(t, "owner", "settings-owner@example.com");
+  const { tokens } = await tokenFor(t, owner, "operations:read settings:write");
+  const token = tokens.access_token;
+  expect(await listTools(t.app, token)).toContain("update_centre_settings");
+  const reviewed = await callTool(t.app, token, "get_centre_settings", {});
+  const revision = reviewed.data?.data?.revision;
+  expect(revision).toBeString();
+  const missing = await callTool(t.app, token, "update_centre_settings", {
+    body: { maxDaysAhead: 21 },
+  });
+  expect(missing.isError || missing.rpcError !== null).toBe(true);
+  const saved = await callTool(t.app, token, "update_centre_settings", {
+    body: { expectedRevision: revision, changes: { maxDaysAhead: 21 } },
+  });
+  expect(saved.isError, saved.text).toBe(false);
+  expect(saved.data?.data?.maxDaysAhead).toBe(21);
+  expect(saved.data?.data?.revision).not.toBe(revision);
+  const stale = await callTool(t.app, token, "update_centre_settings", {
+    body: { expectedRevision: revision, changes: { maxDaysAhead: 22 } },
+  });
+  expect(stale.data?.error?.code).toBe("version_conflict");
+  const current = await callTool(t.app, token, "get_centre_settings", {});
+  expect(current.data?.data?.maxDaysAhead).toBe(21);
+});
+
 test("the daily staff work tool shares the REST report and enforces the current calendar access", async () => {
   const tool = "get_staff_work_report";
   const owner = await actor(t, "owner", "report-owner@example.com");
@@ -270,8 +356,12 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
     staffProfileId: f.beaId,
   });
   const other = await actor(t, "client", "offer-client@example.com");
-  const ownerToken = (await tokenFor(t, owner, "operations:read schedule:write settings:write"))
-    .tokens.access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(
+    t,
+    owner,
+    "operations:read schedule:write settings:write",
+  );
+  const ownerToken = tokens.access_token;
   const staffToken = (await tokenFor(t, bea, "operations:read schedule:write")).tokens.access_token;
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
   expect(
@@ -323,6 +413,27 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
     staffId: f.anaId,
   });
   expect(intake).toMatchObject({ forms: [], readyResponses: [] });
+  const deskReview = "/admin/waitlist/" + first + "/offer-review";
+  const desk = await json(t.app, deskReview, "GET", undefined, owner.cookie);
+  expect(desk.status).toBe(200);
+  expect(desk.headers.get("cache-control")).toBe("private, no-store");
+  expect(await desk.json()).toEqual(result);
+  const hidden = await json(t.app, deskReview, "GET", undefined, bea.cookie);
+  expect(hidden.status).toBe(403);
+  const atExpiry = createApp({
+    db: t.db,
+    config: t.config,
+    valkey: t.valkey.client,
+    now: () => new Date(entry.offer.expiresAt),
+  });
+  try {
+    const expiredDesk = await json(atExpiry, deskReview, "GET", undefined, owner.cookie);
+    const expiredMcp = await callTool(atExpiry, readToken, "review_waitlist_offer", { id: first });
+    expect(expiredDesk.status).toBe(409);
+    expect(expiredMcp.data?.error?.code).toBe("invalid_state");
+  } finally {
+    await atExpiry.shutdown();
+  }
   const body = {
     version: entry.version,
     offerId: entry.offer.id,
@@ -349,6 +460,20 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
   expect(booked.data?.data.appointment).not.toHaveProperty("notes");
   expect((await accept(body)).data?.data.appointment.id).toBe(booked.data?.data.appointment.id);
   expect(await t.db.select().from(appointment)).toHaveLength(1);
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(inArray(auditLog.action, ["appointment.create", "waitlist.offer_accepted"]));
+  expect(events.map(({ action }) => action).sort()).toEqual([
+    "appointment.create",
+    "waitlist.offer_accepted",
+  ]);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      actorUserId: owner.userId,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    });
+  }
   const pending = (await callTool(t.app, readToken, "review_waitlist_offer", { id: second })).data
     ?.data.entry;
   const requeued = await callTool(t.app, ownerToken, "requeue_waitlist_offer", {
@@ -361,7 +486,8 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
 test("recurring appointments use a reviewed schedule and create each occurrence once", async () => {
   const owner = await actor(t, "owner", "series-owner@example.com");
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
-  const writeToken = (await tokenFor(t, owner, "schedule:write")).tokens.access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(t, owner, "schedule:write");
+  const writeToken = tokens.access_token;
   expect(await listTools(t.app, readToken)).not.toContain("create_appointment_series");
   const input = {
     staffId: f.anaId,
@@ -397,6 +523,21 @@ test("recurring appointments use a reviewed schedule and create each occurrence 
   expect(series.data?.data.appointments).toHaveLength(2);
   expect(series.data?.data.appointments[0]).not.toHaveProperty("notes");
   expect(await t.db.select().from(appointment)).toHaveLength(2);
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(inArray(auditLog.action, ["appointment.create", "appointment.series_created"]));
+  expect(events.map(({ action }) => action).sort()).toEqual([
+    "appointment.create",
+    "appointment.create",
+    "appointment.series_created",
+  ]);
+  for (const event of events) {
+    expect(event).toMatchObject({
+      actorUserId: owner.userId,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    });
+  }
 });
 
 test("rescheduling uses the appointment's saved services and calendar permissions", async () => {
@@ -407,8 +548,12 @@ test("rescheduling uses the appointment's saved services and calendar permission
   const assigned = await actor(t, "staff", "reschedule-assigned@example.com", {
     staffProfileId: f.anaId,
   });
-  const ownerToken = (await tokenFor(t, owner, "mcp:book operations:read schedule:write")).tokens
-    .access_token;
+  const { clientId: oauthClientId, tokens } = await tokenFor(
+    t,
+    owner,
+    "mcp:book operations:read schedule:write",
+  );
+  const ownerToken = tokens.access_token;
   const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
   const assignedToken = (await tokenFor(t, assigned, "operations:read")).tokens.access_token;
   const booked = await callTool(t.app, ownerToken, "create_appointment", {
@@ -438,6 +583,16 @@ test("rescheduling uses the appointment's saved services and calendar permission
   expect(new Set(own.data?.data.slots.map((slot: { staffId: string }) => slot.staffId))).toEqual(
     new Set([f.anaId]),
   );
+  const withoutStaff = new URLSearchParams({ serviceIds: f.haircutId, date: MONDAY });
+  const rest = await json(
+    t.app,
+    `/appointments/${original.id}/availability?${withoutStaff}`,
+    "GET",
+    undefined,
+    assigned.cookie,
+  );
+  expect(rest.status).toBe(200);
+  expect(await rest.json()).toEqual(own.data?.data);
   const differentServices = await callTool(t.app, ownerToken, "find_reschedule_availability", {
     ...input,
     serviceIds: [f.colorId],
@@ -448,12 +603,43 @@ test("rescheduling uses the appointment's saved services and calendar permission
   expect(slots.data?.data.slots).toContainEqual(
     expect.objectContaining({ startsAt: MONDAY_0900, staffId: f.anaId }),
   );
+  const nearStart = createApp({
+    db: t.db,
+    valkey: t.valkey.client,
+    config: t.config,
+    now: () => new Date("2026-03-09T12:50:00.000Z"),
+  });
+  try {
+    const unreviewedMove = await callTool(nearStart, ownerToken, "update_appointment", {
+      id: original.id,
+      body: { startsAt: "2026-03-09T13:00:00.000Z", version: original.version, override: true },
+    });
+    expect(unreviewedMove.data?.error?.code).toBe("slot_unavailable");
+    const [unchanged] = await t.db
+      .select()
+      .from(appointment)
+      .where(eq(appointment.id, original.id));
+    expect(unchanged?.version).toBe(original.version);
+  } finally {
+    await nearStart.shutdown();
+  }
   const moved = await callTool(t.app, ownerToken, "update_appointment", {
     id: original.id,
     body: { startsAt: "2026-03-09T13:00:00.000Z", version: original.version },
   });
   expect(moved.isError, moved.text).toBe(false);
   expect(moved.data?.data).toMatchObject({ startsAt: "2026-03-09T13:00:00.000Z" });
+  const events = await t.db
+    .select()
+    .from(auditLog)
+    .where(eq(auditLog.action, "appointment.reschedule"));
+  expect(events).toMatchObject([
+    {
+      actorUserId: owner.userId,
+      entityId: original.id,
+      metadata: { via: { channel: "mcp", clientId: oauthClientId } },
+    },
+  ]);
 });
 
 test("imported price review requires the owner and explicit write consent", async () => {
@@ -465,8 +651,7 @@ test("imported price review requires the owner and explicit write consent", asyn
     .tokens.access_token;
   const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
   const salesToken = (await tokenFor(t, owner, "sales:write")).tokens.access_token;
-  const staffToken = (await tokenFor(t, staff, "operations:read billing:write")).tokens
-    .access_token;
+  const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
   const booked = await callTool(t.app, ownerToken, "create_appointment", {
     clientId: f.clientId,
     serviceIds: [f.haircutId],
@@ -530,8 +715,7 @@ test.each([
       await tokenFor(t, owner, "schedule:write operations:read billing:write sales:write")
     ).tokens.access_token;
     const readToken = (await tokenFor(t, owner, "operations:read")).tokens.access_token;
-    const staffToken = (await tokenFor(t, staff, "operations:read billing:write")).tokens
-      .access_token;
+    const staffToken = (await tokenFor(t, staff, "operations:read")).tokens.access_token;
     const booked = await callTool(t.app, writeToken, "create_appointment", {
       clientId: f.clientId,
       serviceIds: [f.haircutId],
@@ -792,8 +976,18 @@ test("staff capacity uses current versions and unpaid lookup accepts staff filte
 
 test("clients cannot elevate by requesting management scopes and reduced consent takes effect on the same token", async () => {
   const client = await actor(t, "client", "client@example.com");
-  const clientGrant = await tokenFor(t, client, "mcp:read operations:read schedule:write");
-  expect(await listTools(t.app, clientGrant.tokens.access_token)).not.toContain("list_clients");
+  const scope = "mcp:read schedule:read operations:read schedule:write";
+  const registration = await registerClient(t.app, { scope });
+  const clientId = registration.client.client_id;
+  const requested = { clientId, cookie: client.cookie, scope };
+  const refused = await authorizeFlow(t.app, requested);
+  expect(refused.code).toBeNull();
+  expect(await t.db.select().from(oauthConsent).where(eq(oauthConsent.clientId, clientId))).toEqual(
+    [],
+  );
+  const { tokens } = await obtainTokens(t.app, { ...requested, acceptedScope: "mcp:read" });
+  expect(tokens.scope).toBe("mcp:read");
+  expect(await listTools(t.app, tokens.access_token)).not.toContain("list_clients");
   const owner = await actor(t, "owner", "owner@example.com");
   const grant = await tokenFor(t, owner, "mcp:read operations:read schedule:write");
   expect(await listTools(t.app, grant.tokens.access_token)).toContain("create_time_off");
@@ -905,6 +1099,11 @@ test("cash and stock mutations keep the web rules and replay keys", async () => 
   expect(replay.data?.data?.payment?.id).toBe(paid.data?.data?.payment?.id);
   const paidVoid = await callTool(t.app, token, "void_checkout_draft", { id });
   expect(paidVoid.data?.error?.code).toBe("invalid_state");
+  const unreviewedCash = await callTool(t.app, token, "close_cash_session", {
+    id: sessionId,
+    body: { countedCents: 1700 },
+  });
+  expect(unreviewedCash.isError || unreviewedCash.rpcError !== null).toBe(true);
   const staleCash = await callTool(t.app, token, "close_cash_session", {
     id: sessionId,
     body: { countedCents: 1700, reviewedExpectedCents: 1500 },

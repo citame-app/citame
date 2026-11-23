@@ -32,10 +32,10 @@ import type { AppEnv } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
-import { findAvailability } from "../availability/service";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { listServices } from "../services/service";
+import { getRescheduleAvailability } from "./availability";
 import { getCalendar, getCalendarWithResourceOccupancy } from "./calendar";
 import {
   getAppointmentContext,
@@ -49,7 +49,6 @@ import {
   createAppointment,
   getAppointmentOwnership,
   listAppointments,
-  loadSnapshots,
   updateAppointment,
 } from "./service";
 import { createVisit, getVisit, previewDesktopVisit } from "./visits";
@@ -122,7 +121,7 @@ export function appointmentsRoutes({
           { ...input, ...scoped, client: scoped.client, clientId: scoped.clientId },
           principal,
           now(),
-          { appointmentIds },
+          { appointmentIds, via: c.get("mcpAuditSource") },
         ),
         201,
       );
@@ -321,42 +320,7 @@ export function appointmentsRoutes({
       .get("/:id/availability", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));
         const query = parseOrThrow(availabilityQuerySchema, c.req.query());
-        const ownership = await getAppointmentOwnership(db, id);
-        authorizeAppointmentChange(
-          c.get("principal"),
-          ownership,
-          {
-            version: 1,
-            staffId: query.staffId,
-          },
-          now(),
-        );
-        const snapshots = (await loadSnapshots(db, [id])).get(id) ?? [];
-        snapshots.sort((a, b) => a.position - b.position);
-        if (
-          !snapshots.length ||
-          snapshots.length !== query.serviceIds.length ||
-          snapshots.some((s, i) => !s.serviceId || s.serviceId !== query.serviceIds[i])
-        )
-          throw new DomainError("validation_error", "Rescheduling must retain the booked services");
-        return c.json(
-          await findAvailability(db, query, now(), {
-            excludeAppointmentId: id,
-            services: snapshots.map((s) => ({
-              id: s.serviceId ?? s.id,
-              durationMinutes: s.durationMinutes,
-              bufferMinutes: s.bufferMinutes,
-              ...(s.processingStartMinutes !== null && s.processingMinutes !== null
-                ? {
-                    processing: {
-                      startsAfterMinutes: s.processingStartMinutes,
-                      minutes: s.processingMinutes,
-                    },
-                  }
-                : {}),
-            })),
-          }),
-        );
+        return c.json(await getRescheduleAvailability(db, id, query, c.get("principal"), now()));
       })
       .patch("/:id", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));
@@ -368,7 +332,7 @@ export function appointmentsRoutes({
             db,
             id,
             body,
-            { userId: principal.userId, role: principal.role },
+            { userId: principal.userId, role: principal.role, via: c.get("mcpAuditSource") },
             { now: now() },
           ),
         );

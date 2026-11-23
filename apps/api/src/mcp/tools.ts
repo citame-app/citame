@@ -27,6 +27,7 @@ import {
 } from "@sob/contracts";
 import type { Database } from "@sob/db";
 import type { z } from "zod";
+import type { McpAuditSource } from "../audit";
 import {
   authorizeAppointmentChange,
   authorizeAppointmentCreate,
@@ -52,6 +53,7 @@ import { previewPeakSlot } from "../modules/peak-prices/service";
 import { listServices } from "../modules/services/service";
 import { listStaff } from "../modules/staff/service";
 import { bookingOutcome } from "../observability/booking";
+import { recordMcpWriteRequested } from "./audit";
 import { errorResult, toolFailure } from "./errors";
 
 export interface ToolContext {
@@ -62,7 +64,7 @@ export interface ToolContext {
   /** Optional booking-outcome counter (`sob_booking_total`). */
   onBooking?: (outcome: string) => void;
   /** Recorded in the audit log of every write, so a booking made by an agent says so. */
-  via: { channel: "mcp"; clientId: string };
+  via: McpAuditSource;
 }
 
 const DAY_MS = 86_400_000;
@@ -106,6 +108,7 @@ function guarded<Args, Out extends Record<string, unknown>>(
       });
     }
     try {
+      if (required === "schedule:write") await recordMcpWriteRequested(ctx, tool, required);
       return ok(await body(args));
     } catch (error) {
       return errorResult(toolFailure(error));

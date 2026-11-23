@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { auditLog, oauthRefreshToken } from "@sob/db";
 import { eq } from "drizzle-orm";
-import { type ApiTest, actor, setupApiTest } from "../../test/helpers";
+import { type ApiTest, actor, json, setupApiTest } from "../../test/helpers";
 import {
   authorizeFlow,
   MCP_URL,
@@ -156,6 +156,34 @@ describe("authorization code + PKCE (S256 only)", () => {
     expect(flow.code).toBeNull();
     const location = flow.authorize.headers.get("location") ?? "";
     expect(location).not.toContain("127.0.0.1:8976/other?code");
+  });
+
+  test("disconnecting invalidates a pending authorization code after reconnecting", async () => {
+    const { user, clientId, scope } = await setup();
+    const options = { clientId, cookie: user.cookie, scope };
+    const pending = await authorizeFlow(t.app, options);
+    if (!pending.code) throw new Error("Expected an authorized code");
+    const revoked = await json(
+      t.app,
+      `/me/connections/${clientId}`,
+      "DELETE",
+      undefined,
+      user.cookie,
+    );
+    expect(revoked.status).toBe(204);
+    const fresh = await obtainTokens(t.app, options);
+    expect(fresh.tokens.access_token).toBeString();
+    const stale = await tokenRequest(t.app, {
+      grant_type: "authorization_code",
+      code: pending.code,
+      code_verifier: pending.verifier,
+      client_id: clientId,
+      redirect_uri: REDIRECT_URI,
+      resource: MCP_URL,
+    });
+    expect(stale.res.status).toBe(400);
+    expect(stale.body.error).toBe("invalid_grant");
+    expect(stale.body.access_token).toBeUndefined();
   });
 
   test("a loopback redirect may use any port (RFC 8252)", async () => {

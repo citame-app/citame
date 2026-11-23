@@ -9,7 +9,12 @@ import {
   pageSchema,
   pageSizeSchema,
 } from "./common";
-import { intakeBookingShape } from "./intake";
+import {
+  intakeBookingShape,
+  intakeDefinitionSchema,
+  intakeRequirementsSchema,
+  intakeRevisionSchema,
+} from "./intake";
 import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema } from "./staff-capacity";
 
@@ -116,6 +121,21 @@ export const waitlistEntrySchema = z.object({
   canManage: z.boolean().default(false),
 });
 export type WaitlistEntry = z.infer<typeof waitlistEntrySchema>;
+
+export const waitlistOfferReviewSchema = z.object({
+  entry: waitlistEntrySchema.extend({ offer: waitlistOfferSchema }),
+  // Review identifies the forms and usable saved responses without returning prompts or answers.
+  intake: intakeRequirementsSchema.extend({
+    forms: z.array(
+      intakeRevisionSchema.pick({ id: true }).extend({
+        definition: z.object({
+          title: intakeDefinitionSchema.shape.title,
+          requiredAtBooking: intakeDefinitionSchema.shape.requiredAtBooking,
+        }),
+      }),
+    ),
+  }),
+});
 export const waitlistListSchema = pageInfoSchema.extend({
   entries: z.array(waitlistEntrySchema),
   policy: waitlistPolicySchema,
