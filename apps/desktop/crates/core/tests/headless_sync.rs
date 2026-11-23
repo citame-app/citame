@@ -1344,11 +1344,12 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
     legacy.execute("UPDATE appointment SET json = json_remove(json, '$.combinationId', '$.combinationStaffIds') WHERE id = ?1", [&id]).unwrap();
     legacy
         .execute(
-            "DELETE FROM meta WHERE key = 'booking_combination_catalogue'",
+            "DELETE FROM meta WHERE key = 'booked_combination_terms_generation'",
             [],
         )
         .unwrap();
     drop(legacy);
+    assert!(store.booking_combinations().unwrap().is_some());
     assert!(
         store
             .appointment(&id)

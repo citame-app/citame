@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 
 const LEGACY_CACHE: &str = "service_combinations";
 const BOOKING_CACHE: &str = "booking_combination_catalogue";
+const BOOKED_TERMS_GENERATION: &str = "booked_combination_terms_generation";
 
 impl Store {
     pub(crate) fn reserve_combination_payloads(
@@ -117,11 +118,16 @@ impl Store {
     }
 
     pub(crate) fn needs_booking_combination_snapshot(&self) -> Result<bool> {
-        Ok(self.get_meta(BOOKING_CACHE)?.is_none())
+        Ok(self.get_meta(BOOKING_CACHE)?.is_none()
+            || self.get_meta(BOOKED_TERMS_GENERATION)?.as_deref()
+                != Some(self.verified_reviewed_generation()?.as_str()))
     }
 
     pub(super) fn forget_booking_combinations_at(conn: &Connection) -> Result<()> {
-        conn.execute("DELETE FROM meta WHERE key = ?1", [BOOKING_CACHE])?;
+        conn.execute(
+            "DELETE FROM meta WHERE key IN (?1, ?2)",
+            [BOOKING_CACHE, BOOKED_TERMS_GENERATION],
+        )?;
         Ok(())
     }
 
@@ -160,7 +166,7 @@ impl Store {
                 serde_json::to_string(&row.staff_ids)?
             ])?;
         }
-        Ok(())
+        Self::set_meta_at(conn, BOOKED_TERMS_GENERATION, &Self::generation_at(conn)?)
     }
 
     fn combination_view(&self, key: &str) -> Result<Option<CombinationCatalogue>> {
