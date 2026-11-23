@@ -21,6 +21,7 @@ export BETTER_AUTH_SECRET="$(openssl rand -base64 32)"
 export PUBLIC_URL="http://localhost:8088"
 export SOB_DATABASE_NAME=sob VALKEY_KEY_PREFIX=sob:
 export SYNC_REPLICA_GENERATION=initial
+unset SYNC_PULL_RATE_LIMIT_NETWORK_MAX SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS
 export SITE_ADDRESS=":80" CADDY_HTTP_PORT=127.0.0.1:8088 CADDY_HTTPS_PORT=127.0.0.1:8443
 export WEB_PUBLISH="127.0.0.1:0"
 # Caddy (profile tls) is the trusted edge in front of web.
@@ -65,6 +66,8 @@ services:
   api:
     environment:
       RATE_LIMIT_GLOBAL_MAX: "5000"
+      SYNC_PULL_RATE_LIMIT_NETWORK_MAX: "5000"
+      SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX: "5000"
       RATE_LIMIT_AUTH_MAX: "90"
       RATE_LIMIT_OAUTH_MAX: "360"
       # This fixture signs hosted forms locally and never submits them to the bank.

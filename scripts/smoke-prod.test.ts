@@ -21,6 +21,12 @@ printf 'meta=%s mcp=%s\\n' "$META_WHATSAPP_APP_ID" "$MCP_RESOURCE_URL" >> "$SMOK
 printf 'caddy=%s %s\\n' "$CADDY_HTTP_PORT" "$CADDY_HTTPS_PORT" >> "$SMOKE_COMMAND_LOG"
 printf 'recovery=%s %s %s\\n' "$SOB_DATABASE_NAME" "$VALKEY_KEY_PREFIX" "$SYNC_REPLICA_GENERATION" >> "$SMOKE_COMMAND_LOG"
 printf 'compose-images=%s %s\\n' "$SOB_API_IMAGE" "$SOB_WEB_IMAGE" >> "$SMOKE_COMMAND_LOG"
+printf 'pull-env=[%s][%s][%s]\n' "$SYNC_PULL_RATE_LIMIT_NETWORK_MAX" "$SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX" "$SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS" >> "$SMOKE_COMMAND_LOG"
+for overlay in "$@"; do
+  case "$overlay" in
+    */desktop-limits.yaml) grep '^      SYNC_PULL_RATE_LIMIT_' "$overlay" >> "$SMOKE_COMMAND_LOG" ;;
+  esac
+done
 exit 23
 `,
   );
@@ -50,6 +56,9 @@ exit 23
         SOB_DATABASE_NAME: "live_recovered",
         VALKEY_KEY_PREFIX: "live:recovered:",
         SYNC_REPLICA_GENERATION: "live-recovered",
+        SYNC_PULL_RATE_LIMIT_NETWORK_MAX: "11111",
+        SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX: "22222",
+        SYNC_PULL_RATE_LIMIT_WINDOW_SECONDS: "90",
       },
       stdout: "pipe",
       stderr: "pipe",
@@ -212,10 +221,20 @@ test("the disposable stack starts with its own database, cache and sync history"
 });
 
 test("desktop burst limits are applied only to the disposable desktop run", async () => {
-  const normal = (await failedValidation()).filter((line) => line.startsWith("compose "));
-  expect(normal.every((line) => !line.includes("/desktop-limits.yaml"))).toBe(true);
-  const desktop = (await failedValidation(false, true)).filter((line) =>
-    line.startsWith("compose "),
+  const normal = await failedValidation();
+  expect(normal.some((line) => line.includes("/desktop-limits.yaml"))).toBe(false);
+  expect(normal.some((line) => line.includes("SYNC_PULL_RATE_LIMIT_"))).toBe(false);
+  expect(normal.filter((line) => line.startsWith("pull-env="))).toEqual(
+    Array(3).fill("pull-env=[][][]"),
   );
-  expect(desktop.every((line) => line.includes("/desktop-limits.yaml"))).toBe(true);
+
+  const desktop = await failedValidation(false, true);
+  const composeCalls = desktop.filter((line) => line.startsWith("compose "));
+  expect(composeCalls.length).toBeGreaterThan(0);
+  expect(composeCalls.every((line) => line.includes("/desktop-limits.yaml"))).toBe(true);
+  const pullLimits = [...new Set(desktop.filter((line) => line.includes("SYNC_PULL_RATE_LIMIT_")))];
+  expect(pullLimits).toEqual([
+    '      SYNC_PULL_RATE_LIMIT_NETWORK_MAX: "5000"',
+    '      SYNC_PULL_RATE_LIMIT_ACCOUNT_MAX: "5000"',
+  ]);
 });
