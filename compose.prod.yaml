@@ -55,7 +55,7 @@ services:
 
   valkey:
     <<: *hardened
-    image: valkey/valkey:9.1-alpine
+    image: valkey/valkey:9.2-alpine
     # The entrypoint starts as root to fix volume ownership, then drops to the valkey user.
     cap_add: [CHOWN, SETUID, SETGID]
     # AOF every second plus periodic snapshots: sessions and rate-limit counters survive a restart.
