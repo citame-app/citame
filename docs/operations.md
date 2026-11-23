@@ -52,7 +52,7 @@ The smoke also uploads a synthetic product photo and checks the owner's read, pr
 | `MAINTENANCE_*`, `*_RETENTION_DAYS` | no                             | Housekeeping schedule and windows (section 7).                                                                                                                                                                                              |
 | `DB_*`, `HTTP_*`                    | no                             | Pool size, statement/lock/idle-transaction timeouts (10 s / 5 s / 30 s) and HTTP limits; see [env-reference](env-reference.md). Backups use `pg_dump` and are unaffected; in-process maintenance lifts the statement timeout.               |
 | `SHUTDOWN_GRACE_MS`                 | no                             | Compose sets 5000.                                                                                                                                                                                                                          |
-| `*_FILE`                            | no                             | `DATABASE_URL`, `BETTER_AUTH_SECRET`, `SMTP_URL`, `TWILIO_AUTH_TOKEN`, `METRICS_TOKEN` can be read from a file (Docker/Kubernetes secrets), e.g. `BETTER_AUTH_SECRET_FILE=/run/secrets/auth`.                                               |
+| `*_FILE`                            | no                             | The API supports [file-backed secrets](env-reference.md), including an [API-only mount for the optional membership billing key](payments.md#automatic-membership-renewal). |
 
 ## 2. Health, logs and metrics
 

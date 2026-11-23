@@ -16,6 +16,7 @@ printf 'sms=%s tag=%s\\n' "$NOTIFY_SMS_PROVIDER" "$SOB_TAG" >> "$SMOKE_COMMAND_L
 printf 'email=%s url=%s file=%s\\n' "$NOTIFY_EMAIL_PROVIDER" "$SMTP_URL" "$SMTP_URL_FILE" >> "$SMOKE_COMMAND_LOG"
 printf 'payments=%s\\n' "$PAYMENT_PROVIDER" >> "$SMOKE_COMMAND_LOG"
 printf 'recurring=%s\\n' "$REDSYS_RECURRING_ENABLED" >> "$SMOKE_COMMAND_LOG"
+printf 'billing-key=%s file=%s\\n' "$PAYMENT_TOKEN_ENCRYPTION_KEY" "$PAYMENT_TOKEN_ENCRYPTION_KEY_FILE" >> "$SMOKE_COMMAND_LOG"
 printf 'meta=%s mcp=%s\\n' "$META_WHATSAPP_APP_ID" "$MCP_RESOURCE_URL" >> "$SMOKE_COMMAND_LOG"
 printf 'caddy=%s %s\\n' "$CADDY_HTTP_PORT" "$CADDY_HTTPS_PORT" >> "$SMOKE_COMMAND_LOG"
 printf 'recovery=%s %s %s\\n' "$SOB_DATABASE_NAME" "$VALKEY_KEY_PREFIX" "$SYNC_REPLICA_GENERATION" >> "$SMOKE_COMMAND_LOG"
@@ -39,6 +40,8 @@ exit 23
         SMOKE_DESKTOP: smokeDesktop ? "1" : "0",
         PAYMENT_PROVIDER: "redsys",
         REDSYS_RECURRING_ENABLED: "true",
+        PAYMENT_TOKEN_ENCRYPTION_KEY: "synthetic-deployment-token-key",
+        PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: "/private/deployment-token-key",
         META_WHATSAPP_APP_ID: "12345678",
         MCP_RESOURCE_URL: "https://live.example/mcp",
         SOB_TAG: "live",
@@ -123,7 +126,70 @@ test("production smoke disables inherited automatic bank billing", async () => {
   const settings = lines.filter((line) => line.startsWith("recurring="));
   expect(settings).toHaveLength(3);
   for (const line of settings) expect(line).toBe("recurring=false");
+  expect(lines.filter((line) => line.startsWith("billing-key="))).toEqual(
+    Array(3).fill("billing-key= file="),
+  );
 });
+
+test.each(["disabled", "plain", "file"] as const)(
+  "production Compose keeps recurring billing configuration in the API (%s)",
+  async (mode) => {
+    const optIn = mode !== "disabled";
+    const key = mode === "plain" ? "synthetic-test-token-key" : "";
+    const keyFile = mode === "file" ? "/run/secrets/test-token-key" : "";
+    const child = Bun.spawn(
+      [
+        "docker",
+        "compose",
+        "--env-file",
+        "/dev/null",
+        "-f",
+        "compose.prod.yaml",
+        "--profile",
+        "setup",
+        "config",
+        "--format",
+        "json",
+      ],
+      {
+        env: {
+          PATH: process.env.PATH,
+          POSTGRES_PASSWORD: "synthetic-test-password",
+          BETTER_AUTH_SECRET: "synthetic-test-auth-secret-for-compose",
+          PUBLIC_URL: "https://compose.example",
+          PAYMENT_PROVIDER: optIn ? "redsys" : "none",
+          REDSYS_SECRET_KEY: optIn ? "synthetic-test-redsys-key" : "",
+          REDSYS_RECURRING_ENABLED: optIn ? "true" : "",
+          PAYMENT_TOKEN_ENCRYPTION_KEY: key,
+          PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: keyFile,
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    );
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const { services } = JSON.parse(stdout);
+    expect(services.api.environment).toMatchObject({
+      REDSYS_RECURRING_ENABLED: String(optIn),
+      PAYMENT_TOKEN_ENCRYPTION_KEY: key,
+      PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: keyFile,
+    });
+    for (const name of ["worker", "bootstrap-owner"]) {
+      expect(services[name].environment).toMatchObject({
+        PAYMENT_PROVIDER: "none",
+        REDSYS_SECRET_KEY: "",
+        REDSYS_RECURRING_ENABLED: "false",
+        PAYMENT_TOKEN_ENCRYPTION_KEY: "",
+        PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: "",
+      });
+    }
+  },
+);
 
 test("production smoke clears inherited Meta and MCP endpoints", async () => {
   const lines = await failedValidation();
