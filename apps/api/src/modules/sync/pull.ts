@@ -400,7 +400,7 @@ export async function pullChanges(
   const combinations =
     permissions.editCatalog &&
     (query.combinations === "full" || (query.combinations === "delta" && combinationsChanged))
-      ? (await listCombinations(db, principal)).combinations
+      ? (await listCombinations(db, principal, query.fixedCombinationTerms === "1")).combinations
       : undefined;
   const peakPricesChanged = page.some(
     (row) =>

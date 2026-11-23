@@ -2499,7 +2499,7 @@ impl HttpTransport {
             .map(|snapshots| {
                 let mode = |full| if full { "full" } else { "delta" };
                 format!(
-                    "&resourcePools={}&combinations={}&peakPrices={}",
+                    "&resourcePools={}&combinations={}&peakPrices={}&fixedCombinationTerms=1",
                     mode(snapshots.full_resource_pools),
                     mode(snapshots.full_combinations),
                     mode(snapshots.full_peak_prices)

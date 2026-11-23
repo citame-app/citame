@@ -9,6 +9,16 @@ pub const UPDATE: &str = "combination.update";
 pub(crate) const CACHE: &str = "service_combinations";
 pub const LIMIT: usize = 100;
 pub const MAX_SERVICES: usize = 24;
+pub const MAX_FIXED_PRICE_CENTS: u32 = 999_999_999;
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixedCombinationTerms {
+    pub prices_cents: Vec<u32>,
+    pub staff_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub online_booking: Option<bool>,
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -17,6 +27,8 @@ pub struct CombinationDraft {
     pub description: Option<String>,
     pub service_ids: Vec<String>,
     pub active: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed_terms: Option<FixedCombinationTerms>,
 }
 
 impl CombinationDraft {
@@ -52,6 +64,26 @@ impl CombinationDraft {
         {
             return Err(CoreError::Invalid("Review the combination name, description and services".into()));
         }
+        if let Some(terms) = &self.fixed_terms
+            && (terms.prices_cents.len() != self.service_ids.len()
+                || terms
+                    .prices_cents
+                    .iter()
+                    .map(|cents| u64::from(*cents))
+                    .sum::<u64>()
+                    > u64::from(MAX_FIXED_PRICE_CENTS)
+                || !(1..=100).contains(&terms.staff_ids.len())
+                || terms
+                    .staff_ids
+                    .iter()
+                    .map(|id| uuid::Uuid::parse_str(id))
+                    .collect::<std::result::Result<BTreeSet<_>, _>>()
+                    .map_or(true, |ids| ids.len() != terms.staff_ids.len()))
+        {
+            return Err(CoreError::Invalid(
+                "Review the fixed prices, professionals and visibility".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -63,6 +95,12 @@ impl CombinationDraft {
                 current
             }
         }
+        let (service_ids, fixed_terms) = choose(
+            (&self.service_ids, &self.fixed_terms),
+            (&reviewed.service_ids, &reviewed.fixed_terms),
+            (&current.service_ids, &current.fixed_terms),
+            keep_overlaps,
+        );
         Self {
             name: choose(&self.name, &reviewed.name, &current.name, keep_overlaps).clone(),
             description: choose(
@@ -72,15 +110,41 @@ impl CombinationDraft {
                 keep_overlaps,
             )
             .clone(),
-            service_ids: choose(
-                &self.service_ids,
-                &reviewed.service_ids,
-                &current.service_ids,
-                keep_overlaps,
-            )
-            .clone(),
+            service_ids: service_ids.clone(),
+            fixed_terms: fixed_terms.clone(),
             active: choose(self.active, reviewed.active, current.active, keep_overlaps),
         }
+    }
+}
+
+pub(crate) fn validate_fixed_selection(
+    draft: &CombinationDraft,
+    terms: &FixedCombinationTerms,
+    catalogue: &[Service],
+    staff: &[Staff],
+) -> Result<()> {
+    crate::ops::validate_catalogue_selection(
+        catalogue,
+        draft.service_ids.iter().map(String::as_str),
+    )?;
+    let eligible_services = draft.service_ids.iter().all(|id| {
+        catalogue.iter().any(|item| {
+            item.id == *id
+                && item.currency == "EUR"
+                && item.active
+                && (!(draft.active && terms.online_booking == Some(true))
+                    || online_service(item, catalogue))
+        })
+    });
+    let eligible_staff = terms.staff_ids.iter().all(|id| {
+        staff
+            .iter()
+            .any(|person| person.active && person.id.eq_ignore_ascii_case(id))
+    });
+    if eligible_services && eligible_staff {
+        Ok(())
+    } else {
+        Err(CoreError::IncompatibleServices)
     }
 }
 
@@ -198,4 +262,64 @@ pub struct QueuedCombination {
     pub mutation_id: String,
     pub edit: PendingCombination,
     pub submitted: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixed_prices_and_service_order_rebase_as_a_group() {
+        let reviewed = CombinationDraft {
+            name: "Original".into(),
+            service_ids: vec!["first".into(), "second".into()],
+            fixed_terms: Some(FixedCombinationTerms {
+                prices_cents: vec![1800, 900],
+                staff_ids: vec!["staff".into()],
+                online_booking: Some(false),
+            }),
+            ..Default::default()
+        };
+        let mut local = reviewed.clone();
+        local.name = "Local".into();
+        local.fixed_terms.as_mut().unwrap().prices_cents[0] = 1700;
+        let mut cloud = reviewed.clone();
+        cloud.service_ids.reverse();
+        cloud.fixed_terms.as_mut().unwrap().prices_cents.reverse();
+        assert_eq!(local.rebase(&reviewed, &cloud, true), local);
+        assert_eq!(
+            local.rebase(&reviewed, &cloud, false),
+            CombinationDraft {
+                name: local.name,
+                ..cloud
+            }
+        );
+    }
+
+    #[test]
+    fn archiving_preserves_fixed_terms_and_only_explicit_removal_clears_them() {
+        let terms = serde_json::json!({"pricesCents": [1800, 900], "staffIds": ["staff"], "onlineBooking": false});
+        let mut entry = crate::model::OutboxEntry {
+            seq: 0,
+            mutation_id: String::new(),
+            created_at: String::new(),
+            kind: UPDATE.into(),
+            entity_id: String::new(),
+            attempts: 0,
+            last_error: None,
+            payload: serde_json::json!({
+                "active": false, "serviceIds": ["first", "second"], "fixedTerms": terms,
+                "_reviewed": {"serviceIds": ["first", "second"], "fixedTerms": terms}
+            }),
+        };
+        let wire = entry.to_wire();
+        assert!(wire.payload.get("fixedTerms").is_none());
+        assert!(wire.payload.get("_reviewed").is_none());
+
+        entry.payload["fixedTerms"] = serde_json::Value::Null;
+        assert_eq!(
+            entry.to_wire().payload.get("fixedTerms"),
+            Some(&serde_json::Value::Null)
+        );
+    }
 }

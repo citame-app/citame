@@ -1,7 +1,8 @@
 use super::*;
 use crate::combinations::{
     CACHE, CREATE, CombinationCatalogue, CombinationDraft, LIMIT, ManagedCombination,
-    PendingCombination, QueuedCombination, UPDATE, validate_online_selection,
+    PendingCombination, QueuedCombination, UPDATE, validate_fixed_selection,
+    validate_online_selection,
 };
 use std::collections::BTreeSet;
 
@@ -164,15 +165,44 @@ impl Store {
                         "The salon combination limit has been reached".into(),
                     ));
                 }
+                let previous_terms = current.and_then(|row| row.draft.fixed_terms.as_ref());
+                let selection_changed =
+                    current.is_none_or(|row| row.draft.service_ids != proposed.service_ids);
+                let terms_changed = previous_terms != proposed.fixed_terms.as_ref();
                 if proposed.active
-                    || current.is_none_or(|row| row.draft.service_ids != proposed.service_ids)
+                    && proposed
+                        .fixed_terms
+                        .as_ref()
+                        .is_some_and(|terms| terms.online_booking.is_none())
                 {
-                    validate_online_selection(
-                        &proposed.service_ids,
-                        &store.services()?,
-                        &store.staff()?,
-                        &store.service_staff()?,
-                    )?;
+                    return Err(CoreError::Invalid(
+                        "Choose the visibility before publishing the combination".into(),
+                    ));
+                }
+                if proposed.active
+                    && proposed.fixed_terms.is_none()
+                    && previous_terms.is_some_and(|terms| terms.online_booking == Some(false))
+                {
+                    return Err(CoreError::Invalid(
+                        "Archive the internal combination first".into(),
+                    ));
+                }
+                if proposed.active
+                    || selection_changed
+                    || (terms_changed && proposed.fixed_terms.is_some())
+                {
+                    let catalogue = store.services()?;
+                    let staff = store.staff()?;
+                    if let Some(terms) = &proposed.fixed_terms {
+                        validate_fixed_selection(&proposed, terms, &catalogue, &staff)?;
+                    } else {
+                        validate_online_selection(
+                            &proposed.service_ids,
+                            &catalogue,
+                            &staff,
+                            &store.service_staff()?,
+                        )?;
+                    }
                 }
                 let edit = PendingCombination {
                     id: id.into(),
@@ -180,7 +210,10 @@ impl Store {
                     proposed,
                     reviewed: current.map(|row| row.draft.clone()),
                 };
-                let payload = serde_json::to_value(edit)?;
+                let mut payload = serde_json::to_value(&edit)?;
+                if edit.proposed.fixed_terms.is_none() && terms_changed {
+                    payload["fixedTerms"] = serde_json::Value::Null;
+                }
                 if let Some(row) = pending_edit {
                     store.conn.execute(
                         "UPDATE outbox SET mutation_id = ?1, payload = ?2 WHERE mutation_id = ?3
@@ -225,6 +258,7 @@ mod tests {
             name: "Rehearsal combination".into(),
             description: None,
             active: true,
+            fixed_terms: None,
             service_ids: (0..2).map(|_| uuid::Uuid::now_v7().to_string()).collect(),
         };
         let entry = PendingCombination {

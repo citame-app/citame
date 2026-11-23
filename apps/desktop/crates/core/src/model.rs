@@ -599,7 +599,13 @@ impl OutboxEntry {
             crate::combinations::CREATE | crate::combinations::UPDATE
         ) && let Some(fields) = payload.as_object_mut()
         {
-            fields.remove("_reviewed");
+            if let Some(reviewed) = fields.remove("_reviewed")
+                && fields.get("active").and_then(Value::as_bool) == Some(false)
+                && fields.get("serviceIds") == reviewed.get("serviceIds")
+                && fields.get("fixedTerms") == reviewed.get("fixedTerms")
+            {
+                fields.remove("fixedTerms");
+            }
         } else if matches!(
             self.kind.as_str(),
             crate::product_editor::CREATE | crate::product_editor::UPDATE

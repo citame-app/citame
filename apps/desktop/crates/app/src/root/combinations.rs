@@ -2,8 +2,8 @@ mod view;
 
 use super::*;
 use sob_core::combinations::{
-    CREATE, CombinationCatalogue, CombinationDraft, MAX_SERVICES, ManagedCombination,
-    PendingCombination, QueuedCombination, UPDATE, online_service,
+    CREATE, CombinationCatalogue, CombinationDraft, FixedCombinationTerms, MAX_SERVICES,
+    ManagedCombination, PendingCombination, QueuedCombination, UPDATE, online_service,
 };
 
 pub(super) struct Desk {
@@ -27,7 +27,37 @@ struct Editor {
     search: Entity<TextField>,
     service_ids: Vec<String>,
     active: bool,
+    fixed: Option<FixedEditor>,
     conflict: Option<Recovery>,
+}
+
+struct FixedEditor {
+    prices: std::collections::BTreeMap<String, Entity<TextField>>,
+    staff_ids: Vec<String>,
+    online_booking: Option<bool>,
+}
+
+impl FixedEditor {
+    fn from_terms(ids: &[String], terms: FixedCombinationTerms, cx: &mut Context<Root>) -> Self {
+        let prices = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| {
+                let price = terms
+                    .prices_cents
+                    .get(index)
+                    .filter(|&&price| price != u32::MAX)
+                    .map(|&price| sob_core::reports::decimal_amount(u64::from(price)))
+                    .unwrap_or_default();
+                (id.clone(), text_field("EUR", &price, cx))
+            })
+            .collect();
+        Self {
+            prices,
+            staff_ids: terms.staff_ids,
+            online_booking: terms.online_booking,
+        }
+    }
 }
 
 struct Recovery {
@@ -66,6 +96,23 @@ impl Editor {
             description: Some(description),
             service_ids: self.service_ids.clone(),
             active: self.active,
+            fixed_terms: self.fixed.as_ref().map(|fixed| FixedCombinationTerms {
+                prices_cents: self
+                    .service_ids
+                    .iter()
+                    .map(|id| {
+                        fixed
+                            .prices
+                            .get(id)
+                            .and_then(|price| {
+                                sob_core::billing::parse_reviewed_amount(price.read(cx).text())
+                            })
+                            .unwrap_or(u32::MAX)
+                    })
+                    .collect(),
+                staff_ids: fixed.staff_ids.clone(),
+                online_booking: fixed.online_booking,
+            }),
         }
         .normalized()
     }
@@ -104,6 +151,9 @@ impl Editor {
         self.name
             .update(cx, |field, cx| field.set_text(&draft.name, cx));
         self.description = description_fields(draft.description.as_deref(), cx);
+        self.fixed = draft
+            .fixed_terms
+            .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx));
         self.service_ids = draft.service_ids;
         self.active = draft.active;
     }
@@ -242,6 +292,9 @@ impl Root {
             name: text_field(self.t(Key::CombinationName), &draft.name, cx),
             description: description_fields(draft.description.as_deref(), cx),
             search: text_field(self.t(Key::CombinationFind), "", cx),
+            fixed: draft
+                .fixed_terms
+                .map(|terms| FixedEditor::from_terms(&draft.service_ids, terms, cx)),
             service_ids: draft.service_ids,
             active: draft.active,
             conflict,
@@ -484,6 +537,38 @@ impl Root {
             }
         });
     }
+
+    fn toggle_fixed_combination(&mut self, cx: &mut Context<Self>) {
+        self.edit_combination(cx, |desk, cx| {
+            let Some(editor) = &mut desk.editor else {
+                return;
+            };
+            if editor.fixed.is_some() {
+                if editor.active
+                    && editor
+                        .original
+                        .fixed_terms
+                        .as_ref()
+                        .is_some_and(|terms| terms.online_booking == Some(false))
+                {
+                    desk.notice = Some(Key::CombinationArchiveBeforeRemovingPrice);
+                    return;
+                }
+                editor.fixed = None;
+            } else {
+                editor.fixed = Some(FixedEditor::from_terms(
+                    &editor.service_ids,
+                    FixedCombinationTerms {
+                        prices_cents: vec![],
+                        staff_ids: vec![],
+                        online_booking: None,
+                    },
+                    cx,
+                ));
+            }
+            desk.notice = None;
+        });
+    }
 }
 
 #[cfg(test)]
@@ -548,6 +633,22 @@ mod tests {
                 assert_ne!(revised[0].mutation_id, entries[0].mutation_id);
                 assert_eq!(revised[0].edit.proposed.service_ids, [first, second]);
                 assert!(root.svc.store.managed_combinations().unwrap().unwrap().combinations.is_empty());
+                root.choose_combination(Some(&revised[0].edit.id), cx);
+                root.toggle_fixed_combination(cx);
+                root.edit_combination(cx, |desk, cx| {
+                    let fixed = desk.editor.as_mut().unwrap().fixed.as_mut().unwrap();
+                    fixed.staff_ids.push(staff);
+                    fixed.online_booking = Some(false);
+                    fixed.prices[first].update(cx, |price, cx| price.set_text("17,90", cx));
+                    fixed.prices[second].update(cx, |price, cx| price.set_text("12.10", cx));
+                });
+                root.move_combination_service(0, 1, cx);
+                root.save_combination(cx);
+                let fixed = root.svc.store.pending_combinations().unwrap().remove(0);
+                assert_eq!(fixed.edit.proposed.service_ids, [second, first]);
+                let terms = fixed.edit.proposed.fixed_terms.unwrap();
+                assert_eq!(terms.prices_cents, [1210, 1790]);
+                assert_eq!(terms.online_booking, Some(false));
             })
             .unwrap();
     }

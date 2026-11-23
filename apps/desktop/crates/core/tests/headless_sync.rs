@@ -897,6 +897,7 @@ fn native_combinations_resume_after_restart_and_preserve_cloud_order() {
         description: Some("Line one\n\nLine three".into()),
         service_ids,
         active: true,
+        fixed_terms: None,
     };
     assert!(
         store

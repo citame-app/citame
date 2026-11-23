@@ -495,6 +495,50 @@ test("native combinations preserve ordered services and reject stale Cloud edits
   });
 });
 
+test("native fixed-price combinations preserve private visibility and reviewed allocations", async () => {
+  await t.db.update(service).set({ currency: "EUR" });
+  const id = uuid();
+  const fields = {
+    name: "Team combination",
+    description: null,
+    serviceIds: [f.haircutId, f.colorId],
+    active: true,
+  };
+  const fixedTerms = {
+    pricesCents: [1790, 1210],
+    staffIds: [f.beaId],
+    onlineBooking: false,
+  };
+  const catalogue = (who: Actor, since = 0) =>
+    pull(t, who, { since, combinations: since ? "delta" : "full", fixedCombinationTerms: "1" });
+  const initial = await catalogue(owner);
+  const create = mutation("combination.create", { id, ...fields, fixedTerms });
+  expect((await push(t, owner, [create])).body.results[0]).toMatchObject({ status: "applied" });
+  expect(await catalogue(owner, initial.headSeq)).toMatchObject({
+    combinations: [{ id, ...fields, fixedTerms, bookable: true, version: 1 }],
+  });
+  expect(await catalogue(ana)).not.toHaveProperty("combinations");
+  expect(await pull(t, owner, { combinations: "full" })).toMatchObject({
+    combinations: [{ id, bookable: false }],
+  });
+  const update = (version: number, active: boolean, price: typeof fixedTerms | null) =>
+    mutation("combination.update", { id, ...fields, version, active, fixedTerms: price });
+  expect((await push(t, owner, [update(1, true, null)])).body.results[0]).toMatchObject({
+    status: "rejected",
+    reason: "conflict",
+  });
+  await t.db.update(staffProfile).set({ active: false }).where(eq(staffProfile.id, f.beaId));
+  const archive = mutation("combination.update", { id, ...fields, version: 1, active: false });
+  expect((await push(t, owner, [archive])).body.results[0]).toMatchObject({ status: "applied" });
+  expect(await catalogue(owner)).toMatchObject({
+    combinations: [{ id, fixedTerms, active: false, bookable: false, version: 2 }],
+  });
+  expect((await push(t, owner, [update(2, false, null)])).body.results[0]).toMatchObject({
+    status: "applied",
+  });
+  expect((await catalogue(owner)).combinations?.[0]).not.toHaveProperty("fixedTerms");
+});
+
 test("native resource requirements are versioned, validated and replay safely", async () => {
   const path = `/admin/services/${f.haircutId}/resources`;
   const create = await json(

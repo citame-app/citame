@@ -30,6 +30,7 @@ export async function pull(
   if (query.resourcePools) params.set("resourcePools", query.resourcePools);
   if (query.combinationCatalogue) params.set("combinationCatalogue", query.combinationCatalogue);
   if (query.combinations) params.set("combinations", query.combinations);
+  if (query.fixedCombinationTerms) params.set("fixedCombinationTerms", query.fixedCombinationTerms);
   if (query.inventoryAccess) params.set("inventoryAccess", query.inventoryAccess);
   if (query.clientGroups) params.set("clientGroups", query.clientGroups);
   const res = await json(t.app, `/sync/pull?${params}`, "GET", undefined, who?.cookie);

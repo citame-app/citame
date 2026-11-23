@@ -539,6 +539,7 @@ export const syncPullQuerySchema = z.object({
   resourcePools: z.enum(["full", "delta"]).optional(),
   combinationCatalogue: z.literal("1").optional(),
   combinations: z.enum(["full", "delta"]).optional(),
+  fixedCombinationTerms: z.literal("1").optional(),
   peakPrices: z.enum(["full", "delta"]).optional(),
   peakPriceViews: z.literal("1").optional(),
   inventoryAccess: z.literal("1").optional(),
