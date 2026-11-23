@@ -125,6 +125,9 @@ for (const scheme of ["light", "dark"] as const) {
         await expectNoSeriousA11yViolations(page, `calendar resource filter ${scheme}`);
         await page.goto(`/admin/calendar?date=${date}&view=resources`);
         const occupancy = page.getByRole("region", { name: "Recursos", exact: true });
+        await occupancy.focus();
+        await page.keyboard.press("ArrowRight");
+        await expect(page).toHaveURL(new RegExp(`date=${date}.*view=resources`));
         await expect(occupancy.getByRole("columnheader", { name: new RegExp(name) })).toBeVisible();
         await expect(occupancy.getByText("1/1 reservadas", { exact: true })).toBeVisible();
         const bookingCard = occupancy.getByRole("button", {

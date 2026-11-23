@@ -96,8 +96,6 @@ export function CalendarView({
   const apiStaffIds =
     role === "owner" && !resourceMode && selectedIds.length > 0 ? selectedIds : undefined;
   const resourceOccupancy = resourceMode && role === "owner" ? "1" : undefined;
-  const views =
-    role === "owner" ? calendarViews : calendarViews.filter((view) => view !== "resources");
   const range = useMemo(
     () => rangeFor(search.view, search.date, timeZone),
     [search.view, search.date, timeZone],
@@ -110,7 +108,7 @@ export function CalendarView({
       accessScope,
       resourceOccupancy,
     }),
-    ...(live && !resourceMode ? { refetchInterval: false } : {}),
+    ...(live ? { refetchInterval: false } : {}),
   });
   const calendar = query.data;
   const [lastConsultation, setLastConsultation] = useState(Boolean(calendar?.importSnapshot));
@@ -119,6 +117,10 @@ export function CalendarView({
     if (calendar) setLastConsultation(Boolean(calendar.importSnapshot));
   }, [calendar]);
   const readOnly = providedReadOnly || consultation;
+  const views =
+    role === "owner" && !consultation
+      ? calendarViews
+      : calendarViews.filter((view) => view !== "resources");
   const { move, conflict, clearConflict } = useMoveAppointment();
   const [showCancelled, setShowCancelled] = useState(false);
   const [status, setStatus] = useState("all");
@@ -242,6 +244,9 @@ export function CalendarView({
     (patch: Partial<CalendarSearch>) => onSearchChange({ ...search, ...patch }),
     [search, onSearchChange],
   );
+  useEffect(() => {
+    if (consultation && resourceMode) go({ view: "day" });
+  }, [consultation, go, resourceMode]);
   const setView = (view: ViewName) => go({ view });
   const openNew = useCallback(
     (slot?: Partial<NewAppointmentInitial>) => {
@@ -268,6 +273,12 @@ export function CalendarView({
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
+      if (
+        (event.key === "ArrowLeft" || event.key === "ArrowRight") &&
+        event.target instanceof Element &&
+        event.target.closest(".calendar-resource-scroll")
+      )
+        return;
       const action = shortcutFor({
         key: event.key,
         typing: isTyping(event.target) || document.querySelector("[role='dialog']") !== null,
@@ -394,6 +405,13 @@ export function CalendarView({
             >
               <i aria-hidden="true" />
             </span>
+          )}
+          {resourceMode && query.dataUpdatedAt > 0 && (
+            <p className="calendar-resource-updated">
+              {t("calendar.updatedAt", {
+                time: formatTime(new Date(query.dataUpdatedAt).toISOString(), timeZone, locale),
+              })}
+            </p>
           )}
           <label className="calendar-search" hidden={resourceMode}>
             <SearchIcon width={16} />
@@ -794,7 +812,7 @@ export function CalendarView({
           ) : query.isError ? (
             <ErrorState error={query.error} onRetry={() => void query.refetch()} />
           ) : calendar && resourceMode ? (
-            <ResourceCalendar calendar={calendar} now={now} onOpen={onOpenAppointment} />
+            <ResourceCalendar calendar={calendar} onOpen={onOpenAppointment} />
           ) : calendar && staff.length === 0 ? (
             <EmptyState title={t("calendar.grid.empty")} />
           ) : calendar && search.view === "day" ? (

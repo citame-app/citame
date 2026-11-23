@@ -1,5 +1,5 @@
 import type { CalendarAppointment, CalendarResponse, ResourceOccupancy } from "@sob/contracts";
-import { useId, useMemo } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { EmptyState } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { formatTime } from "~/lib/format";
@@ -87,17 +87,50 @@ function occupancyRows(pools: Pool[], from: number, to: number, now: number) {
 
 export function ResourceCalendar({
   calendar,
-  now,
   onOpen,
 }: {
   calendar: CalendarResponse;
-  now: Date;
   onOpen: (appointment: CalendarAppointment) => void;
 }) {
   const { t, locale, timeZone } = useI18n();
   const caption = useId();
   const { resourceOccupancy, from, to, appointments } = calendar;
-  const instant = now.getTime();
+  const [expired, setExpired] = useState<{ source: ResourceOccupancy; through: number } | null>(
+    null,
+  );
+  const captured = Date.parse(resourceOccupancy?.capturedAt ?? "");
+  const instant = expired && expired.source === resourceOccupancy ? expired.through : captured;
+  useEffect(() => {
+    if (!resourceOccupancy) return;
+    const deadlines = new Set<number>();
+    for (const pool of resourceOccupancy.pools) {
+      for (const window of pool.windows) {
+        if (window.holdExpiresAt) {
+          const expiry = Date.parse(window.holdExpiresAt);
+          if (expiry > captured) deadlines.add(expiry);
+        }
+      }
+    }
+    const times = [...deadlines].sort((a, b) => a - b);
+    const observed = performance.now();
+    let cursor = 0;
+    let timer: number | undefined;
+    function schedule() {
+      const serverTime = captured + (performance.now() - observed);
+      const prior = cursor;
+      let deadline = times[cursor];
+      while (deadline !== undefined && deadline <= serverTime) {
+        cursor += 1;
+        deadline = times[cursor];
+      }
+      if (prior !== cursor && resourceOccupancy)
+        setExpired({ source: resourceOccupancy, through: serverTime });
+      if (deadline !== undefined)
+        timer = window.setTimeout(schedule, Math.ceil(deadline - serverTime));
+    }
+    schedule();
+    return () => window.clearTimeout(timer);
+  }, [captured, resourceOccupancy]);
   const rows = useMemo(
     () => occupancyRows(resourceOccupancy?.pools ?? [], Date.parse(from), Date.parse(to), instant),
     [resourceOccupancy, from, to, instant],

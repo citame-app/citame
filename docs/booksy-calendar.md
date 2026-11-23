@@ -119,6 +119,12 @@ E2E_CALENDAR_FIXTURE=true bun run --cwd apps/web e2e
 
 Las capturas de la demostración se guardan en `.taste-skill/calendar/`, una ruta ya excluida de Git. Las capturas de Booksy con datos de clientes no se incorporan al repositorio.
 
+## Ocupación por recursos en Citame
+
+En Web, **Recursos** muestra un día del centro. Cada columna indica la capacidad configurada y las unidades reservadas por tramo. Las citas visibles abren su ficha. Las ofertas pendientes de lista de espera solo muestran las unidades retenidas y desaparecen cuando vencen. La vista aparece para cuentas con acceso a todas las agendas y se actualiza con los mismos eventos de citas, lista de espera y recursos.
+
+La API añade la ocupación cuando se solicita `resourceOccupancy=1` en `GET /appointments/calendar`. Admite un intervalo de hasta 25 horas para cubrir los días con cambio de hora. Las citas y la ocupación se leen de la misma instantánea de PostgreSQL. Si la consulta acota los profesionales, las reservas que queden fuera cuentan en la ocupación y se omite su identificador.
+
 ## Trabajo pendiente para una equivalencia completa
 
 | Prioridad | Cambio | Condición de aceptación |

@@ -34,10 +34,9 @@ import { parseOrThrow, readJson } from "../../http";
 import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
-import { calendarResourceOccupancy } from "../resources/reservations";
 import { quoteBookingPromotion } from "../rewards/booking";
 import { listServices } from "../services/service";
-import { getCalendar } from "./calendar";
+import { getCalendar, getCalendarWithResourceOccupancy } from "./calendar";
 import {
   getAppointmentContext,
   importBooksyContext,
@@ -300,17 +299,10 @@ export function appointmentsRoutes({
         const query = parseOrThrow(calendarQuerySchema, c.req.query());
         const principal = c.get("principal");
         const scope = authorizeCalendarQuery(principal, query);
-        if (query.resourceOccupancy) requirePermission(principal, "allCalendars");
-        const calendar = await getCalendar(db, query, scope);
-        if (query.resourceOccupancy && !booksyNativePreview) {
-          calendar.resourceOccupancy = await calendarResourceOccupancy(
-            db,
-            new Date(query.from),
-            new Date(query.to),
-            now(),
-            new Set(calendar.appointments.map(({ id }) => id)),
-          );
-        }
+        const calendar =
+          query.resourceOccupancy && !booksyNativePreview
+            ? await getCalendarWithResourceOccupancy(db, query, scope, now())
+            : await getCalendar(db, query, scope);
         if (query.booksyPaymentReview !== "1") {
           for (const entry of calendar.appointments) {
             if (entry.billingReviewReasons)

@@ -1249,3 +1249,16 @@
 .calendar-search[hidden] {
   display: none;
 }
+
+.calendar-resource-updated {
+  display: none;
+}
+@media (max-width: 1023px) {
+  .calendar-resource-updated {
+    display: block;
+    grid-column: 1 / 5;
+    grid-row: 2;
+    align-self: center;
+    color: var(--muted);
+  }
+}

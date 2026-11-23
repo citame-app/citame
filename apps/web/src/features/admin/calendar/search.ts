@@ -1,6 +1,6 @@
 import { idSchema, localDateSchema } from "@sob/contracts";
 import { addDaysLocal } from "~/lib/format";
-import { type CalendarView, shiftMonth } from "./logic";
+import { type CalendarView, calendarViews, shiftMonth } from "./logic";
 
 export interface CalendarSearch {
   view: CalendarView;
@@ -22,10 +22,7 @@ export function validateCalendarSearch(
       ? [...new Set(raw.staff.split(",").filter((id) => idSchema.safeParse(id).success))]
       : [];
   return {
-    view:
-      raw.view === "week" || raw.view === "month" || raw.view === "list" || raw.view === "resources"
-        ? raw.view
-        : "day",
+    view: calendarViews.find((view) => view === raw.view) ?? "day",
     date: date.success ? date.data : today,
     ...(staff.length > 0 ? { staff: staff.join(",") } : {}),
     ...(raw.working === true || raw.working === "true" ? { working: true } : {}),

@@ -333,7 +333,8 @@ export async function pullChanges(
         (topic.data !== "whatsapp_settings" ||
           (query.whatsappSettings === "1" && principal.role === "owner")) &&
         (topic.data !== "resource_catalogue" ||
-          (query.resourceCatalogue === "1" && permissions.editCatalog)) &&
+          (query.resourceCatalogue === "1" &&
+            (permissions.editCatalog || permissions.allCalendars))) &&
         (topic.data !== "service_combinations" ||
           (query.combinationCatalogue === "1" && permissions.editCatalog))
       )
