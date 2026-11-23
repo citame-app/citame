@@ -78,12 +78,15 @@ pg_container_tool() {
   fi
 }
 
-list_restore_archive() {
-  if use_docker pg_restore; then
-    require_docker_socket "$1" || return 1
-    pg_container_tool pg_restore --list
+# read_restore_archive <url> <client-used-to-select-runner> [pg_restore flags]
+# Read stdin without a database connection. Use the dump's toolchain when validating a new archive.
+read_restore_archive() {
+  local url="$1" client="$2"; shift 2
+  if use_docker "$client"; then
+    require_docker_socket "$url" || return 1
+    pg_container_tool pg_restore "$@"
   else
-    pg_restore --list
+    pg_restore "$@"
   fi
 }
 

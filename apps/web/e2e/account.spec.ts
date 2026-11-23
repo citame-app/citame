@@ -20,7 +20,8 @@ async function bookViaApi(page: import("@playwright/test").Page, dayOffsetStart 
         `/api/availability?serviceIds=${haircut.id}&staffId=${stylist.id}&date=${date}`,
       )
     ).json();
-    const slot = result.slots[Math.min(2, result.slots.length - 1)];
+    // Leave another start available on the booked day, even if the picker opens there.
+    const slot = result.slots[1];
     if (!slot) continue;
     const response = await page.request.post("/api/appointments", {
       headers: { origin: new URL(page.url()).origin },
@@ -55,11 +56,21 @@ test.describe("client account", () => {
     await expect(page).toHaveURL(new RegExp(`/account/appointments/${appointment.id}/reschedule`));
     await expect(page.getByText("Current time")).toBeVisible();
     await expect(page.getByRole("button", { name: "Confirm new time" })).toBeDisabled();
-    const slots = page.getByRole("main").getByRole("group").getByRole("radio");
-    await expect(slots.first()).toBeVisible();
-    const target = slots.nth(1);
+    const target = page
+      .getByRole("region", { name: "Choose a time", exact: true })
+      .locator(`input[name="slot"]:not([id="slot-${appointment.startsAt}"])`)
+      .first();
     await target.check();
+    const selectedStart = (await target.getAttribute("id"))?.slice("slot-".length);
+    const moved = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `/api/appointments/${appointment.id}` &&
+        response.request().method() === "PATCH",
+    );
     await page.getByRole("button", { name: "Confirm new time" }).click();
+    const response = await moved;
+    expect(response.ok()).toBe(true);
+    expect(await response.json()).toMatchObject({ id: appointment.id, startsAt: selectedStart });
     await expect(page.getByText("Your appointment was moved")).toBeVisible();
     await expect(page).toHaveURL(/\/account/);
 

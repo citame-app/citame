@@ -361,7 +361,7 @@ test("Docker fallback never substitutes its socket for a different or configured
   }
 });
 
-test("a truncated archive rolls back even with a matching checksum", async () => {
+test("a truncated archive is not published and rolls back on restore with a matching checksum", async () => {
   // Add enough incompressible table data to put the cut inside table data, past the archive TOC.
   const db = new SQL(source.url);
   try {
@@ -382,6 +382,33 @@ test("a truncated archive rolls back even with a matching checksum", async () =>
   const truncated = archive.subarray(0, Math.floor(archive.length * 0.35));
   await Bun.write(dump, truncated);
   expect((await Bun.file(dump).stat()).size).toBe(truncated.length);
+  const outputName = "unverified.dump";
+  const backup = run(
+    [
+      "bash",
+      "-c",
+      `if [ "$PG_MODE" = native ] || command -v pg_dump >/dev/null 2>&1; then
+        pg_dump() { cat "$TRUNCATED_ARCHIVE"; }
+        export -f pg_dump
+      fi
+      docker() {
+        case "$*" in
+          "exec -i "*" pg_dump "*|"compose exec -T postgres pg_dump "*)
+            cat "$TRUNCATED_ARCHIVE" ;;
+          *) command docker "$@" ;;
+        esac
+      }
+      export -f docker
+      bash scripts/backup.sh "$1"`,
+      "backup-test",
+      join(dir, outputName),
+    ],
+    { DATABASE_URL: source.url, TRUNCATED_ARCHIVE: dump },
+  );
+  expect(backup.exitCode, backup.stderr.toString()).not.toBe(0);
+  expect(backup.stderr.toString()).toContain("could not read the complete PostgreSQL archive");
+  expect(readdirSync(dir).filter((entry) => entry.startsWith(outputName))).toEqual([]);
+
   const checksum = new Bun.CryptoHasher("sha256").update(truncated).digest("hex");
   await Bun.write(`${dump}.sha256`, `${checksum}  truncated.dump\n`);
   const target = source.url.replace(/\/[^/]+$/, `/${truncatedName}`);

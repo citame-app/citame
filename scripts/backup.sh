@@ -29,6 +29,10 @@ trap cleanup EXIT
 
 pg_tool pg_dump "$URL" --format=custom --no-owner --no-privileges > "$TMP/dump"
 [ -s "$TMP/dump" ] || { echo "backup failed: empty dump" >&2; exit 1; }
+if ! read_restore_archive "$URL" pg_dump --exit-on-error --file=/dev/null < "$TMP/dump"; then
+  echo "backup failed: could not read the complete PostgreSQL archive for $OUT" >&2
+  exit 1
+fi
 digest="$(sha256_of "$TMP/dump")"
 printf '%s  %s\n' "$digest" "$(basename "$OUT")" > "$TMP/checksum"
 

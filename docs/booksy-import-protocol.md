@@ -254,7 +254,7 @@ bun --no-env-file apps/api/src/scripts/booksy-audit-calendar-window.ts \
   /ruta/privada/source-snapshot-HASH.json FECHA_INICIAL FECHA_FINAL INSTANTE_DE_CORTE
 ```
 
-El rango de jornadas es inclusivo y el instante de corte incluye zona u offset ISO 8601. El comando abre únicamente el snapshot y sus originales locales.
+El rango de jornadas es inclusivo y el instante de corte incluye zona u offset ISO 8601. El comando lee el snapshot y sus originales locales. Si una línea ausente del calendario completo tiene evidencia visual revisada, utiliza también el snapshot padre local para reconstruir y cotejar la proyección. La evidencia de una cita individual queda registrada por separado y mantiene vigentes los requisitos de cobertura.
 
 Las fichas también deben incluir la lista de extras. La reconstrucción y la restauración usan el mismo cálculo de precio y duración por cantidad. Cada extra conserva su posición, nombre, importe y duración de origen. Si el catálogo actual carece de esa referencia, el extra se conserva en la cita con su nombre e importes históricos. La comprobación se detiene si cambia la lista o algún dato congelado. Los 30 extras reservados coinciden en el archivo y en la candidata. Todos tenían cantidad uno en esta captura. El ensayo sintético cubre también cantidad múltiple y referencias retiradas del catálogo.
 

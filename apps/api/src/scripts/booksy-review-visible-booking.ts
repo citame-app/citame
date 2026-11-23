@@ -11,6 +11,10 @@ import {
 } from "../modules/booksy-transfer/source-read-model";
 import type { BooksyArchiveManifest } from "../modules/booksy-transfer/stage";
 import { privateWriteVerified } from "../modules/booksy-transfer/vault";
+import {
+  decodeVisibleBookingObservations,
+  type visibleBookingEnvelope,
+} from "../modules/booksy-transfer/visible-booking-evidence";
 
 const ref = z.string().regex(/^\d+$/);
 const instant = z.iso.datetime();
@@ -352,6 +356,50 @@ export function appendVisibleBooking(
       clients: model.summary.clients + Number(Boolean(provisional)),
     },
   } satisfies BooksySourceReadModel;
+}
+
+export function verifyReviewedVisibleBooking(
+  model: BooksySourceReadModel,
+  group: BooksySourceReadModel["groups"][number],
+  parent: BooksySourceReadModel,
+  envelope: z.infer<typeof visibleBookingEnvelope>,
+  artifact: BooksySourceReadModel["base"]["artifacts"][number],
+) {
+  if (
+    envelope.businessId !== model.businessId ||
+    parent.businessId !== model.businessId ||
+    fingerprint(parent) !== envelope.parentHash ||
+    group.raw.evidenceSha256 !== artifact.sha256 ||
+    group.raw.kind !== envelope.kind
+  )
+    throw new Error("Visible reservation evidence does not belong to this snapshot");
+  const rebuilt = appendVisibleBooking(
+    parent,
+    decodeVisibleBookingObservations(envelope),
+    artifact,
+    group.raw.contactPending === true,
+    Boolean(group.raw.financialHold),
+  );
+  const rebuiltGroup = rebuilt.groups.at(-1);
+  const appointmentId = rebuiltGroup?.ids[0];
+  if (!rebuiltGroup || !appointmentId || fingerprint(group) !== fingerprint(rebuiltGroup))
+    throw new Error("Reviewed visible reservation differs from the rebuilt group");
+  const line = model.appointments.find(({ id }) => id === appointmentId);
+  const rebuiltLine = rebuilt.appointments.find(({ id }) => id === appointmentId);
+  const context = model.contexts[appointmentId];
+  if (
+    !line?.sourceCopy ||
+    !rebuiltLine ||
+    !context ||
+    fingerprint(line) !== fingerprint(rebuiltLine) ||
+    fingerprint(context) !== fingerprint(rebuilt.contexts[appointmentId])
+  )
+    throw new Error("Reviewed visible reservation differs from the rebuilt line");
+  return {
+    itemRef: line.sourceCopy.itemRef,
+    observedAt: line.sourceCopy.capturedAt,
+    evidenceSha256: artifact.sha256,
+  };
 }
 
 if (import.meta.main) {

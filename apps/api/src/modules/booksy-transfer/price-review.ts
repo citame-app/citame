@@ -10,6 +10,10 @@ import {
   booksyCents,
   sourceInstant,
 } from "./source-read-model";
+import {
+  decodeVisibleBookingObservations,
+  visibleBookingEnvelope,
+} from "./visible-booking-evidence";
 
 const sha256 = z.string().regex(/^[a-f0-9]{64}$/);
 const money = z.union([z.string(), z.number()]);
@@ -50,12 +54,6 @@ function cents(value: string | number | undefined) {
   }
 }
 
-const screenEnvelope = z.object({
-  kind: z.literal("booksy-reviewed-visible-booking"),
-  businessId: z.string(),
-  parentHash: sha256,
-  originals: z.array(z.object({ bytes: z.base64(), sha256 })).length(5),
-});
 const screenText = z.object({
   source: z.string(),
   ref: z.string(),
@@ -74,13 +72,9 @@ function validScreen(
   startsAt: string,
   screen: z.infer<typeof reviewedScreen>,
 ) {
-  const evidence = screenEnvelope.parse(value);
+  const evidence = visibleBookingEnvelope.parse(value);
   if (evidence.businessId !== businessId) return false;
-  const documents = evidence.originals.map((original) => {
-    const bytes = Buffer.from(original.bytes, "base64");
-    if (sha(bytes) !== original.sha256) throw new Error("Screen observation has changed");
-    return JSON.parse(bytes.toString("utf8"));
-  });
+  const documents = decodeVisibleBookingObservations(evidence);
   const card = screenCard.parse(documents[0]);
   const drawer = screenDrawer.parse(documents[1]);
   if (
