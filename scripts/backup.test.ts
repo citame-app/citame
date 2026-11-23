@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SQL } from "bun";
@@ -17,6 +17,7 @@ const sourceSuffix = `backup_${runId}`;
 const restoredName = `sob_test_restored_${runId}`;
 const truncatedName = `${restoredName}_truncated`;
 const restrictedName = `${restoredName}_restricted`;
+const verifiedRestoreName = `${restoredName}_verified`;
 const invalidArchiveName = `${restoredName}_invalid`;
 const restoreRole = `sob_restore_${runId}`;
 
@@ -36,6 +37,7 @@ afterAll(async () => {
       truncatedName,
       restrictedName,
       invalidArchiveName,
+      verifiedRestoreName,
     ]) {
       await admin.unsafe(`drop database if exists "${name}" with (force)`);
     }
@@ -134,6 +136,54 @@ test("backup then restore into a fresh database reproduces every table", async (
     await owner.unsafe(`drop role if exists "${reader}"`);
     await owner.close();
   }
+}, 60_000);
+
+test("restore keeps the verified archive if the source file is refreshed during validation", async () => {
+  const dump = join(dir, "refreshed.dump");
+  const replacement = join(dir, "refreshed-schema-only.dump");
+  const stage = join(dir, "restore staging \\ copy");
+  mkdirSync(stage);
+  const target = source.url.replace(/\/[^/]+$/, `/${verifiedRestoreName}`);
+  const backup = run(["bash", "scripts/backup.sh", dump], { DATABASE_URL: source.url });
+  expect(backup.exitCode, backup.stderr.toString()).toBe(0);
+  const schemaOnly = run(
+    [
+      "bash",
+      "-c",
+      'source scripts/lib.sh; pg_tool pg_dump "$DATABASE_URL" --format=custom --schema-only',
+    ],
+    { DATABASE_URL: source.url },
+  );
+  expect(schemaOnly.exitCode, schemaOnly.stderr.toString()).toBe(0);
+  await Bun.write(replacement, schemaOnly.stdout);
+  const restore = run(
+    [
+      "bash",
+      "-c",
+      `pg_restore() {
+        command pg_restore "$@" || return
+        if [ "$1" = "--list" ]; then mv -- "$REPLACEMENT_ARCHIVE" "$SOURCE_ARCHIVE"; fi
+      }
+      docker() {
+        command docker "$@" || return
+        if [[ "$*" == *" pg_restore --list" ]]; then
+          mv -- "$REPLACEMENT_ARCHIVE" "$SOURCE_ARCHIVE"
+        fi
+      }
+      export -f pg_restore docker
+      bash scripts/restore.sh "$SOURCE_ARCHIVE" "$TARGET_DATABASE"`,
+    ],
+    {
+      SOURCE_ARCHIVE: dump,
+      REPLACEMENT_ARCHIVE: replacement,
+      TARGET_DATABASE: target,
+      TMPDIR: stage,
+    },
+  );
+  expect(restore.exitCode, restore.stderr.toString()).toBe(0);
+  expect(await Bun.file(replacement).exists()).toBe(false);
+  expect(readdirSync(stage)).toEqual([]);
+  expect(await fingerprint(target)).toEqual(await fingerprint(source.url));
 }, 60_000);
 
 test("restore refuses a corrupted dump and a non-empty target", async () => {

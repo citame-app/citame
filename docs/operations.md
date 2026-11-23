@@ -101,7 +101,7 @@ For a remote server, install matching native PostgreSQL client tools and use `PG
 
 Docker mode connects to the selected container's local PostgreSQL socket. It accepts only a loopback URL with the default port and no query options. If a native client is missing, a remote or customized URL fails before the script contacts a Docker database.
 
-The standard restore targets an empty database. Before opening a database connection, it verifies the SHA-256 checksum and asks `pg_restore` to read the archive's table of contents. The actual restore applies schema and data in a single transaction. The catalog check detects existing objects even when the restore account cannot read their data. Keep other writers disconnected from the recovery database until validation is complete.
+The standard restore targets an empty database. Before opening a database connection, it stages a private copy of the archive, verifies its SHA-256 checksum, and asks `pg_restore` to read the copy’s table of contents. The restore reads that same copy and applies schema and data in a single transaction. Place `TMPDIR` on a filesystem with room for the compressed archive. The catalog check detects existing objects even when the restore account cannot read their data. Keep other writers disconnected from the recovery database until validation is complete.
 
 ```bash
 scripts/restore.sh /backups/sob-2026-11-14.dump postgres://sob:...@host:5432/sob_restored

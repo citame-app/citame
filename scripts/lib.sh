@@ -114,4 +114,4 @@ pg_tool() {
 # admin_url <url>: same server, database `postgres`.
 admin_url() { url_part "$1" admin; }
 
-sha256_of() { sha256sum "$1" | cut -d' ' -f1; }
+sha256_of() { sha256sum < "$1" | cut -d' ' -f1; }

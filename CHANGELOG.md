@@ -97,6 +97,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Database recovery restores the exact archive verified by checksum, including when a newer backup replaces the input file during validation.
+
 - Screen readers can identify the appointment reschedule form once the form and its heading are visible.
 
 - Campaign email tests charge the owner’s quota only for committed send claims. Stale drafts, failed claims and replays preserve the available quota.
