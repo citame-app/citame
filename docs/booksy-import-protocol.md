@@ -199,8 +199,9 @@ receipt with ordered components, allocated prices, total price, duration, buffer
 staff. It also records the professionals qualified for every component individually.
 Ambiguous references and inconsistent totals are flagged. The receipt also prepares inactive
 native drafts with stable identifiers for the ordered services, assigned professionals and
-the allocated prices. Drafts are visible through catalogue administration. A write from an
-older client preserves the terms unless the treatment order changes, which requires a review.
+the allocated prices. The catalogue administration API returns drafts after a separate
+catalogue write. A write from an older client preserves the terms unless the treatment
+order changes, which requires a review.
 The review leaves the combination's publication status and appointments intact.
 
 #### Conciliación de una candidata ya cargada
