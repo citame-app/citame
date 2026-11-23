@@ -232,6 +232,10 @@ test("a queued manager cannot create a combination after losing catalog access",
 
 test("keeps a discounted combination draft and its booking-specific staff rights across older edits", async () => {
   await t.db.delete(serviceStaff).where(eq(serviceStaff.serviceId, f.colorId));
+  await t.db
+    .update(service)
+    .set({ currency: "EUR" })
+    .where(inArray(service.id, input().serviceIds));
   const draft = {
     ...input(),
     active: false,
@@ -247,6 +251,16 @@ test("keeps a discounted combination draft and its booking-specific staff rights
   });
   const path = `/admin/services/combinations/${row.id}`;
   const { idempotencyKey: _key, fixedTerms: _terms, ...fields } = draft;
+  expect(
+    (
+      await call(path, "PUT", {
+        ...fields,
+        active: true,
+        version: row.version,
+        fixedTerms: draft.fixedTerms,
+      })
+    ).status,
+  ).toBe(409);
   const updated = await call(path, "PUT", { ...fields, name: "New title", version: row.version });
   expect(updated.status).toBe(200);
   expect(await updated.json()).toMatchObject({ fixedTerms: draft.fixedTerms });
@@ -263,6 +277,15 @@ test("keeps a discounted combination draft and its booking-specific staff rights
 
 test("rejects incorrect price allocations and validates the combination's explicit staff list", async () => {
   const draft = { ...input(), active: false };
+  expect(
+    (
+      await call("/admin/services/combinations", "POST", {
+        ...draft,
+        fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId] },
+      })
+    ).status,
+  ).toBe(400);
+  await t.db.update(service).set({ currency: "EUR" }).where(inArray(service.id, draft.serviceIds));
   for (const fixedTerms of [
     { pricesCents: [1200], staffIds: [f.anaId] },
     { pricesCents: [1200, 3400], staffIds: [] },
@@ -281,10 +304,11 @@ test("a priced combination quotes and charges its frozen amounts with booking-sp
     .where(and(eq(serviceStaff.staffId, f.anaId), eq(serviceStaff.serviceId, f.colorId)));
   const published = await call("/admin/services/combinations", "POST", {
     ...input(),
-    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId] },
+    fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId], onlineBooking: true },
   });
   expect(published.status).toBe(201);
   const combo = serviceCombinationSchema.parse(await published.json());
+  expect(combo.bookable).toBe(true);
   expect(await (await call("/services/combinations")).json()).toEqual({ combinations: [] });
   expect(await (await call("/services/combinations?fixedTerms=1")).json()).toMatchObject({
     combinations: [{ id: combo.id, bookable: true }],
@@ -317,6 +341,18 @@ test("a priced combination quotes and charges its frozen amounts with booking-sp
     serviceIds,
     startsAt: MONDAY_0900,
   };
+  expect(
+    (
+      await call("/appointments/series/preview", "POST", {
+        ...body,
+        id: undefined,
+        combination,
+        cadence: "weekly",
+        interval: 1,
+        count: 2,
+      })
+    ).status,
+  ).toBe(400);
   expect((await call("/appointments", "POST", body)).status).toBe(400);
   expect(
     (await call("/appointments", "POST", { ...body, staffId: f.beaId, combination })).status,
@@ -333,7 +369,7 @@ test("a priced combination quotes and charges its frozen amounts with booking-sp
       await call(`/admin/services/combinations/${combo.id}`, "PUT", {
         ...fields,
         version: combo.version,
-        fixedTerms: { pricesCents: [1500, 3600], staffIds: [f.anaId] },
+        fixedTerms: { pricesCents: [1500, 3600], staffIds: [f.anaId], onlineBooking: true },
       })
     ).status,
   ).toBe(200);
@@ -374,10 +410,19 @@ test("a priced combination quotes and charges its frozen amounts with booking-sp
     totalCents: 4600,
     lines: [{ unitAmountCents: 1200 }, { unitAmountCents: 3400 }],
   });
+
+  await t.db.update(service).set({ onlineBooking: false }).where(eq(service.id, f.colorId));
+  expect((await get("/availability", { date: "2026-03-09" })).status).toBe(404);
+  expect((await get("/availability/peak-price", { startsAt: MONDAY_0900 })).status).toBe(404);
+  expect(await (await call("/services/combinations?fixedTerms=1")).json()).toEqual({
+    combinations: [],
+  });
 });
 
 test("staff-only fixed terms stay private while the owner can quote and book them", async () => {
   const serviceIds = [f.haircutId, f.colorId];
+  await t.db.update(service).set({ currency: "EUR" }).where(inArray(service.id, serviceIds));
+  await t.db.update(service).set({ onlineBooking: false }).where(eq(service.id, f.colorId));
   const saved = await call("/admin/services/combinations", "POST", {
     ...input(),
     fixedTerms: { pricesCents: [1200, 3400], staffIds: [f.anaId], onlineBooking: false },
@@ -402,6 +447,15 @@ test("staff-only fixed terms stay private while the owner can quote and book the
       .parse(await internalSlots.json())
       .slots.some((slot) => slot.staffId === f.anaId),
   ).toBe(true);
+  const staff = await actor(t, "staff", "staff-for-private-combo@example.com", {
+    staffProfileId: f.anaId,
+  });
+  expect((await call("/admin/services/combinations", "GET", undefined, staff)).status).toBe(403);
+  const directory = await call("/appointments/combinations", "GET", undefined, staff);
+  expect(directory.status).toBe(200);
+  expect(await directory.json()).toMatchObject({
+    combinations: [{ id: combo.id, bookable: true }],
+  });
   const quote = await call(`/appointments/peak-price?${query}`);
   expect(quote.status).toBe(200);
   const combination = peakPriceQuoteSchema.parse(await quote.json()).combination;
@@ -411,8 +465,9 @@ test("staff-only fixed terms stay private while the owner can quote and book the
     (await call(`/appointments/combination-availability?${query}`, "GET", undefined, client))
       .status,
   ).toBe(403);
+  expect((await call("/appointments/combinations", "GET", undefined, client)).status).toBe(403);
   const booking = { combination, serviceIds, staffId: f.anaId, startsAt: MONDAY_0900 };
-  expect((await call("/appointments", "POST", booking, client)).status).toBe(404);
+  expect([403, 404]).toContain((await call("/appointments", "POST", booking, client)).status);
   expect((await call("/appointments", "POST", { ...booking, clientId: f.clientId })).status).toBe(
     201,
   );

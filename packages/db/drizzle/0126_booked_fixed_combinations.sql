@@ -1,4 +1,4 @@
-ALTER TABLE service_combination ADD COLUMN fixed_online_booking boolean NOT NULL DEFAULT true;
+ALTER TABLE service_combination ADD COLUMN fixed_online_booking boolean;
 --> statement-breakpoint
 ALTER TABLE appointment
   ADD COLUMN combination_id uuid REFERENCES service_combination(id),

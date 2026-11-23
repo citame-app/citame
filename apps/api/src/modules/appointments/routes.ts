@@ -36,6 +36,7 @@ import { bookingOutcome } from "../../observability/booking";
 import { findAvailability } from "../availability/service";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { quoteBookingPromotion } from "../rewards/booking";
+import { bookingCombinationCatalogue } from "../services/combinations";
 import { listServices } from "../services/service";
 import { getRescheduleAvailability } from "./availability";
 import { getCalendar, getCalendarWithResourceOccupancy } from "./calendar";
@@ -225,6 +226,9 @@ export function appointmentsRoutes({
           200,
           { "Cache-Control": "private, no-store" },
         ),
+      )
+      .get("/combinations", async (c) =>
+        c.json(await bookingCombinationCatalogue(db, c.get("principal"))),
       )
       .get("/catalog", async (c) => {
         requirePermission(c.get("principal"), "editCalendar");

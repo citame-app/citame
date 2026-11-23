@@ -70,3 +70,4 @@ export type CombinationCreate = z.infer<typeof combinationCreateSchema>;
 export type CombinationUpdate = z.infer<typeof combinationUpdateSchema>;
 
 export const listCombinationsSchema = serviceCombinationsSchema;
+export const combinationListQuerySchema = z.object({ fixedTerms: z.literal("1").optional() });

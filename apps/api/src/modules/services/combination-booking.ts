@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
-import type { FixedCombinationReview } from "@sob/contracts";
+import type { FixedCombinationReview, Service } from "@sob/contracts";
 import { type Database, serviceCombination } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import { assertStaffExists } from "../staff/service";
-import { getBookableServices } from "./service";
+import { getBookableServices, onlineServicesByIds } from "./service";
 
 type ReadConnection = Pick<Database, "select">;
+
+export function assertFixedCombinationCurrency(services: readonly Service[]) {
+  if (services.some((service) => service.currency !== "EUR"))
+    throw new DomainError("validation_error", "Fixed-price combinations require EUR services");
+}
 
 export async function resolveFixedCombination(
   db: ReadConnection,
@@ -20,6 +25,7 @@ export async function resolveFixedCombination(
     !row?.active ||
     !row.fixedPricesCents ||
     !row.fixedStaffIds ||
+    row.fixedOnlineBooking === null ||
     (onlineOnly && !row.fixedOnlineBooking)
   )
     throw new DomainError("not_found", "Fixed-price combination is unavailable");
@@ -33,7 +39,13 @@ export async function resolveFixedCombination(
   const staffIds = row.fixedStaffIds;
   if (prices.reduce((sum, cents) => sum + cents, 0) > 999_999_999)
     throw new DomainError("validation_error", "The combination total exceeds the supported amount");
+  if (
+    onlineOnly &&
+    (await onlineServicesByIds(db, row.serviceIds)).length !== row.serviceIds.length
+  )
+    throw new DomainError("not_found", "Combination unavailable for online booking");
   const current = await getBookableServices(db, row.serviceIds, serviceQuotes);
+  assertFixedCombinationCurrency(current);
   const services = current.map((service, position) => {
     const priceCents = prices[position];
     if (priceCents === undefined) throw new Error("Missing fixed price for a combination line");

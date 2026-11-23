@@ -204,7 +204,11 @@ export async function previewPeakSlot(
         ? await resolveFixedCombination(tx, combinationId, serviceIds, undefined, publicOnly)
         : undefined;
       const services = fixed?.services ?? (await getBookableServices(tx, serviceIds));
-      if (publicOnly && (await onlineServicesByIds(tx, serviceIds)).length !== services.length)
+      if (
+        publicOnly &&
+        !fixed &&
+        (await onlineServicesByIds(tx, serviceIds)).length !== services.length
+      )
         throw new DomainError("not_found", "Service unavailable for online booking");
       const { timezone } = await getSalonSettings(tx);
       return quotePeakSlot(tx, services, new Date(startsAt), timezone, fixed?.review);

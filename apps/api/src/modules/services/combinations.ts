@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import type {
-  CombinationCreate,
-  CombinationUpdate,
-  FixedCombinationTerms,
-  Service,
+import {
+  type CombinationCreate,
+  type CombinationUpdate,
+  type FixedCombinationTerms,
+  permissionsFor,
+  type Service,
 } from "@sob/contracts";
 import { type Database, serviceCombination, staffProfile } from "@sob/db";
 import { and, asc, count, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -13,8 +14,14 @@ import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { activeServiceAssignments } from "../staff/service";
+import { assertFixedCombinationCurrency } from "./combination-booking";
 import { assertCatalogSelection } from "./options";
-import { assertOnlineServices, getBookableServices, onlineServicesByIds } from "./service";
+import {
+  assertOnlineServices,
+  getBookableServices,
+  listServices,
+  onlineServicesByIds,
+} from "./service";
 
 type Connection = Database | Tx;
 type Row = typeof serviceCombination.$inferSelect;
@@ -70,16 +77,8 @@ async function validate(
       );
     if (fixed.pricesCents.length !== services.length)
       throw new DomainError("validation_error", "Enter one price for each treatment in order");
-    const members = await db
-      .select({ id: staffProfile.id })
-      .from(staffProfile)
-      .where(
-        and(
-          inArray(staffProfile.id, fixed.staffIds),
-          eq(staffProfile.active, true),
-          isNull(staffProfile.deletedAt),
-        ),
-      );
+    assertFixedCombinationCurrency(services);
+    const members = await activeCombinationStaff(db, fixed.staffIds);
     if (members.length !== fixed.staffIds.length)
       throw new DomainError("not_found", "A professional for the combination is unavailable");
     return;
@@ -90,19 +89,39 @@ async function validate(
       "Each treatment and its extras need a qualified professional",
     );
 }
+async function activeCombinationStaff(db: Connection, ids: string[]) {
+  if (!ids.length) return [];
+  const rows = await db
+    .select({ id: staffProfile.id })
+    .from(staffProfile)
+    .where(
+      and(
+        inArray(staffProfile.id, ids),
+        eq(staffProfile.active, true),
+        isNull(staffProfile.deletedAt),
+      ),
+    );
+  return rows.map(({ id }) => id);
+}
+
 function fixedTerms(row: Row): FixedCombinationTerms | null {
   return row.fixedPricesCents && row.fixedStaffIds
     ? {
         pricesCents: Array.from(row.fixedPricesCents),
         staffIds: row.fixedStaffIds,
-        ...(!row.fixedOnlineBooking ? { onlineBooking: false } : {}),
+        ...(row.fixedOnlineBooking !== null ? { onlineBooking: row.fixedOnlineBooking } : {}),
       }
     : null;
 }
 async function writtenView(db: Connection, row: Row) {
-  if (row.fixedPricesCents) return view(row, false);
+  const fixed = fixedTerms(row);
   try {
-    await validate(db, row.serviceIds, true);
+    if (fixed) {
+      if (!row.active || fixed.onlineBooking === undefined) return view(row, false);
+      const staffIds = await activeCombinationStaff(db, fixed.staffIds);
+      if (!staffIds.length) return view(row, false);
+      await validate(db, row.serviceIds, fixed.onlineBooking, { ...fixed, staffIds });
+    } else await validate(db, row.serviceIds, true);
     return view(row, true);
   } catch (error) {
     if (!(error instanceof DomainError)) throw error;
@@ -126,62 +145,86 @@ function view(row: Row, bookable: boolean) {
 }
 export async function listCombinations(db: Database, principal?: Principal, supportsFixed = false) {
   if (principal) requirePermission(principal, "editCatalog");
+  return combinationCatalogue(db, { management: Boolean(principal), supportsFixed });
+}
+
+export async function bookingCombinationCatalogue(db: Database, principal: Principal) {
+  requirePermission(principal, "editCalendar");
+  const all = permissionsFor(principal.role, principal.accessPreset).allCalendars;
+  if (!all && !principal.staffId) return { combinations: [] };
+  return combinationCatalogue(db, {
+    management: false,
+    supportsFixed: true,
+    staffOnlyCatalogue: true,
+    staffId: all ? undefined : (principal.staffId ?? undefined),
+  });
+}
+
+async function combinationCatalogue(
+  db: Database,
+  options: {
+    management: boolean;
+    supportsFixed: boolean;
+    staffOnlyCatalogue?: boolean;
+    staffId?: string;
+  },
+) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`set transaction isolation level repeatable read read only`);
     const rows = await tx
       .select()
       .from(serviceCombination)
-      .where(principal ? undefined : eq(serviceCombination.active, true))
+      .where(options.management ? undefined : eq(serviceCombination.active, true))
       .orderBy(asc(serviceCombination.name), asc(serviceCombination.id))
       .limit(100);
     if (!rows.length) return { combinations: [] };
     const ids = [...new Set(rows.flatMap((row) => row.serviceIds))];
     const services = new Map((await onlineServicesByIds(tx, ids)).map((row) => [row.id, row]));
+    const internal =
+      options.supportsFixed && (options.management || options.staffOnlyCatalogue)
+        ? new Map((await listServices(tx, true)).map((row) => [row.id, row]))
+        : services;
     const assignments = await activeAssignments(tx, ids);
-    const fixedStaffIds = supportsFixed
-      ? [...new Set(rows.flatMap((row) => row.fixedStaffIds ?? []))]
-      : [];
     const fixedStaff = new Set(
-      fixedStaffIds.length
-        ? (
-            await tx
-              .select({ id: staffProfile.id })
-              .from(staffProfile)
-              .where(
-                and(
-                  inArray(staffProfile.id, fixedStaffIds),
-                  eq(staffProfile.active, true),
-                  isNull(staffProfile.deletedAt),
-                ),
-              )
-          ).map(({ id }) => id)
-        : [],
+      await activeCombinationStaff(
+        tx,
+        options.supportsFixed ? [...new Set(rows.flatMap((row) => row.fixedStaffIds ?? []))] : [],
+      ),
     );
     return {
       combinations: rows.flatMap((row) => {
         const fixed = fixedTerms(row);
-        if (fixed && !supportsFixed) return principal ? [view(row, false)] : [];
-        if (fixed?.onlineBooking === false && !principal) return [];
+        if (!fixed && options.staffOnlyCatalogue) return [];
+        if (fixed && !options.supportsFixed) return options.management ? [view(row, false)] : [];
+        if (fixed?.onlineBooking === false && !options.management && !options.staffOnlyCatalogue)
+          return [];
+        const source = fixed?.onlineBooking === false ? internal : services;
         const selected: Service[] = [];
         for (const id of row.serviceIds) {
-          const service = services.get(id);
-          if (!service) return principal ? [view(row, false)] : [];
-          selected.push(service);
+          const item = source.get(id);
+          if (!item) return options.management ? [view(row, false)] : [];
+          selected.push(item);
         }
         let bookable = false;
         try {
           assertCatalogSelection(selected);
+          if (fixed) assertFixedCombinationCurrency(selected);
           bookable = fixed
-            ? row.active && fixed.staffIds.some((id) => fixedStaff.has(id))
+            ? row.active &&
+              fixed.onlineBooking !== undefined &&
+              fixed.staffIds.some(
+                (id) => fixedStaff.has(id) && (!options.staffId || options.staffId === id),
+              )
             : hasQualifiedTeam(selected, assignments);
         } catch (error) {
           if (!(error instanceof DomainError)) throw error;
         }
-        return principal || bookable ? [view(row, bookable)] : [];
+        return options.management || bookable ? [view(row, bookable)] : [];
       }),
     };
   });
 }
+
 export async function saveCombination(
   db: Database,
   input: CombinationCreate | CombinationUpdate,
@@ -220,16 +263,21 @@ export async function saveCombination(
           "Review the price and staff after changing the treatment order",
         );
       const fixed = input.fixedTerms === undefined ? stored : input.fixedTerms;
-      if (!row.active && input.active && fixed && input.fixedTerms === undefined)
+      if (
+        input.active &&
+        fixed &&
+        (fixed.onlineBooking === undefined ||
+          (!row.active && input.fixedTerms?.onlineBooking === undefined))
+      )
         throw new DomainError(
           "version_conflict",
-          "Review the fixed terms before publishing the combination",
+          "Choose the visibility before publishing the combination",
         );
       if (input.active || selectionChanged || input.fixedTerms)
         await validate(
           tx,
           input.serviceIds,
-          !!target?.reviewOnline && (!fixed || input.active),
+          fixed ? input.active && fixed.onlineBooking === true : target?.reviewOnline,
           fixed,
         );
       [row] = await tx
@@ -238,7 +286,7 @@ export async function saveCombination(
           ...fields,
           fixedPricesCents: fixed?.pricesCents ?? null,
           fixedStaffIds: fixed?.staffIds ?? null,
-          fixedOnlineBooking: fixed?.onlineBooking ?? true,
+          fixedOnlineBooking: fixed?.onlineBooking ?? null,
           version: row.version + 1,
           updatedAt: now,
         })
@@ -248,6 +296,11 @@ export async function saveCombination(
       if (!("idempotencyKey" in input))
         throw new DomainError("validation_error", "A creation identifier is required");
       const fixed = input.fixedTerms;
+      if (input.active && fixed && fixed.onlineBooking === undefined)
+        throw new DomainError(
+          "validation_error",
+          "Choose the visibility before publishing the combination",
+        );
       const fingerprint = createHash("sha256")
         .update(JSON.stringify(fixed ? { ...fields, fixedTerms: fixed } : fields))
         .digest("hex");
@@ -279,7 +332,7 @@ export async function saveCombination(
       await validate(
         tx,
         input.serviceIds,
-        !!target?.reviewOnline && (!fixed || input.active),
+        fixed ? input.active && fixed.onlineBooking === true : target?.reviewOnline,
         fixed,
       );
       [row] = await tx
@@ -288,7 +341,7 @@ export async function saveCombination(
           ...fields,
           fixedPricesCents: fixed?.pricesCents ?? null,
           fixedStaffIds: fixed?.staffIds ?? null,
-          fixedOnlineBooking: fixed?.onlineBooking ?? true,
+          fixedOnlineBooking: fixed?.onlineBooking ?? null,
           ...(target ? { id: target.id } : {}),
           createdBy: p.userId,
           idempotencyKey: input.idempotencyKey,

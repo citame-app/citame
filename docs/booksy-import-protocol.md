@@ -205,9 +205,11 @@ order changes, which requires a review.
 The review leaves the combination's publication status and appointments intact.
 
 Clients that support fixed-price combinations request `fixedTerms=1` from the
-combination catalogue. A published combination selects a single assigned professional,
-preserves the component order, and has an explicit online-visibility setting. For a public
-combination, use its ID on availability and price queries. Centre accounts use
+combination catalogue. A published combination selects a single assigned professional
+and preserves the order of the EUR-priced components. Publishing a draft requires an
+explicit online-visibility choice, including when it predates the visibility setting.
+For a public combination, use its ID on availability and price queries. Centre accounts
+can discover eligible combinations at `/appointments/combinations` and use
 `/appointments/combination-availability` and `/appointments/peak-price` for internal options.
 The price response carries the version and review hash required when submitting a booking.
 Fixed prices exclude catalogue peak surcharges. Checkout uses the component amounts frozen on
