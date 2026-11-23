@@ -94,6 +94,61 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
+test("reviews a catalog line price and retries the same receipt after a lost response", async ({
+  page,
+}) => {
+  await signInThroughUi(page, fixture.ownerEmail, "/admin/commerce");
+  const basket = page.getByRole("complementary", { name: "Current receipt", exact: true });
+  const edit = basket.getByRole("button", { name: "Change price for Haircut" });
+  await page.getByRole("button", { name: "Services", exact: true }).click();
+  await page.getByRole("button", { name: /^Haircut / }).click();
+  await edit.click();
+  const editor = basket.getByRole("form", { name: "Change price for Haircut" });
+  const amount = editor.getByLabel("Unit price for this sale");
+  await expect(amount).toHaveValue("20.00");
+  await amount.fill("18,90");
+  await expect(basket.getByRole("button", { name: "Select payment method" })).toBeDisabled();
+  await editor.getByRole("button", { name: "Apply price" }).click();
+  const reason = editor.getByLabel("Reason for changing the price");
+  await expect(reason).toBeFocused();
+  await reason.fill("Special offer");
+  await expectNoSeriousA11yViolations(page, "catalog price editor");
+  await editor.getByRole("button", { name: "Apply price" }).click();
+
+  const bodies: string[] = [];
+  const receipts: string[] = [];
+  await page.route("**/api/admin/commerce/checkouts", async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    bodies.push(route.request().postData() ?? "");
+    if (bodies.length === 2)
+      return route.fulfill({ status: 429, json: { error: { code: "rate_limited" } } });
+    const upstream = await route.fetch();
+    expect(upstream.status()).toBe(201);
+    receipts.push((await upstream.json()).id);
+    if (bodies.length === 1) return route.abort();
+    return route.fulfill({ response: upstream });
+  });
+  await basket.getByRole("button", { name: "Select payment method" }).click();
+  const retry = basket.getByRole("button", { name: "Retry this receipt" });
+  await expect(retry).toBeVisible();
+  await expect(edit).toBeDisabled();
+  const limited = page.waitForResponse((response) => response.status() === 429);
+  await retry.click();
+  await limited;
+  await expect(retry).toBeEnabled();
+  await expect(edit).toBeDisabled();
+  await retry.click();
+  await expect(page.getByRole("region", { name: "Receipt", exact: true })).toBeVisible();
+  expect(bodies).toHaveLength(3);
+  expect(new Set(bodies).size).toBe(1);
+  expect(receipts[1]).toBe(receipts[0]);
+  expect(JSON.parse(bodies[0] ?? "").lines[0].catalogPriceReview).toEqual({
+    expectedUnitAmountCents: 2000,
+    unitAmountCents: 1890,
+    reason: "Special offer",
+  });
+});
+
 test("the team occupancy report shows scheduled capacity and exports it", async ({ page }) => {
   const from = salonDate(7);
   const to = salonDate(14);

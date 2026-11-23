@@ -97,6 +97,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Campaign email tests charge the owner’s quota only for committed send claims. Stale drafts, failed claims and replays preserve the available quota.
+
 - Signed-in customers can view and purchase available plans in their Packages and Memberships tabs.
 
 - Re-running first-owner setup finishes authentication initialization before closing the database.

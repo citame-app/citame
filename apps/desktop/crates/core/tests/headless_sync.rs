@@ -4567,7 +4567,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             "sku": "SMOKE-WALK-IN",
             "idempotencyKey": uuid::Uuid::now_v7(),
             "openingStock": 3,
-            "priceCents": 2000,
+            "priceCents": 2100,
             "unitLabel": "unit",
             "resellable": true,
         }),
@@ -4586,6 +4586,11 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
     );
     let before = device.transport.inventory_product(product_id).unwrap();
     assert!(device.transport.can_assign_walk_in_sales().unwrap());
+    let reviewed_base = device
+        .transport
+        .walk_in_catalog_price(sob_core::billing::SaleCatalogKind::Product, product_id)
+        .unwrap();
+    assert_eq!(reviewed_base, 2100);
     let mut staff_lookup = Device::sign_in();
     staff_lookup.sync();
     let staff_id: uuid::Uuid = catalog(&staff_lookup).staff.parse().unwrap();
@@ -4598,6 +4603,11 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
             SaleItem::Product {
                 product_id,
                 quantity: 2,
+                catalog_price_review: Some(sob_core::billing::CatalogPriceReview {
+                    expected_unit_amount_cents: reviewed_base,
+                    unit_amount_cents: 2000,
+                    reason: "Agreed stock price".into(),
+                }),
             },
             SaleItem::Custom {
                 description: "Synthetic extra".into(),
@@ -4608,6 +4618,18 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
         discount_cents: 400,
         tip_cents: 100,
     };
+    let mut stale = sale.clone();
+    if let SaleItem::Product {
+        catalog_price_review: Some(review),
+        ..
+    } = &mut stale.lines[0]
+    {
+        review.expected_unit_amount_cents -= 1;
+    }
+    assert!(matches!(
+        device.transport.create_walk_in_sale(&stale),
+        Err(sob_core::billing::WalkInSaleError::PriceChanged)
+    ));
     let receipt = device.transport.create_walk_in_sale(&sale).unwrap();
     assert!(receipt.appointment_id.is_none());
     assert_eq!(receipt.total_cents, 4200);
@@ -4692,6 +4714,7 @@ fn native_walk_in_sale_replays_and_updates_web_stock_through_the_proxy() {
         lines: vec![SaleItem::Product {
             product_id,
             quantity: 1,
+            catalog_price_review: None,
         }],
         discount_cents: 0,
         tip_cents: 0,
@@ -5243,6 +5266,7 @@ fn native_gift_card_preserves_restrictions_through_the_proxy() {
                 SaleItem::Service {
                     service_id,
                     quantity: 1,
+                    catalog_price_review: None,
                 },
                 SaleItem::Custom {
                     description: "Synthetic unrelated charge".into(),

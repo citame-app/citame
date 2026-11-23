@@ -214,6 +214,7 @@ export function requireAuth(
           "/admin/whatsapp/templates",
           "/admin/commerce/unpaid",
           "/admin/commerce/capabilities",
+          "/admin/commerce/catalog-price",
           "/admin/passes/eligible",
         ].includes(path) &&
           method !== "GET") ||

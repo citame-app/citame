@@ -18,6 +18,7 @@ import { Sheet } from "~/components/ui/sheet";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { adminStaffQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { servicesQuery } from "~/lib/queries";
@@ -28,7 +29,8 @@ import { useDebounced } from "../use-debounced";
 import { BillingReviewReasons } from "./billing-review-reasons";
 import { invalidateCommerce } from "./invalidate";
 import { inputCents } from "./money";
-import { extraIsEligible, type ReceiptItem, receiptInput } from "./pos-cart";
+import { extraIsEligible, type ReceiptItem, receiptInput, receiptUnitPrice } from "./pos-cart";
+import { SalePriceEditor } from "./sale-price-editor";
 
 type CatalogTab = "quick" | "due" | "services" | "extras" | "products" | "custom";
 
@@ -73,12 +75,14 @@ export function PointOfSale({
   const staff = useQuery({ ...adminStaffQuery, enabled: permissions.allSales });
   const [seller, setSeller] = useState("");
   const [items, setItems] = useState<ReceiptItem[]>([]);
+  const [editingPrice, setEditingPrice] = useState<string>();
   const [customer, setCustomer] = useState<AdminClient | null>(null);
   const [pickingCustomer, setPickingCustomer] = useState(false);
   const [discount, setDiscount] = useState("0");
   const [usingClientDiscount, setUsingClientDiscount] = useState(false);
   const [discountType, setDiscountType] = useState<"fixed" | "percent">("fixed");
   const [tip, setTip] = useState("0");
+  const [uncertain, setUncertain] = useState(false);
   const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
   const receipt = receiptInput(items, discount, discountType, tip);
   const create = useMutation({
@@ -95,7 +99,19 @@ export function PointOfSale({
         idempotencyKey: requestKey,
       });
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.code === "version_conflict") {
+        // The server checks replay before comparing the live catalog.
+        setUncertain(false);
+        return;
+      }
+      setUncertain(
+        (previous) =>
+          previous || !(error instanceof ApiError) || error.status >= 500 || error.status === 408,
+      );
+    },
     onSuccess: (order) => {
+      setUncertain(false);
       setItems([]);
       setCustomer(null);
       setDiscount("0");
@@ -106,11 +122,13 @@ export function PointOfSale({
       onCreated(order.id);
     },
   });
+  const draftLocked = create.isPending || uncertain;
   const changed = () => {
     setRequestKey(crypto.randomUUID());
     create.reset();
   };
   const add = (item: Omit<ReceiptItem, "quantity">) => {
+    if (draftLocked) return;
     setItems((current) => {
       const previous = current.find((row) => row.key === item.key);
       return previous
@@ -156,7 +174,7 @@ export function PointOfSale({
         type="button"
         className="pos-catalog-item"
         key={item.id}
-        disabled={!eligible || create.isPending}
+        disabled={!eligible || draftLocked}
         onClick={() =>
           add({
             key: `service:${item.id}`,
@@ -213,7 +231,7 @@ export function PointOfSale({
         </nav>
         <section className="pos-catalog" aria-label={t(`pos.${tab}`)}>
           {tab === "custom" ? (
-            <CustomAmount onAdd={add} disabled={create.isPending} />
+            <CustomAmount onAdd={add} disabled={draftLocked} />
           ) : tab === "due" ? (
             <DueAppointments onCreated={onCreated} viewerScope={viewerScope} />
           ) : (
@@ -292,8 +310,7 @@ export function PointOfSale({
                             type="button"
                             key={product.id}
                             disabled={
-                              (product.sellableAvailable ?? product.available) < 1 ||
-                              create.isPending
+                              (product.sellableAvailable ?? product.available) < 1 || draftLocked
                             }
                             onClick={() =>
                               add({
@@ -361,7 +378,7 @@ export function PointOfSale({
             <button
               type="button"
               className="pos-customer-button"
-              disabled={!permissions.clients || create.isPending}
+              disabled={!permissions.clients || draftLocked}
               onClick={() => setPickingCustomer(true)}
             >
               <UserIcon />
@@ -373,7 +390,7 @@ export function PointOfSale({
                 type="button"
                 className="calendar-icon-button"
                 aria-label={t("pos.removeCustomer")}
-                disabled={create.isPending}
+                disabled={draftLocked}
                 onClick={() => {
                   setCustomer(null);
                   if (usingClientDiscount) {
@@ -402,7 +419,7 @@ export function PointOfSale({
                   setSeller(value);
                   changed();
                 }}
-                disabled={create.isPending}
+                disabled={draftLocked}
               />
             ) : staff.isError ? (
               <ErrorState error={staff.error} onRetry={() => void staff.refetch()} />
@@ -426,9 +443,10 @@ export function PointOfSale({
                         type="button"
                         className="calendar-icon-button"
                         aria-label={t("pos.remove", { name: item.name })}
-                        disabled={create.isPending}
+                        disabled={draftLocked}
                         onClick={() => {
                           setItems((current) => current.filter((row) => row.key !== item.key));
+                          if (editingPrice === item.key) setEditingPrice(undefined);
                           changed();
                         }}
                       >
@@ -443,7 +461,7 @@ export function PointOfSale({
                         min={1}
                         max={Math.min(item.available ?? 1000, 1000)}
                         value={item.quantity}
-                        disabled={create.isPending}
+                        disabled={draftLocked}
                         onChange={(e) => {
                           setItems((current) =>
                             current.map((row) =>
@@ -456,13 +474,36 @@ export function PointOfSale({
                       <span className="font-semibold tabular-nums">
                         {formatMoney(
                           Number.isInteger(Number(item.quantity))
-                            ? item.priceCents * Number(item.quantity)
-                            : item.priceCents,
+                            ? receiptUnitPrice(item) * Number(item.quantity)
+                            : receiptUnitPrice(item),
                           "EUR",
                           locale,
                         )}
                       </span>
                     </div>
+                    {(item.kind === "product" ||
+                      (item.kind === "service" &&
+                        (item.service?.priceType ?? "fixed") === "fixed")) && (
+                      <SalePriceEditor
+                        item={item}
+                        open={editingPrice === item.key}
+                        disabled={
+                          draftLocked || (editingPrice !== undefined && editingPrice !== item.key)
+                        }
+                        onOpenChange={(open) => setEditingPrice(open ? item.key : undefined)}
+                        onSave={(priceCents, catalogPriceReview) => {
+                          setItems((current) =>
+                            current.map((row) =>
+                              row.key === item.key
+                                ? { ...row, priceCents, catalogPriceReview }
+                                : row,
+                            ),
+                          );
+                          setEditingPrice(undefined);
+                          changed();
+                        }}
+                      />
+                    )}
                     {item.service && !extraIsEligible(item.service, items) && (
                       <p role="alert" className="text-xs text-danger-fg">
                         {t("pos.extraNeedsService")}
@@ -477,7 +518,7 @@ export function PointOfSale({
             className="pos-receipt-total"
             onSubmit={(e) => {
               e.preventDefault();
-              if (receipt.valid) create.mutate();
+              if (receipt.valid && editingPrice === undefined && !create.isPending) create.mutate();
             }}
           >
             {items.length > 0 && (
@@ -498,13 +539,13 @@ export function PointOfSale({
                       setUsingClientDiscount(false);
                       changed();
                     }}
-                    disabled={create.isPending}
+                    disabled={draftLocked}
                   />
                   <TextField
                     label={t("commerce.discount")}
                     value={discount}
                     inputMode="decimal"
-                    disabled={create.isPending}
+                    disabled={draftLocked}
                     onChange={(e) => {
                       setDiscount(e.target.value);
                       setUsingClientDiscount(false);
@@ -515,7 +556,7 @@ export function PointOfSale({
                     label={`${t("commerce.tip")} (EUR)`}
                     value={tip}
                     inputMode="decimal"
-                    disabled={create.isPending}
+                    disabled={draftLocked}
                     onChange={(e) => {
                       setTip(e.target.value);
                       changed();
@@ -561,16 +602,23 @@ export function PointOfSale({
             )}
             {create.isError && (
               <p role="alert" className="text-sm text-danger-fg">
-                {t("commerce.paymentError")}
+                {t(
+                  uncertain
+                    ? "pos.saleUnconfirmed"
+                    : create.error instanceof ApiError && create.error.code === "version_conflict"
+                      ? "pos.catalogPriceChanged"
+                      : "commerce.paymentError",
+                )}
               </p>
             )}
             <div className="flex gap-2">
               <Button
                 variant="secondary"
                 aria-label={t("pos.clear")}
-                disabled={!items.length || create.isPending}
+                disabled={!items.length || draftLocked}
                 onClick={() => {
                   setItems([]);
+                  setEditingPrice(undefined);
                   setDiscount("0");
                   setTip("0");
                   changed();
@@ -581,10 +629,10 @@ export function PointOfSale({
               <Button
                 type="submit"
                 className="min-w-0 flex-1 whitespace-normal"
-                disabled={!receipt.valid || !online}
+                disabled={!receipt.valid || !online || editingPrice !== undefined}
                 loading={create.isPending}
               >
-                {t("pos.pay")}
+                {t(uncertain ? "pos.retrySale" : "pos.pay")}
               </Button>
             </div>
           </form>

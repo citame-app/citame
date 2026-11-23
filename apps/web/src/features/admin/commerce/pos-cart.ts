@@ -1,4 +1,4 @@
-import type { CreateCheckoutInput, Service } from "@sob/contracts";
+import type { CatalogPriceReview, CreateCheckoutInput, Service } from "@sob/contracts";
 import { inputCents } from "./money";
 
 export interface ReceiptItem {
@@ -7,6 +7,7 @@ export interface ReceiptItem {
   id?: string;
   name: string;
   priceCents: number;
+  catalogPriceReview?: CatalogPriceReview;
   quantity: string;
   available?: number;
   service?: Service;
@@ -26,14 +27,21 @@ export function extraIsEligible(extra: Service, items: ReceiptItem[]) {
   });
 }
 
-/** Only custom lines transmit an amount. Catalog prices and availability are authoritative on the server. */
+export function receiptUnitPrice(item: ReceiptItem): number {
+  return item.catalogPriceReview?.unitAmountCents ?? item.priceCents;
+}
+
+/** Catalog reviews carry the exact price the operator saw before adjusting the item. */
 export function receiptInput(
   items: ReceiptItem[],
   discount: string,
   discountType: "fixed" | "percent",
   tip: string,
 ) {
-  const subtotal = items.reduce((sum, item) => sum + item.priceCents * Number(item.quantity), 0);
+  const subtotal = items.reduce(
+    (sum, item) => sum + receiptUnitPrice(item) * Number(item.quantity),
+    0,
+  );
   const parsedDiscount = inputCents(discount);
   const tipCents = inputCents(tip);
   const discountCents =
@@ -60,24 +68,21 @@ export function receiptInput(
     discountCents <= subtotal &&
     tipCents !== null &&
     subtotal - discountCents + tipCents <= 999999999;
-  const lines: CreateCheckoutInput["lines"] = items.map((item) =>
-    item.kind === "product"
-      ? { kind: "product", productId: item.id, quantity: Number(item.quantity), taxBasisPoints: 0 }
-      : item.kind === "service"
-        ? {
-            kind: "service",
-            serviceId: item.id,
-            quantity: Number(item.quantity),
-            taxBasisPoints: 0,
-          }
-        : {
-            kind: "custom",
-            description: item.name,
-            unitAmountCents: item.priceCents,
-            quantity: Number(item.quantity),
-            taxBasisPoints: 0,
-          },
-  );
+  const lines: CreateCheckoutInput["lines"] = items.map((item) => {
+    const quantity = Number(item.quantity);
+    const common = { quantity, taxBasisPoints: 0 };
+    if (item.kind === "custom")
+      return {
+        ...common,
+        kind: "custom",
+        description: item.name,
+        unitAmountCents: item.priceCents,
+      };
+    const priceReview = item.catalogPriceReview && { catalogPriceReview: item.catalogPriceReview };
+    return item.kind === "product"
+      ? { ...common, ...priceReview, kind: "product", productId: item.id }
+      : { ...common, ...priceReview, kind: "service", serviceId: item.id };
+  });
   return {
     valid,
     subtotal,

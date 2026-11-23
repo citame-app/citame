@@ -24,6 +24,19 @@ test("receipt percentages and tips are exact cents and catalog prices stay off t
     { kind: "product", productId: "a", quantity: 3, taxBasisPoints: 0 },
   ]);
 });
+test("a reviewed unit price changes only the selected catalog line", () => {
+  const catalogPriceReview = {
+    expectedUnitAmountCents: base.priceCents,
+    unitAmountCents: 1210,
+    reason: "Agreed amount",
+  };
+  const cart = receiptInput([{ ...base, catalogPriceReview }], "100", "fixed", "0");
+  expect(cart.subtotal).toBe(3630);
+  expect(cart.valid).toBe(false);
+  expect(receiptInput([{ ...base, catalogPriceReview }], "10", "percent", "0").lines).toEqual([
+    { kind: "product", productId: "a", quantity: 3, taxBasisPoints: 0, catalogPriceReview },
+  ]);
+});
 test("receipt blocks overselling, malformed quantities, excessive discounts and amount overflows", () => {
   for (const quantity of ["", "0", "1.5", "5", "1001"])
     expect(receiptInput([{ ...base, quantity }], "0", "fixed", "0").valid).toBe(false);

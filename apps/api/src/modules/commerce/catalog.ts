@@ -1,11 +1,11 @@
-import type { CreateCheckoutInput } from "@sob/contracts";
-import { service, serviceAddon } from "@sob/db";
+import type { CatalogPriceReview, CreateCheckoutInput } from "@sob/contracts";
+import { type Database, retailProduct, service, serviceAddon } from "@sob/db";
 import { asc, eq, inArray } from "drizzle-orm";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { activeCatalogRows } from "../services/options";
 
-/** Walk-in receipts use current canonical catalog prices, never browser supplied prices.
- * Lock variants and their parents in the same order before validating availability. */
+/** Lock variants and their parents in the same order before validating availability. */
 export async function checkoutServices(tx: Tx, input: CreateCheckoutInput) {
   const ids = [
     ...new Set(
@@ -67,4 +67,32 @@ export async function checkoutServices(tx: Tx, input: CreateCheckoutInput) {
     }
   }
   return catalog;
+}
+
+/** Compare the operator's reviewed price with the locked catalog before accepting an adjustment. */
+export function reviewedCatalogPrice(currentCents: number, review?: CatalogPriceReview): number {
+  if (!review) return currentCents;
+  if (review.expectedUnitAmountCents !== currentCents)
+    throw new DomainError("version_conflict", "Catalog price changed. Review the item again.");
+  return review.unitAmountCents;
+}
+
+/** The current comparator used when an operator explicitly reloads a draft price. */
+export async function checkoutCatalogPrice(db: Database, kind: "service" | "product", id: string) {
+  if (kind === "service") {
+    const rows = await db.select().from(service).where(eq(service.id, id));
+    const [current] = await activeCatalogRows(db, rows);
+    if (
+      current?.active &&
+      !current.deletedAt &&
+      current.currency === "EUR" &&
+      current.priceType === "fixed"
+    )
+      return { unitAmountCents: current.priceCents };
+  } else {
+    const [current] = await db.select().from(retailProduct).where(eq(retailProduct.id, id));
+    if (current?.active && current.resellable && current.currency === "EUR")
+      return { unitAmountCents: current.priceCents };
+  }
+  throw new DomainError("not_found", "Catalog price is no longer available");
 }
