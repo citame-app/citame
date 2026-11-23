@@ -19,6 +19,7 @@ import {
   joinWaitlist,
   listImportedWaitlist,
   listWaitlist,
+  reviewWaitlistOffer,
   setWaitlistPolicy,
 } from "./service";
 
@@ -99,6 +100,11 @@ export function waitlistAdminRoutes(deps: AppDeps) {
         requirePermission(c.get("principal"), "clients");
         requirePermission(c.get("principal"), "editCalendar");
         await next();
+      })
+      .get("/:id/offer-review", async (c) => {
+        const id = parseOrThrow(idSchema, c.req.param("id"));
+        const review = await reviewWaitlistOffer(db, id, c.get("principal"), now());
+        return c.json(review, 200, { "Cache-Control": "private, no-store" });
       })
       .put("/policy", async (c) =>
         c.json(

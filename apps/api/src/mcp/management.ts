@@ -5,11 +5,10 @@ import { z } from "zod";
 import type { AppDeps } from "../app";
 import type { AppEnv, Principal } from "../auth/principal";
 import { DomainError } from "../errors";
-import { parseOrThrow, respondError } from "../http";
+import { respondError } from "../http";
 import { accountingRoutes } from "../modules/accounting/routes";
 import { appointmentsRoutes } from "../modules/appointments/routes";
 import { clientAdminRoutes } from "../modules/clients/admin-routes";
-import { getIntakeRequirements } from "../modules/clients/intake";
 import { commerceAdminRoutes } from "../modules/commerce/routes";
 import { giftCardRoutes } from "../modules/gift-cards/routes";
 import { inventoryRoutes } from "../modules/inventory/routes";
@@ -22,7 +21,6 @@ import { serviceAdminRoutes } from "../modules/services/admin-routes";
 import { settingsAdminRoutes } from "../modules/settings/admin-routes";
 import { staffAdminRoutes } from "../modules/staff/admin-routes";
 import { waitlistAdminRoutes } from "../modules/waitlist/routes";
-import { entryRow, entryView } from "../modules/waitlist/service";
 import { notificationAdminRoutes } from "../notifications/routes";
 import { whatsappAdminRoutes } from "../notifications/whatsapp/routes";
 import { recordMcpWriteRequested } from "./audit";
@@ -66,23 +64,6 @@ export function createManagementRouter(deps: AppDeps) {
     await next();
   });
   return app
-    .get("/waitlist-offer-review/:id", async (c) => {
-      const { db, now = () => new Date() } = deps;
-      const principal = c.get("principal");
-      const entry = await entryRow(db, parseOrThrow(C.idSchema, c.req.param("id")), principal);
-      const view = await entryView(db, entry, principal);
-      const at = now();
-      if (!view.canManage || !view.offer || Date.parse(view.offer.expiresAt) <= +at)
-        throw new DomainError("invalid_state", "This entry has no active offer on your calendar");
-      const intake = await getIntakeRequirements(
-        db,
-        entry.serviceIds,
-        principal,
-        at,
-        entry.clientId,
-      );
-      return c.json({ entry: { ...view, offer: view.offer }, intake });
-    })
     .route("/appointments", appointmentsRoutes(deps))
     .route("/staff", staffAdminRoutes(deps))
     .route("/services", serviceAdminRoutes(deps))
@@ -190,19 +171,6 @@ const giftCard = C.giftCardSchema.omit({ codeRevision: true });
 const commissionPayout = C.commissionPayoutSchema.omit({ reference: true });
 const page = z.number().int().min(1).max(100000).default(1);
 const waitlistEntry = C.waitlistEntrySchema.omit({ offer: true });
-const waitlistOfferReview = z.object({
-  entry: waitlistEntry.extend({ offer: C.waitlistOfferSchema }),
-  intake: C.intakeRequirementsSchema.extend({
-    forms: z.array(
-      C.intakeRequirementsSchema.shape.forms.element.pick({ id: true }).extend({
-        definition: z.object({
-          title: z.string(),
-          requiredAtBooking: z.boolean(),
-        }),
-      }),
-    ),
-  }),
-});
 const waitlistOfferAcceptance = C.waitlistAcceptSchema.omit({
   intakeResponses: true,
   protectionWaiverReason: true,
@@ -553,8 +521,8 @@ export function registerManagementTools(
     read("editCalendar"),
     "GET",
     id,
-    waitlistOfferReview,
-    ({ id }) => ({ path: `/waitlist-offer-review/${id}` }),
+    C.waitlistOfferReviewSchema,
+    ({ id }) => ({ path: `/waitlist/${id}/offer-review` }),
   );
   add(
     "accept_waitlist_offer",

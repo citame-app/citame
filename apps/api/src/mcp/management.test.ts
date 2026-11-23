@@ -413,6 +413,27 @@ test("waitlist offers retain calendar access checks, reviewed terms and safe rep
     staffId: f.anaId,
   });
   expect(intake).toMatchObject({ forms: [], readyResponses: [] });
+  const deskReview = "/admin/waitlist/" + first + "/offer-review";
+  const desk = await json(t.app, deskReview, "GET", undefined, owner.cookie);
+  expect(desk.status).toBe(200);
+  expect(desk.headers.get("cache-control")).toBe("private, no-store");
+  expect(await desk.json()).toEqual(result);
+  const hidden = await json(t.app, deskReview, "GET", undefined, bea.cookie);
+  expect(hidden.status).toBe(403);
+  const atExpiry = createApp({
+    db: t.db,
+    config: t.config,
+    valkey: t.valkey.client,
+    now: () => new Date(entry.offer.expiresAt),
+  });
+  try {
+    const expiredDesk = await json(atExpiry, deskReview, "GET", undefined, owner.cookie);
+    const expiredMcp = await callTool(atExpiry, readToken, "review_waitlist_offer", { id: first });
+    expect(expiredDesk.status).toBe(409);
+    expect(expiredMcp.data?.error?.code).toBe("invalid_state");
+  } finally {
+    await atExpiry.shutdown();
+  }
   const body = {
     version: entry.version,
     offerId: entry.offer.id,
