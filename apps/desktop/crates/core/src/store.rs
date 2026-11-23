@@ -306,6 +306,17 @@ fn upsert(tx: &Transaction, c: &RawChange, alert: bool) -> Result<()> {
                     serde_json::to_string(&a)?
                 ],
             )?;
+            if a.resources
+                .iter()
+                .any(|resource| resource.resource_id.is_none())
+            {
+                // A fresh replica can see name-only allocations before its API is upgraded.
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('booked_resources_cursor', '0')
+                     ON CONFLICT(key) DO NOTHING",
+                    [],
+                )?;
+            }
             calendar_notices::apply(tx, &a.id, notice)?;
         }
         "client" => {

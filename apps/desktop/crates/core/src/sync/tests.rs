@@ -100,22 +100,56 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
 }
 
 #[test]
-fn resource_replay_waits_for_a_server_that_supplies_ids() {
+fn fresh_replica_repairs_name_only_allocations_after_its_api_is_upgraded() {
     let mut store = Store::open_in_memory().unwrap();
-    store.set_meta("booked_resources_cursor", "0").unwrap();
-    store.set_meta("cursor", "1").unwrap();
-    let old = Fake::new(Box::new(applied_all), Box::new(empty_pull));
+    assert_eq!(store.booked_resources_cursor().unwrap(), None);
+    let visit = RawChange {
+        seq: 1,
+        entity: "appointment".into(),
+        id: "visit".into(),
+        op: "upsert".into(),
+        data: Some(json!({
+            "id": "visit", "staffId": "staff", "clientId": "client",
+            "startsAt": "2026-03-10T13:00:00.000Z", "endsAt": "2026-03-10T14:00:00.000Z",
+            "status": "booked", "notes": null, "version": 1, "services": [],
+            "createdAt": "2026-03-09T13:00:00.000Z", "updatedAt": "2026-03-09T13:00:00.000Z",
+            "resources": [{ "name": "Room", "quantity": 1 }]
+        })),
+    };
+    let old_visit = visit.clone();
+    let old = Fake::new(
+        Box::new(applied_all),
+        Box::new(move |since, limit| {
+            let mut page = empty_pull(since, limit)?;
+            page.head_seq = 1;
+            page.next_cursor = 1;
+            if since == 0 {
+                page.changes.push(old_visit.clone());
+            }
+            Ok(page)
+        }),
+    );
     pull_all(&mut store, &old).unwrap();
-    assert_eq!(old.log(), ["pull:1"]);
+    assert_eq!(old.log(), ["pull:0"]);
     assert_eq!(store.booked_resources_cursor().unwrap(), Some(0));
+    assert!(
+        store.appointment("visit").unwrap().unwrap().resources[0]
+            .resource_id
+            .is_none()
+    );
 
+    let mut upgraded_visit = visit;
+    upgraded_visit.data.as_mut().unwrap()["resources"][0]["resourceId"] = json!("room-1");
     let upgraded = Fake::new(
         Box::new(applied_all),
-        Box::new(|since, limit| {
+        Box::new(move |since, limit| {
             let mut page = empty_pull(since, limit)?;
             page.head_seq = 1;
             page.next_cursor = 1;
             page.booked_resource_ids = Some(true);
+            if since == 0 {
+                page.changes.push(upgraded_visit.clone());
+            }
             Ok(page)
         }),
     );
@@ -123,6 +157,12 @@ fn resource_replay_waits_for_a_server_that_supplies_ids() {
     assert_eq!(upgraded.log(), ["pull:1", "pull:0"]);
     assert_eq!(store.cursor().unwrap(), 1);
     assert_eq!(store.booked_resources_cursor().unwrap(), None);
+    assert_eq!(
+        store.appointment("visit").unwrap().unwrap().resources[0]
+            .resource_id
+            .as_deref(),
+        Some("room-1")
+    );
 }
 
 fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
