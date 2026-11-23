@@ -116,7 +116,7 @@ test("reviews a catalog line price and retries the same receipt after a lost res
   await editor.getByRole("button", { name: "Apply price" }).click();
 
   const bodies: string[] = [];
-  const receipts: string[] = [];
+  const receiptIds: string[] = [];
   await page.route("**/api/admin/commerce/checkouts", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     bodies.push(route.request().postData() ?? "");
@@ -124,7 +124,7 @@ test("reviews a catalog line price and retries the same receipt after a lost res
       return route.fulfill({ status: 429, json: { error: { code: "rate_limited" } } });
     const upstream = await route.fetch();
     expect(upstream.status()).toBe(201);
-    receipts.push((await upstream.json()).id);
+    receiptIds.push((await upstream.json()).id);
     if (bodies.length === 1) return route.abort();
     return route.fulfill({ response: upstream });
   });
@@ -138,10 +138,13 @@ test("reviews a catalog line price and retries the same receipt after a lost res
   await expect(retry).toBeEnabled();
   await expect(edit).toBeDisabled();
   await retry.click();
-  await expect(page.getByRole("region", { name: "Receipt", exact: true })).toBeVisible();
+  const receipt = page.getByRole("dialog", { name: "Receipt", exact: true });
+  await expect(receipt.getByText("Awaiting payment", { exact: true })).toBeVisible();
   expect(bodies).toHaveLength(3);
   expect(new Set(bodies).size).toBe(1);
-  expect(receipts[1]).toBe(receipts[0]);
+  expect(receiptIds).toHaveLength(2);
+  expect(receiptIds[1]).toBe(receiptIds[0]);
+  await expect(receipt.getByText(receiptIds[0] ?? "", { exact: true })).toBeVisible();
   expect(JSON.parse(bodies[0] ?? "").lines[0].catalogPriceReview).toEqual({
     expectedUnitAmountCents: 2000,
     unitAmountCents: 1890,
