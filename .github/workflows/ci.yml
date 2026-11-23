@@ -173,7 +173,8 @@ jobs:
         env:
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/recurring
       - name: Calendar, live updates and imported balances on the isolated fixture
-        run: bun run --cwd apps/web e2e --output test-results/calendar
+        # Reconciliation consumes deliberately pending fixture rows. Rerun the job for a fresh database.
+        run: bun run --cwd apps/web e2e --retries=0 --output test-results/calendar
         env:
           E2E_CALENDAR_FIXTURE: "true"
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/calendar

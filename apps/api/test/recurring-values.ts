@@ -1,4 +1,6 @@
 /** Public test fixtures. None of these values is a deployment credential or bank reference. */
+export const CALENDAR_FIXTURE_NOW = "2026-11-23T12:00:00Z";
+
 export const RECURRING_FIXTURE = {
   baseURL: "http://localhost:4273",
   apiPort: 4300,
