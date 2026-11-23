@@ -132,6 +132,36 @@ describe("loadConfig", () => {
     );
   });
 
+  test("the recurring payment key file is only required when automatic billing is enabled", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sob-billing-key-"));
+    const file = join(dir, "billing-key");
+    const key = Buffer.alloc(32, 1).toString("base64");
+    const env = {
+      BETTER_AUTH_SECRET: SECRET,
+      PAYMENT_PROVIDER: "redsys",
+      REDSYS_MERCHANT_CODE: "999008881",
+      REDSYS_TERMINAL: "1",
+      REDSYS_SECRET_KEY: "synthetic-local-redsys-test-key",
+      PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: file,
+    };
+    try {
+      expect(loadConfig(env).payments).toMatchObject({
+        provider: "redsys",
+        recurringEnabled: false,
+        tokenEncryptionKey: null,
+      });
+      const enabled = { ...env, REDSYS_RECURRING_ENABLED: "true" };
+      expect(() => loadConfig(enabled)).toThrow(/PAYMENT_TOKEN_ENCRYPTION_KEY_FILE/);
+      expect(
+        loadConfig({ ...enabled, PAYMENT_TOKEN_ENCRYPTION_KEY: key }).payments.tokenEncryptionKey,
+      ).toBe(key);
+      writeFileSync(file, `${key}\n`, { mode: 0o600 });
+      expect(loadConfig(enabled).payments.tokenEncryptionKey).toBe(key);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("metrics token and shutdown grace are optional and validated", () => {
     const base = { BETTER_AUTH_SECRET: SECRET };
     expect(loadConfig(base).metricsToken).toBeUndefined();

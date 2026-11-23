@@ -131,11 +131,12 @@ test("production smoke disables inherited automatic bank billing", async () => {
   );
 });
 
-test.each(["", "true"])(
-  "production Compose keeps recurring billing configuration in the API (opt-in %j)",
-  async (optIn) => {
-    const key = optIn ? "synthetic-test-token-key" : "";
-    const keyFile = optIn ? "/run/secrets/test-token-key" : "";
+test.each(["disabled", "plain", "file"] as const)(
+  "production Compose keeps recurring billing configuration in the API (%s)",
+  async (mode) => {
+    const optIn = mode !== "disabled";
+    const key = mode === "plain" ? "synthetic-test-token-key" : "";
+    const keyFile = mode === "file" ? "/run/secrets/test-token-key" : "";
     const child = Bun.spawn(
       [
         "docker",
@@ -158,7 +159,7 @@ test.each(["", "true"])(
           PUBLIC_URL: "https://compose.example",
           PAYMENT_PROVIDER: optIn ? "redsys" : "none",
           REDSYS_SECRET_KEY: optIn ? "synthetic-test-redsys-key" : "",
-          REDSYS_RECURRING_ENABLED: optIn,
+          REDSYS_RECURRING_ENABLED: optIn ? "true" : "",
           PAYMENT_TOKEN_ENCRYPTION_KEY: key,
           PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: keyFile,
         },
@@ -174,7 +175,7 @@ test.each(["", "true"])(
     expect(exitCode, stderr).toBe(0);
     const { services } = JSON.parse(stdout);
     expect(services.api.environment).toMatchObject({
-      REDSYS_RECURRING_ENABLED: optIn || "false",
+      REDSYS_RECURRING_ENABLED: String(optIn),
       PAYMENT_TOKEN_ENCRYPTION_KEY: key,
       PAYMENT_TOKEN_ENCRYPTION_KEY_FILE: keyFile,
     });

@@ -250,10 +250,17 @@ const FILE_BACKED = [
   "TWILIO_AUTH_TOKEN",
   "METRICS_TOKEN",
   "REDSYS_SECRET_KEY",
-  "PAYMENT_TOKEN_ENCRYPTION_KEY",
   "META_WHATSAPP_APP_SECRET",
   "META_WHATSAPP_VERIFY_TOKEN",
 ] as const;
+
+function readSecretFile(name: string, path: string) {
+  try {
+    return readFileSync(path, "utf8").replace(/\r?\n+$/, "");
+  } catch {
+    throw new Error(`Invalid environment configuration:\n  - ${name}_FILE: cannot read ${path}`);
+  }
+}
 
 /** A plain variable wins; otherwise the file's content (minus the trailing newline) is used. */
 function withSecretFiles(env: Record<string, string | undefined>) {
@@ -261,11 +268,7 @@ function withSecretFiles(env: Record<string, string | undefined>) {
   for (const name of FILE_BACKED) {
     const path = env[`${name}_FILE`];
     if (env[name] || !path) continue;
-    try {
-      resolved[name] = readFileSync(path, "utf8").replace(/\r?\n+$/, "");
-    } catch {
-      throw new Error(`Invalid environment configuration:\n  - ${name}_FILE: cannot read ${path}`);
-    }
+    resolved[name] = readSecretFile(name, path);
   }
   return resolved;
 }
@@ -338,10 +341,13 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
   let tokenEncryptionKey: string | null = null;
   if (e.REDSYS_RECURRING_ENABLED) {
     if (e.PAYMENT_PROVIDER !== "redsys") throw new Error("Recurring payments requires Redsys");
-    if (!e.PAYMENT_TOKEN_ENCRYPTION_KEY)
-      throw new Error("PAYMENT_TOKEN_ENCRYPTION_KEY is required for recurring payments");
-    paymentEncryptionKey(e.PAYMENT_TOKEN_ENCRYPTION_KEY);
-    tokenEncryptionKey = e.PAYMENT_TOKEN_ENCRYPTION_KEY;
+    const keyFile = input.PAYMENT_TOKEN_ENCRYPTION_KEY_FILE;
+    const key =
+      e.PAYMENT_TOKEN_ENCRYPTION_KEY ||
+      (keyFile ? readSecretFile("PAYMENT_TOKEN_ENCRYPTION_KEY", keyFile) : undefined);
+    if (!key) throw new Error("PAYMENT_TOKEN_ENCRYPTION_KEY is required for recurring payments");
+    paymentEncryptionKey(key);
+    tokenEncryptionKey = key;
   }
   let redsys: RedsysConfig | null = null;
   if (e.PAYMENT_PROVIDER === "redsys") {
