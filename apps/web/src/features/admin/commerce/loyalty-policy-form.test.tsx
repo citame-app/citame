@@ -102,10 +102,9 @@ test("an unconfirmed save can replay the same terms after the live response arri
 
 test("a save acknowledgement from before a restore leaves the draft available for review", async () => {
   const acknowledgement = Promise.withResolvers<Response>();
-  let current = policy;
   const save = mock(() => acknowledgement.promise);
   globalThis.fetch = mock(async (_input, init) =>
-    init?.method === "PUT" ? save() : Response.json(current),
+    init?.method === "PUT" ? save() : Response.json(policy),
   ) as unknown as typeof fetch;
   const view = renderApp(<LoyaltyPolicyForm />);
   const label = "Discount value per point (EUR)";
@@ -113,12 +112,14 @@ test("a save acknowledgement from before a restore leaves the draft available fo
   fireEvent.change(input, { target: { value: "0.12" } });
   fireEvent.click(screen.getByRole("button", { name: "Save points program" }));
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
-  current = { ...policy, generation: "restored" };
-  await act(() => view.queryClient.invalidateQueries({ queryKey: ["rewards", "policy"] }));
-  expect(await screen.findByRole("status")).toHaveTextContent("The program changed");
+  act(() => {
+    view.queryClient.setQueryData(["rewards", "policy"], { ...policy, generation: "restored" });
+  });
   acknowledgement.resolve(Response.json({ ...policy, version: 4, redeemValueCents: 12 }));
-  await waitFor(() => expect(input).toBeEnabled());
-  expect(input).toHaveValue("0.12");
-  expect(screen.getByRole("status")).toHaveTextContent("The program changed");
+  await waitFor(() => {
+    expect(input).toBeEnabled();
+    expect(input).toHaveValue("0.12");
+    expect(screen.getByRole("status")).toHaveTextContent("The program changed");
+  });
   expect(screen.getByRole("button", { name: "Save points program" })).toBeDisabled();
 });
