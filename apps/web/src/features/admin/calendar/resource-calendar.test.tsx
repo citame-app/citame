@@ -91,7 +91,7 @@ test("a hold expires relative to the server snapshot even with a different brows
   };
   const { unmount } = renderApp(<ResourceCalendar calendar={calendar} onOpen={() => {}} />);
   expect(screen.getByText("1 held for waitlist")).toBeInTheDocument();
-  await waitFor(() => expect(screen.queryByText("1 held for waitlist")).toBeNull());
+  await waitFor(() => expect(Boolean(screen.queryByText("1 held for waitlist"))).toBe(false));
   expect(screen.getByText("0/1 reserved")).toBeInTheDocument();
   unmount();
   renderApp(<ResourceCalendar calendar={calendar} onOpen={() => {}} />);
