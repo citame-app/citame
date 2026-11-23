@@ -1510,7 +1510,13 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
         let mut store = Store::open(&path).unwrap();
         assert!(
             !store
-                .cache_resource_day(date, INITIAL_GENERATION, &snapshot, || true)
+                .cache_resource_day(
+                    date,
+                    INITIAL_GENERATION,
+                    store.resource_day_revision().unwrap(),
+                    &snapshot,
+                    None
+                )
                 .unwrap()
         );
         store
@@ -1518,7 +1524,13 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
             .unwrap();
         assert!(
             store
-                .cache_resource_day(date, INITIAL_GENERATION, &snapshot, || true)
+                .cache_resource_day(
+                    date,
+                    INITIAL_GENERATION,
+                    store.resource_day_revision().unwrap(),
+                    &snapshot,
+                    None
+                )
                 .unwrap()
         );
     }
@@ -1538,4 +1550,81 @@ fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
         .apply_visibility_scopes(None, Some("all"), INITIAL_GENERATION)
         .unwrap();
     assert!(store.resource_day(date).unwrap().is_none());
+}
+
+#[test]
+fn resource_day_cache_fences_older_replies_denial_and_signed_out_sessions() {
+    use crate::resource_calendar::{CachedResourceDay, ResourceDay, ResourceOccupancy};
+    use chrono::{Duration, Utc};
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .apply_visibility_scopes(None, Some("all"), INITIAL_GENERATION)
+        .unwrap();
+    let date = "2026-03-09".parse().unwrap();
+    let (from, to) = crate::calendar::local_day_range(chrono_tz::UTC, date);
+    let now = Utc::now();
+    let snapshot = |time| {
+        CachedResourceDay::new(
+            ResourceDay {
+                from,
+                to,
+                appointments: Vec::new(),
+                resource_occupancy: Some(ResourceOccupancy {
+                    captured_at: time,
+                    pools: Vec::new(),
+                }),
+            },
+            now,
+        )
+    };
+    let older = snapshot(now - Duration::minutes(1));
+    let newer = snapshot(now);
+    let revision = store.resource_day_revision().unwrap();
+    assert!(
+        store
+            .cache_resource_day(date, INITIAL_GENERATION, revision, &newer, None)
+            .unwrap()
+    );
+    assert!(
+        !store
+            .cache_resource_day(date, INITIAL_GENERATION, revision, &older, None)
+            .unwrap()
+    );
+    assert_eq!(
+        store
+            .resource_day(date)
+            .unwrap()
+            .unwrap()
+            .occupancy()
+            .unwrap()
+            .captured_at,
+        now
+    );
+    store.deny_resource_days(INITIAL_GENERATION).unwrap();
+    assert!(store.resource_day(date).unwrap().is_none());
+    assert!(
+        !store
+            .cache_resource_day(date, INITIAL_GENERATION, revision, &newer, None)
+            .unwrap()
+    );
+    let after_denial = store.resource_day_revision().unwrap();
+    let signed_out = std::sync::Arc::new(std::sync::RwLock::new(None));
+    assert!(
+        !store
+            .cache_resource_day(
+                date,
+                INITIAL_GENERATION,
+                after_denial,
+                &newer,
+                Some(&signed_out)
+            )
+            .unwrap()
+    );
+    assert!(store.resource_day(date).unwrap().is_none());
+    assert!(
+        store
+            .cache_resource_day(date, INITIAL_GENERATION, after_denial, &newer, None)
+            .unwrap()
+    );
+    assert!(store.resource_day(date).unwrap().is_some());
 }

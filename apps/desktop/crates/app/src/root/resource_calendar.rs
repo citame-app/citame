@@ -498,10 +498,11 @@ mod tests {
                 now,
             );
             let generation = root.svc.store.verified_reviewed_generation().unwrap();
+            let revision = root.svc.store.resource_day_revision().unwrap();
             assert!(
                 root.svc
                     .store
-                    .cache_resource_day(date, &generation, &snapshot, || true)
+                    .cache_resource_day(date, &generation, revision, &snapshot, None)
                     .unwrap()
             );
             root.set_calendar_mode(CalendarMode::Resources, cx);

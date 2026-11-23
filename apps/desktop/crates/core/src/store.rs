@@ -1402,9 +1402,10 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%' OR key LIKE 'resource_day:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
+        Self::invalidate_resource_days(tx)?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
         waitlist_cache::invalidate_visibility(tx)?;
@@ -1449,7 +1450,7 @@ impl Store {
         } else {
             waitlist_cache::invalidate_visibility(&tx)?;
             if changes.iter().any(|(key, _)| *key == "calendar_scope") {
-                tx.execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+                Self::invalidate_resource_days(&tx)?;
             }
         }
         for (key, scope) in changes {
@@ -1470,6 +1471,7 @@ impl Store {
         self.read_snapshot(|store| {
             if store.get_meta("calendar_scope")?.as_deref() != Some("all")
                 || store.get_meta(REBUILD_KEY)?.is_some()
+                || store.get_meta("resource_day_denied")?.is_some()
             {
                 return Ok(None);
             }
@@ -1480,43 +1482,82 @@ impl Store {
         })
     }
 
+    fn resource_day_revision_at(conn: &Connection) -> Result<i64> {
+        Ok(Self::meta_at(conn, "resource_day_revision")?
+            .and_then(|revision| revision.parse().ok())
+            .unwrap_or(0))
+    }
+
+    pub fn resource_day_revision(&self) -> Result<i64> {
+        Self::resource_day_revision_at(&self.conn)
+    }
+
     pub fn cache_resource_day(
         &mut self,
         date: chrono::NaiveDate,
         generation: &str,
+        revision: i64,
         snapshot: &crate::resource_calendar::CachedResourceDay,
-        session_active: impl FnOnce() -> bool,
+        session: Option<&crate::auth::SessionHandle>,
     ) -> Result<bool> {
-        self.write_transaction(|store| {
-            Self::ensure_generation(&store.conn, Some(generation))?;
-            if !session_active() || store.get_meta("calendar_scope")?.as_deref() != Some("all")
-                || store.get_meta(REBUILD_KEY)?.is_some()
-            {
-                return Ok(false);
-            }
-            store.set_meta(
-                &format!("resource_day:{date}"),
-                &serde_json::to_string(snapshot)?,
-            )?;
-            store.conn.execute(
-                "DELETE FROM meta WHERE key LIKE 'resource_day:%' AND key IN (
-                    SELECT key FROM meta WHERE key LIKE 'resource_day:%'
-                    ORDER BY julianday(json_extract(value, '$.receivedAt')) DESC, key DESC LIMIT -1 OFFSET 14
-                )",
-                [],
-            )?;
-            Ok(true)
-        })
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(generation))?;
+        if Self::resource_day_revision_at(&tx)? != revision
+            || Self::meta_at(&tx, "calendar_scope")?.as_deref() != Some("all")
+            || Self::meta_at(&tx, REBUILD_KEY)?.is_some()
+        {
+            return Ok(false);
+        }
+        let key = format!("resource_day:{date}");
+        if let Some(raw) = Self::meta_at(&tx, &key)?
+            && let Ok(previous) =
+                serde_json::from_str::<crate::resource_calendar::CachedResourceDay>(&raw)
+            && previous
+                .occupancy()
+                .zip(snapshot.occupancy())
+                .is_some_and(|(old, new)| old.captured_at > new.captured_at)
+        {
+            return Ok(false);
+        }
+        let raw = serde_json::to_string(snapshot)?;
+        // Acquire this only after SQLite has granted the write lock. Sign-out and commit then
+        // cannot cross, and the UI never waits for SQLite's busy timeout while signing out.
+        let active = session.map(|handle| handle.read().expect("session lock"));
+        if active.as_deref().is_some_and(Option::is_none) {
+            return Ok(false);
+        }
+        Self::set_meta_at(&tx, &key, &raw)?;
+        tx.execute("DELETE FROM meta WHERE key = 'resource_day_denied'", [])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key LIKE 'resource_day:%' AND key IN (
+                SELECT key FROM meta WHERE key LIKE 'resource_day:%'
+                ORDER BY julianday(json_extract(value, '$.receivedAt')) DESC, key DESC LIMIT -1 OFFSET 14
+            )",
+            [],
+        )?;
+        tx.commit()?;
+        drop(active);
+        Ok(true)
     }
 
-    pub(crate) fn clear_resource_days(&mut self, generation: &str) -> Result<()> {
-        self.write_transaction(|store| {
-            Self::ensure_generation(&store.conn, Some(generation))?;
-            store
-                .conn
-                .execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
-            Ok(())
-        })
+    fn invalidate_resource_days(tx: &Transaction) -> Result<()> {
+        let revision = Self::resource_day_revision_at(tx)?.saturating_add(1);
+        Self::set_meta_at(tx, "resource_day_revision", &revision.to_string())?;
+        Self::set_meta_at(tx, "resource_day_denied", "1")?;
+        tx.execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+        Ok(())
+    }
+
+    pub(crate) fn deny_resource_days(&mut self, generation: &str) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(generation))?;
+        Self::invalidate_resource_days(&tx)?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn booking_notice_head(&self) -> Result<i64> {

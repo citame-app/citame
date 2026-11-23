@@ -213,25 +213,28 @@ pub fn refresh(
     generation: &str,
 ) -> Refresh {
     const RETRY: Duration = Duration::from_secs(15);
+    let Ok(mut store) = Store::open(replica) else {
+        return Refresh::RetryAfter(RETRY);
+    };
+    let Ok(revision) = store.resource_day_revision() else {
+        return Refresh::RetryAfter(RETRY);
+    };
     match transport.resource_day(date, timezone) {
         Ok(day) if day.resource_occupancy.is_some() => {
             let snapshot = CachedResourceDay::new(day, Utc::now());
-            let Ok(mut store) = Store::open(replica) else {
-                return Refresh::RetryAfter(RETRY);
-            };
-            // Check the session after acquiring the SQLite write lock.
-            match store.cache_resource_day(date, generation, &snapshot, || {
-                session.read().expect("session lock").is_some()
-            }) {
+            match store.cache_resource_day(date, generation, revision, &snapshot, Some(session)) {
                 Ok(true) => Refresh::Loaded(snapshot),
-                Ok(false) => Refresh::Unavailable,
+                Ok(false) => match store.resource_day(date) {
+                    Ok(Some(saved)) if saved.matches(date, timezone) => Refresh::Loaded(saved),
+                    _ => Refresh::Unavailable,
+                },
                 Err(_) => Refresh::RetryAfter(RETRY),
             }
         }
         Ok(_) => Refresh::Unavailable,
         Err(TransportError::Forbidden(_) | TransportError::Unauthorized) => {
-            if let Ok(mut store) = Store::open(replica) {
-                let _ = store.clear_resource_days(generation);
+            if let Err(error) = store.deny_resource_days(generation) {
+                eprintln!("could not invalidate the resource calendar cache: {error}");
             }
             Refresh::Denied
         }
