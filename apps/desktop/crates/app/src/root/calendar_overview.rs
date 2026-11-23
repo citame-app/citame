@@ -9,10 +9,17 @@ pub(super) enum CalendarMode {
     Week,
     Month,
     List,
+    Resources,
 }
 
 impl CalendarMode {
-    pub(super) const ALL: [Self; 4] = [Self::Day, Self::Week, Self::Month, Self::List];
+    pub(super) const ALL: [Self; 5] = [
+        Self::Day,
+        Self::Week,
+        Self::Month,
+        Self::List,
+        Self::Resources,
+    ];
 
     pub(super) fn is_overview(self) -> bool {
         matches!(self, Self::Month | Self::List)
@@ -24,6 +31,7 @@ impl CalendarMode {
             Self::Week => "week",
             Self::Month => "month",
             Self::List => "list",
+            Self::Resources => "resources",
         }
     }
 
@@ -33,6 +41,7 @@ impl CalendarMode {
             Self::Week => "view-week",
             Self::Month => "view-month",
             Self::List => "view-list",
+            Self::Resources => "view-resources",
         }
     }
 
@@ -42,6 +51,7 @@ impl CalendarMode {
             Self::Week => Key::ViewWeek,
             Self::Month => Key::ViewMonth,
             Self::List => Key::ViewList,
+            Self::Resources => Key::ViewResources,
         }
     }
 
@@ -50,7 +60,7 @@ impl CalendarMode {
             Self::Month if direction < 0 => date.checked_sub_months(Months::new(1)),
             Self::Month => date.checked_add_months(Months::new(1)),
             Self::Week | Self::List => date.checked_add_signed(Span::days(7 * direction)),
-            Self::Day => date.checked_add_signed(Span::days(direction)),
+            Self::Day | Self::Resources => date.checked_add_signed(Span::days(direction)),
         }
         .unwrap_or(date)
     }
@@ -62,7 +72,7 @@ impl CalendarMode {
         week_layout: WeekLayout,
     ) -> sob_core::error::Result<Vec<DayView>> {
         match self {
-            Self::Day => Ok(Vec::new()),
+            Self::Day | Self::Resources => Ok(Vec::new()),
             Self::Week => {
                 let first = week_start(date)
                     .ok_or_else(|| CoreError::Invalid("Invalid calendar week".into()))?;

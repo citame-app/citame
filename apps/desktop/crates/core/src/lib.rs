@@ -26,6 +26,7 @@ pub mod promotions;
 pub mod purchase_orders;
 pub mod receipt_print;
 pub mod reports;
+pub mod resource_calendar;
 pub mod resource_pools;
 pub mod reviews;
 pub mod runner;

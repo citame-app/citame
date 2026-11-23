@@ -1484,3 +1484,57 @@ fn visit_group_reads_only_related_cached_appointments_with_current_outcomes() {
             .is_empty()
     );
 }
+
+#[test]
+fn resource_day_cache_reopens_and_drops_snapshots_when_scope_changes() {
+    use crate::resource_calendar::{CachedResourceDay, ResourceDay, ResourceOccupancy};
+    use chrono::Utc;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("resource-cache.db");
+    let date = "2026-03-09".parse().unwrap();
+    let (from, to) = crate::calendar::local_day_range(chrono_tz::UTC, date);
+    let now = Utc::now();
+    let snapshot = CachedResourceDay::new(
+        ResourceDay {
+            from,
+            to,
+            resource_occupancy: Some(ResourceOccupancy {
+                captured_at: now,
+                pools: Vec::new(),
+            }),
+        },
+        now,
+    );
+    {
+        let mut store = Store::open(&path).unwrap();
+        assert!(
+            !store
+                .cache_resource_day(date, INITIAL_GENERATION, &snapshot)
+                .unwrap()
+        );
+        store
+            .apply_visibility_scopes(None, Some("all"), INITIAL_GENERATION)
+            .unwrap();
+        assert!(
+            store
+                .cache_resource_day(date, INITIAL_GENERATION, &snapshot)
+                .unwrap()
+        );
+    }
+    let mut store = Store::open(&path).unwrap();
+    assert!(
+        store
+            .resource_day(date)
+            .unwrap()
+            .unwrap()
+            .matches(date, chrono_tz::UTC)
+    );
+    store
+        .apply_visibility_scopes(None, Some("none"), INITIAL_GENERATION)
+        .unwrap();
+    assert!(store.resource_day(date).unwrap().is_none());
+    store
+        .apply_visibility_scopes(None, Some("all"), INITIAL_GENERATION)
+        .unwrap();
+    assert!(store.resource_day(date).unwrap().is_none());
+}

@@ -55,7 +55,7 @@ const loopbackOrigin = z
   });
 const calendarTarget = z.object({
   date: z.iso.date(),
-  view: z.enum(["day", "week", "month", "list"]),
+  view: z.enum(["day", "week", "month", "list", "resources"]),
   staff: z
     .string()
     .min(36)

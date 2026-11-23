@@ -1402,7 +1402,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%' OR key LIKE 'resource_day:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
@@ -1448,6 +1448,9 @@ impl Store {
             Self::clear_replica(&tx)?;
         } else {
             waitlist_cache::invalidate_visibility(&tx)?;
+            if changes.iter().any(|(key, _)| *key == "calendar_scope") {
+                tx.execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+            }
         }
         for (key, scope) in changes {
             tx.execute(
@@ -1458,6 +1461,57 @@ impl Store {
         }
         tx.commit()?;
         Ok(restart)
+    }
+
+    pub fn resource_day(
+        &self,
+        date: chrono::NaiveDate,
+    ) -> Result<Option<crate::resource_calendar::CachedResourceDay>> {
+        self.read_snapshot(|store| {
+            if store.get_meta("calendar_scope")?.as_deref() != Some("all")
+                || store.get_meta(REBUILD_KEY)?.is_some()
+            {
+                return Ok(None);
+            }
+            store
+                .get_meta(&format!("resource_day:{date}"))?
+                .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
+                .transpose()
+        })
+    }
+
+    pub fn cache_resource_day(
+        &mut self,
+        date: chrono::NaiveDate,
+        generation: &str,
+        snapshot: &crate::resource_calendar::CachedResourceDay,
+    ) -> Result<bool> {
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            if store.get_meta("calendar_scope")?.as_deref() != Some("all")
+                || store.get_meta(REBUILD_KEY)?.is_some()
+            {
+                return Ok(false);
+            }
+            store.set_meta(
+                &format!("resource_day:{date}"),
+                &serde_json::to_string(snapshot)?,
+            )?;
+            store.conn.execute(
+                "DELETE FROM meta WHERE key LIKE 'resource_day:%' AND key IN (
+                    SELECT key FROM meta WHERE key LIKE 'resource_day:%'
+                    ORDER BY julianday(json_extract(value, '$.receivedAt')) DESC, key DESC LIMIT -1 OFFSET 14
+                )",
+                [],
+            )?;
+            Ok(true)
+        })
+    }
+
+    pub fn clear_resource_days(&self) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+        Ok(())
     }
 
     pub fn booking_notice_head(&self) -> Result<i64> {

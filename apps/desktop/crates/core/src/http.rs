@@ -1171,6 +1171,36 @@ impl HttpTransport {
         read_response(response, false)
     }
 
+    pub fn resource_day(
+        &self,
+        date: chrono::NaiveDate,
+        timezone: chrono_tz::Tz,
+    ) -> Result<crate::resource_calendar::ResourceDay, TransportError> {
+        let (from, to) = crate::calendar::local_day_range(timezone, date);
+        if from >= to {
+            return Err(TransportError::BadRequest(
+                "Choose a valid local day".into(),
+            ));
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("from", &from.to_rfc3339())
+            .append_pair("to", &to.to_rfc3339())
+            .append_pair("resourceOccupancy", "1")
+            .finish();
+        let response = self.get(
+            &self.agent,
+            &format!("/appointments/calendar?{query}"),
+            None,
+        )?;
+        let day: crate::resource_calendar::ResourceDay = read_response(response, false)?;
+        if day.from != from || day.to != to {
+            return Err(TransportError::Server(
+                "Unexpected resource calendar range".into(),
+            ));
+        }
+        Ok(day)
+    }
+
     pub fn unpaid_appointments(
         &self,
         date: chrono::NaiveDate,
