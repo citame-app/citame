@@ -34,7 +34,9 @@ export const availabilityQuery = (params: AvailabilityParams) =>
       params.serviceIds.join(","),
       params.staffId ?? "any",
       params.appointmentId ?? "new",
+      params.combinationId ?? null,
     ],
+    enabled: params.serviceIds.length > 0,
     queryFn: ({ signal }) => api().availability(params, signal),
     staleTime: 30_000,
   });

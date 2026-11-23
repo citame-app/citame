@@ -23,6 +23,7 @@ export function BookingFrame({
   children,
   summary,
   teamAccount = false,
+  combinationUnavailable = false,
 }: {
   step: BookingStep;
   search: BookingSearch;
@@ -31,6 +32,7 @@ export function BookingFrame({
   children: ReactNode;
   summary: ReactNode;
   teamAccount?: boolean;
+  combinationUnavailable?: boolean;
 }) {
   const { t } = useI18n();
   const current = ORDER.indexOf(step);
@@ -79,7 +81,16 @@ export function BookingFrame({
                 </Link>
               </aside>
             )}
-            {children}
+            {combinationUnavailable ? (
+              <div className="space-y-3 rounded-lg border border-line p-4">
+                <p role="alert">{t("combinations.unavailable")}</p>
+                <Link to="/book" search={{}} className={buttonClasses({ variant: "secondary" })}>
+                  {t("booking.professional.none.back")}
+                </Link>
+              </div>
+            ) : (
+              children
+            )}
           </section>
           {summary}
         </div>

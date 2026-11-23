@@ -10,6 +10,7 @@ import { priceLabel, totalPriceLabel } from "./service-price";
 
 export interface BookingSummaryProps {
   services: Service[];
+  combinationName?: string;
   totals: BookingTotals;
   staffName?: string;
   slot?: { startsAt: string };
@@ -28,6 +29,7 @@ export interface BookingSummaryProps {
  */
 export function BookingSummary({
   services,
+  combinationName,
   totals,
   staffName,
   slot,
@@ -92,6 +94,7 @@ export function BookingSummary({
             !expanded && "max-lg:hidden",
           )}
         >
+          {combinationName && <p className="pb-2 font-semibold wrap-anywhere">{combinationName}</p>}
           {services.length === 0 ? (
             <p className="pb-3 text-muted">{t("booking.summary.empty")}</p>
           ) : (

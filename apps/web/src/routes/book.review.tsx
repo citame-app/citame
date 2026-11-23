@@ -7,6 +7,7 @@ import { buttonClasses } from "~/components/ui/button";
 import { ErrorState } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { InlineAuth } from "~/features/booking/auth-panel";
+import { matchesFixedCombinationQuote } from "~/features/booking/fixed-combination";
 import { BookingFrame } from "~/features/booking/frame";
 import { createBookingIntent } from "~/features/booking/intent";
 import { BookingPeakPrice, useBookingPeakPrice } from "~/features/booking/peak-price";
@@ -100,18 +101,25 @@ function SingleReviewStep() {
   const peak = useBookingPeakPrice(
     selectedServices.map((service) => service.id),
     search.slot,
+    false,
+    search.combinationId,
   );
-  const peakReady = peak.isSuccess && !peak.isFetching;
+  const combination = peak.data?.combination;
+  const matchesCombination =
+    !search.combinationId ||
+    matchesFixedCombinationQuote(booking.combination, selectedServices, peak.data);
+  const peakReady = peak.isSuccess && !peak.isFetching && matchesCombination;
   const promotion = useBookingPromotion(
     isClient && peakReady && !finalPricePending && quotes && search.slot && search.slotStaff
       ? {
           staffId: search.slotStaff,
           serviceIds: search.services,
           serviceQuotes: quotes,
+          ...(combination ? { combination } : {}),
           startsAt: search.slot,
         }
       : null,
-    JSON.stringify([session?.user.id, peak.data?.review]),
+    JSON.stringify([session?.user.id, peak.data?.review, combination?.reviewHash]),
   );
   const surchargeCents =
     peak.data?.services.reduce((sum, item) => sum + item.surchargeCents, 0) ?? 0;
@@ -153,6 +161,7 @@ function SingleReviewStep() {
       const request = {
         ...intake.payload,
         ...(peak.data?.review ? { peakPriceReview: peak.data.review } : {}),
+        ...(combination ? { combination } : {}),
         ...(priceTerms.required ? { priceTermsAccepted: true } : {}),
         ...(variablePrice && policy.data?.enabled
           ? { protectionAcceptedDepositCents: policy.data.depositValue }
@@ -233,8 +242,13 @@ function SingleReviewStep() {
         void queryClient.invalidateQueries({ queryKey: ["services"] });
         void queryClient.invalidateQueries({ queryKey: ["staff"] });
         void queryClient.invalidateQueries({ queryKey: ["availability"] });
+        void queryClient.invalidateQueries({ queryKey: ["combinations"] });
         toast.error(t("booking.review.catalogChanged"));
-        booking.go("services", { services: search.services }, { replace: true });
+        booking.go(
+          "services",
+          search.combinationId ? { services: [] } : { services: search.services },
+          { replace: true },
+        );
         return;
       }
       if (error instanceof ApiError && error.code === "invalid_state") {
@@ -290,6 +304,7 @@ function SingleReviewStep() {
   return (
     <BookingFrame
       teamAccount={booking.teamAccount}
+      combinationUnavailable={booking.combinationUnavailable}
       step="review"
       search={search}
       title={t("booking.review.title")}
@@ -297,6 +312,7 @@ function SingleReviewStep() {
       summary={
         <BookingSummary
           services={selectedServices}
+          combinationName={booking.combination?.name}
           revealHiddenPrices
           totals={{ ...totals, priceCents: reviewTotal }}
           staffName={booking.staffName}
@@ -358,7 +374,22 @@ function SingleReviewStep() {
         {confirm.error instanceof ApiError && confirm.error.code === "peak_price_changed" && (
           <p role="alert">{t("bookingPeak.changed")}</p>
         )}
-        <BookingPeakPrice quote={peak} currency={selectedServices[0]?.currency ?? "EUR"} />
+        {peak.isSuccess && !peak.isFetching && !matchesCombination && (
+          <div className="space-y-3 rounded-lg border border-line p-4">
+            <p role="alert">{t("combinations.priceChanged")}</p>
+            <Link
+              to="/book"
+              search={{}}
+              className={buttonClasses({ variant: "secondary" })}
+              onClick={() => void queryClient.invalidateQueries({ queryKey: ["combinations"] })}
+            >
+              {t("booking.professional.none.back")}
+            </Link>
+          </div>
+        )}
+        {(matchesCombination || peak.isError) && (
+          <BookingPeakPrice quote={peak} currency={selectedServices[0]?.currency ?? "EUR"} />
+        )}
         <PriceTermsConsent state={priceTerms} disabled={confirm.isPending || uncertain} />
         {isClient && finalPricePending && (
           <p className="text-sm text-muted">{t("services.price.promotionLater")}</p>

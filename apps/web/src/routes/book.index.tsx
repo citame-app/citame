@@ -25,6 +25,7 @@ function ServicesStep() {
   return (
     <BookingFrame
       teamAccount={booking.teamAccount}
+      combinationUnavailable={booking.combinationUnavailable}
       step="services"
       search={search}
       title={t("booking.services.title")}
@@ -32,13 +33,15 @@ function ServicesStep() {
       summary={
         <BookingSummary
           services={selectedServices}
+          combinationName={booking.combination?.name}
           totals={totals}
           timeZone={salon.timezone}
           ctaLabel={t("booking.cta.continue")}
           ctaDisabled={
             totals.count === 0 ||
             (booking.eligible.length === 0 &&
-              !canPlanVisit(search.services, catalog, booking.staff))
+              (Boolean(search.combinationId) ||
+                !canPlanVisit(search.services, catalog, booking.staff)))
           }
           onCta={() => booking.go("professional", search)}
           onRemoveService={(id) =>
@@ -61,7 +64,7 @@ function ServicesStep() {
           {totals.count > 0 && booking.eligible.length === 0 && (
             <p role="alert" className="rounded-lg border border-line p-4 text-sm">
               {t(
-                canPlanVisit(search.services, catalog, booking.staff)
+                !search.combinationId && canPlanVisit(search.services, catalog, booking.staff)
                   ? "services.multipleHelp"
                   : "services.incompatible",
               )}
@@ -71,7 +74,10 @@ function ServicesStep() {
             catalog={catalog}
             staff={booking.staff}
             selected={search.services}
-            onChange={(services) => booking.go("services", { services }, { replace: true })}
+            selectedComboId={search.combinationId}
+            onChange={(services, combinationId) =>
+              booking.go("services", { services, combinationId }, { replace: true })
+            }
           />
           <CatalogBrowser
             allowMultipleProfessionals

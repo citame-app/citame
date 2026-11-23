@@ -6,7 +6,7 @@ import { Button } from "~/components/ui/button";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
-import { servicesQuery, staffQuery } from "~/lib/queries";
+import { staffQuery } from "~/lib/queries";
 import { CombinationEditor } from "./combination-editor";
 export function CombinationsPanel() {
   const { t } = useI18n();
@@ -18,12 +18,16 @@ export function CombinationsPanel() {
     queryFn: () => api().combinations.admin(),
     gcTime: 0,
   });
-  const catalog = useQuery(servicesQuery);
+  const catalog = useQuery({
+    queryKey: ["appointment-catalog"],
+    queryFn: async () => (await api().appointments.catalog()).services,
+  });
   const staff = useQuery(staffQuery);
   const reload = () => {
     void client.invalidateQueries({ queryKey: ["combinations"] });
     void client.invalidateQueries({ queryKey: ["services"] });
     void client.invalidateQueries({ queryKey: ["staff"] });
+    void client.invalidateQueries({ queryKey: ["admin", "booking-combinations"] });
   };
   const ready = catalog.isSuccess && staff.isSuccess && query.isSuccess;
   return (
@@ -67,7 +71,9 @@ export function CombinationsPanel() {
                 !row.active
                   ? "combinations.inactive"
                   : row.bookable
-                    ? "combinations.live"
+                    ? row.fixedTerms?.onlineBooking === false
+                      ? "combinations.teamOnly"
+                      : "combinations.live"
                     : "combinations.unavailable",
               )}
             </Badge>

@@ -1,9 +1,10 @@
-import type { Service, Staff } from "@sob/contracts";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import type { Service, ServiceCombination, Staff } from "@sob/contracts";
+import { useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate, useRouteContext, useSearch } from "@tanstack/react-router";
 import { useI18n } from "~/i18n/react";
-import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
+import { publicCombinationsQuery, salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
 import { normalizeCatalogSelection } from "./catalog-selection";
+import { fixedCombinationServices } from "./fixed-combination";
 import { type BookingTotals, bookingTotals, eligibleStaff } from "./logic";
 import {
   type BookingSearch,
@@ -22,6 +23,8 @@ export const STEP_PATH = {
 export interface BookingContext {
   search: BookingSearch;
   teamAccount: boolean;
+  combination?: ServiceCombination;
+  combinationUnavailable: boolean;
   catalog: Service[];
   staff: Staff[];
   selectedServices: Service[];
@@ -44,10 +47,26 @@ export function useBooking(): BookingContext {
   const { data: salon } = useSuspenseQuery(salonQuery);
   const navigate = useNavigate();
 
-  const serviceIds = normalizeCatalogSelection(search.services, catalog);
-  const selectedServices = serviceIds
-    .map((id) => catalog.find((service) => service.id === id))
-    .filter((service): service is Service => service !== undefined);
+  const combinations = useQuery({
+    ...publicCombinationsQuery,
+    enabled: Boolean(search.combinationId),
+  });
+  const row = combinations.data?.combinations.find((item) => item.id === search.combinationId);
+  const fixed =
+    row &&
+    row.serviceIds.length === search.services.length &&
+    row.serviceIds.every((id, index) => id === search.services[index])
+      ? fixedCombinationServices(row, catalog)
+      : undefined;
+  const combination = fixed ? row : undefined;
+  const serviceIds = search.combinationId
+    ? (fixed?.map(({ id }) => id) ?? [])
+    : normalizeCatalogSelection(search.services, catalog);
+  const selectedServices =
+    fixed ??
+    serviceIds
+      .map((id) => catalog.find((service) => service.id === id))
+      .filter((service): service is Service => service !== undefined);
   const resolvedStaffId = search.slotStaff ?? (search.staff !== "any" ? search.staff : undefined);
   const staffName =
     search.staff === "multiple"
@@ -60,15 +79,23 @@ export function useBooking(): BookingContext {
 
   return {
     teamAccount: Boolean(session && session.user.role !== "client"),
+    combination,
+    combinationUnavailable: Boolean(
+      search.combinationId && !combination && !combinations.isPending,
+    ),
     search: { ...search, services: selectedServices.map((s) => s.id) },
     catalog,
     staff,
     selectedServices,
-    totals: bookingTotals(catalog, serviceIds),
+    totals: bookingTotals(selectedServices, serviceIds),
     eligible:
       new Set(selectedServices.map((s) => s.currency)).size > 1
         ? []
-        : eligibleStaff(staff, serviceIds),
+        : combination?.fixedTerms
+          ? staff.filter(({ id }) => combination.fixedTerms?.staffIds.includes(id))
+          : serviceIds.length
+            ? eligibleStaff(staff, serviceIds)
+            : [],
     staffName,
     salon,
     go(step, next, options) {

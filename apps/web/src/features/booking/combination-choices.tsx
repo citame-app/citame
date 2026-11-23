@@ -6,6 +6,7 @@ import { useI18n } from "~/i18n/react";
 import { formatDuration } from "~/lib/format";
 import { publicCombinationsQuery } from "~/lib/queries";
 import { normalizeCatalogSelection } from "./catalog-selection";
+import { fixedCombinationServices } from "./fixed-combination";
 import { bookingTotals, eligibleStaff } from "./logic";
 import { totalPriceLabel } from "./service-price";
 import { canPlanVisit } from "./visit-selection";
@@ -21,19 +22,26 @@ export function CombinationChoices({
   catalog,
   staff,
   selected,
+  selectedComboId,
   onChange,
 }: {
   catalog: Service[];
   staff: Staff[];
   selected: string[];
-  onChange: (ids: string[]) => void;
+  selectedComboId?: string;
+  onChange: (ids: string[], combinationId?: string) => void;
 }) {
   const { t, locale } = useI18n();
   const query = useQuery(publicCombinationsQuery);
   if (query.isPending) return <Skeleton className="h-20" />;
   if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
   const combinations = query.data.combinations.filter(
-    (row) => row.active && row.bookable && combinationAvailable(row.serviceIds, catalog, staff),
+    (row) =>
+      row.active &&
+      row.bookable &&
+      (row.fixedTerms
+        ? Boolean(fixedCombinationServices(row, catalog))
+        : combinationAvailable(row.serviceIds, catalog, staff)),
   );
   if (!combinations.length) return null;
   return (
@@ -45,7 +53,10 @@ export function CombinationChoices({
       <p className="text-sm text-muted">{t("combinations.chooseHelp")}</p>
       <ul className="grid gap-4 sm:grid-cols-2">
         {combinations.map((row) => {
-          const totals = bookingTotals(catalog, row.serviceIds);
+          const services =
+            fixedCombinationServices(row, catalog) ??
+            catalog.filter((service) => row.serviceIds.includes(service.id));
+          const totals = bookingTotals(services, row.serviceIds);
           return (
             <li
               key={row.id}
@@ -59,21 +70,25 @@ export function CombinationChoices({
                 {row.serviceIds.map((id) => catalog.find((s) => s.id === id)?.name).join(" → ")}
               </p>
               <p className="font-medium">
-                {totalPriceLabel(
-                  t,
-                  locale,
-                  catalog.filter((s) => row.serviceIds.includes(s.id)),
-                  totals.priceCents,
-                  totals.currency ?? "EUR",
-                )}{" "}
+                {totalPriceLabel(t, locale, services, totals.priceCents, totals.currency ?? "EUR")}{" "}
                 · {formatDuration(totals.durationMinutes, locale)}
               </p>
               <Button
+                type="button"
                 variant="secondary"
-                className="max-w-full py-2 whitespace-normal! wrap-anywhere aria-pressed:border-accent aria-pressed:bg-accent-soft"
+                className="min-h-12 max-w-full py-2 whitespace-normal! wrap-anywhere aria-pressed:border-accent aria-pressed:bg-accent-soft"
                 aria-label={t("combinations.choose", { name: row.name })}
-                aria-pressed={JSON.stringify(selected) === JSON.stringify(row.serviceIds)}
-                onClick={() => onChange([...row.serviceIds])}
+                aria-pressed={
+                  row.fixedTerms
+                    ? selectedComboId === row.id
+                    : !selectedComboId &&
+                      JSON.stringify(selected) === JSON.stringify(row.serviceIds)
+                }
+                onClick={() =>
+                  row.fixedTerms
+                    ? onChange([...row.serviceIds], row.id)
+                    : onChange([...row.serviceIds])
+                }
               >
                 {t("combinations.chooseAction")}
               </Button>

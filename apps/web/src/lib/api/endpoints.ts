@@ -150,6 +150,7 @@ const deletedAck = z.object({ id: z.string(), deleted: z.literal(true) });
 
 export interface AvailabilityParams {
   appointmentId?: string;
+  combinationId?: string;
   serviceIds: string[];
   staffId?: string;
   date: string;
@@ -191,23 +192,29 @@ export function createEndpoints(client: ApiClient) {
         signal,
       }),
     availability: (
-      { serviceIds, staffId, date, appointmentId }: AvailabilityParams,
+      { serviceIds, staffId, date, appointmentId, combinationId }: AvailabilityParams,
       signal?: AbortSignal,
     ) =>
       client.get(
         appointmentId ? `/appointments/${appointmentId}/availability` : "/availability",
         availabilityResponseSchema,
         {
-          query: { serviceIds: serviceIds.join(","), staffId, date },
+          query: { serviceIds: serviceIds.join(","), staffId, date, combinationId },
           signal,
         },
       ),
-    peakPrice: (serviceIds: string[], startsAt: string, signal?: AbortSignal, team = false) =>
+    peakPrice: (
+      serviceIds: string[],
+      startsAt: string,
+      signal?: AbortSignal,
+      team = false,
+      combinationId?: string,
+    ) =>
       client.get(
         team ? "/appointments/peak-price" : "/availability/peak-price",
         peakPriceQuoteSchema,
         {
-          query: { serviceIds: serviceIds.join(","), startsAt },
+          query: { serviceIds: serviceIds.join(","), startsAt, combinationId },
           signal,
           cache: "no-store",
         },
