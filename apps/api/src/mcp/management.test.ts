@@ -218,6 +218,63 @@ test("owner read tools expose bounded summaries, and a read-only grant cannot wr
   }
 });
 
+test("a manager can replace reviewed weekly hours but cannot overwrite a newer schedule", async () => {
+  const manager = await actor(t, "staff", "hours-manager@example.com", { staffProfileId: f.anaId });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.id, f.anaId));
+  const { tokens } = await tokenFor(t, manager, "operations:read schedule:write");
+  const token = tokens.access_token;
+  expect(await listTools(t.app, token)).toContain("replace_working_hours");
+  const id = f.beaId;
+  const reviewed = await callTool(t.app, token, "get_working_hours", { id });
+  const revision = reviewed.data?.data?.revision;
+  expect(revision).toBeString();
+  const hours = [{ weekday: 1, startTime: "10:00", endTime: "17:00" }];
+  const missing = await callTool(t.app, token, "replace_working_hours", { id, body: { hours } });
+  expect(missing.isError || missing.rpcError !== null).toBe(true);
+  const saved = await callTool(t.app, token, "replace_working_hours", {
+    id,
+    body: { hours, expectedRevision: revision },
+  });
+  expect(saved.isError, saved.text).toBe(false);
+  expect(saved.data?.data?.hours).toEqual(hours);
+  const stale = await callTool(t.app, token, "replace_working_hours", {
+    id,
+    body: { hours: [], expectedRevision: revision },
+  });
+  expect(stale.data?.error?.code).toBe("version_conflict");
+  const current = await callTool(t.app, token, "get_working_hours", { id });
+  expect(current.data?.data?.hours).toEqual(hours);
+});
+
+test("centre settings require a current reviewed revision", async () => {
+  const owner = await actor(t, "owner", "settings-owner@example.com");
+  const { tokens } = await tokenFor(t, owner, "operations:read settings:write");
+  const token = tokens.access_token;
+  expect(await listTools(t.app, token)).toContain("update_centre_settings");
+  const reviewed = await callTool(t.app, token, "get_centre_settings", {});
+  const revision = reviewed.data?.data?.revision;
+  expect(revision).toBeString();
+  const missing = await callTool(t.app, token, "update_centre_settings", {
+    body: { maxDaysAhead: 21 },
+  });
+  expect(missing.isError || missing.rpcError !== null).toBe(true);
+  const saved = await callTool(t.app, token, "update_centre_settings", {
+    body: { expectedRevision: revision, changes: { maxDaysAhead: 21 } },
+  });
+  expect(saved.isError, saved.text).toBe(false);
+  expect(saved.data?.data?.maxDaysAhead).toBe(21);
+  expect(saved.data?.data?.revision).not.toBe(revision);
+  const stale = await callTool(t.app, token, "update_centre_settings", {
+    body: { expectedRevision: revision, changes: { maxDaysAhead: 22 } },
+  });
+  expect(stale.data?.error?.code).toBe("version_conflict");
+  const current = await callTool(t.app, token, "get_centre_settings", {});
+  expect(current.data?.data?.maxDaysAhead).toBe(21);
+});
+
 test("the daily staff work tool shares the REST report and enforces the current calendar access", async () => {
   const tool = "get_staff_work_report";
   const owner = await actor(t, "owner", "report-owner@example.com");

@@ -440,14 +440,10 @@ export function registerManagementTools(
   );
   add(
     "replace_working_hours",
-    "Replace the complete weekly schedule for a professional. Review the current hours first. Existing appointments are reported as conflicts.",
-    {
-      ...schedule,
-      owner: true,
-      destructive: true,
-    },
+    "Replace the complete weekly schedule for a professional using the revision returned by get_working_hours. Existing appointments are reported as conflicts.",
+    { scope: "schedule:write", permission: "editSchedules", destructive: true },
     "PUT",
-    withBody(C.setWorkingHoursRequestSchema),
+    withBody(C.mcpReplaceWorkingHoursInput),
     C.workingHoursResponseSchema,
     ({ id, body }) => ({ path: `/staff/${id}/working-hours`, body }),
   );
@@ -1268,21 +1264,21 @@ export function registerManagementTools(
   );
   add(
     "get_centre_settings",
-    "Read owner-only calendar and reminder settings.",
+    "Read owner-only calendar and reminder settings and the revision needed to edit them.",
     { scope: "operations:read", owner: true },
     "GET",
     empty,
-    C.ownerSalonSettingsSchema,
-    () => ({ path: "/settings" }),
+    C.mcpCentreSettingsOutput,
+    () => ({ path: "/settings/desktop" }),
   );
   add(
     "update_centre_settings",
-    "Update booking limits, timezone or reminder timing. Confirm changes that affect future appointments.",
+    "Update booking limits, timezone or reminder timing using the revision from get_centre_settings. Confirm changes that affect future appointments.",
     { ...settings, destructive: true },
-    "PATCH",
-    z.strictObject({ body: C.updateSalonSettingsRequestSchema }),
-    C.ownerSalonSettingsSchema,
-    ({ body }) => ({ path: "/settings", body }),
+    "PUT",
+    z.strictObject({ body: C.mcpUpdateCentreSettingsInput }),
+    C.mcpCentreSettingsOutput,
+    ({ body }) => ({ path: "/settings/desktop", body }),
   );
   add(
     "list_calendar_notices",

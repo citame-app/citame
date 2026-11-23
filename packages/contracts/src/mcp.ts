@@ -10,8 +10,13 @@ import { adminClientSchema } from "./clients";
 import { cashCloseSchema } from "./commerce";
 import { idSchema, instantSchema, localDateSchema } from "./common";
 import { peakPriceQuoteSchema } from "./peak-prices";
+import {
+  reviewedSalonSettingsRequestSchema,
+  reviewedSalonSettingsSchema,
+  updateSalonSettingsRequestSchema,
+} from "./salon";
 import { serviceSchema } from "./services";
-import { staffSchema } from "./staff";
+import { setWorkingHoursRequestSchema, staffSchema } from "./staff";
 
 /**
  * Inputs and outputs of the MCP tools (ADR 0009). They are composed from the same field schemas
@@ -31,6 +36,19 @@ export const mcpUpdateAppointmentInput = z.object({
 });
 
 export const mcpCloseCashSessionInput = cashCloseSchema.required({ reviewedExpectedCents: true });
+
+export const mcpReplaceWorkingHoursInput = setWorkingHoursRequestSchema.safeExtend({
+  expectedRevision: setWorkingHoursRequestSchema.shape.expectedRevision.unwrap(),
+});
+
+export const mcpCentreSettingsOutput = reviewedSalonSettingsSchema.omit({
+  businessProfile: true,
+  openingSchedule: true,
+});
+
+export const mcpUpdateCentreSettingsInput = reviewedSalonSettingsRequestSchema.safeExtend({
+  changes: updateSalonSettingsRequestSchema,
+});
 
 const MCP_PAGE_SIZE_MAX = 50;
 const MCP_PAGE_SIZE_DEFAULT = 20;
