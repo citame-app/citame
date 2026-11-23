@@ -1,5 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
-import { RECURRING_FIXTURE as fixture } from "../../api/test/recurring-values";
+import {
+  CALENDAR_FIXTURE_NOW,
+  RECURRING_FIXTURE as fixture,
+} from "../../api/test/recurring-values";
 import { expectNoHorizontalScroll } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi, switchLocale } from "./helpers";
 
@@ -17,6 +20,10 @@ async function selectCalendarView(page: Page, value: "day" | "week" | "month" | 
       .click();
 }
 const staffId = "0198f5a0-7b1c-7000-8000-000000000201";
+
+test.beforeEach(async ({ page }) => {
+  await page.clock.setFixedTime(new Date(CALENDAR_FIXTURE_NOW));
+});
 
 test("waitlist stays in the calendar; blocks and full-day absences persist with salon-local dates", async ({
   page,

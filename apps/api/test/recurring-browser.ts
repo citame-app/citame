@@ -21,7 +21,7 @@ import { runMembershipBilling } from "../src/modules/passes/billing";
 import { runWaitlist } from "../src/modules/waitlist/matching";
 import { RedsysGateway, redsysSignature } from "../src/payments/redsys";
 import type { PaymentGateway } from "../src/payments/types";
-import { RECURRING_FIXTURE as fixture } from "./recurring-values";
+import { CALENDAR_FIXTURE_NOW, RECURRING_FIXTURE as fixture } from "./recurring-values";
 import { createTestValkey } from "./valkey";
 
 if (process.env.NODE_ENV !== "test") throw new Error("Recurring fixture requires NODE_ENV=test");
@@ -31,6 +31,7 @@ for (const value of [process.env.DATABASE_URL, process.env.VALKEY_URL])
 const database = await createTestDatabase("recurring_browser");
 await database.reset();
 const valkey = await createTestValkey("recurring_browser");
+const calendarFixture = process.env.E2E_CALENDAR_FIXTURE === "true";
 const config = loadConfig({
   DATABASE_URL: database.url,
   VALKEY_KEY_PREFIX: valkey.prefix,
@@ -50,7 +51,7 @@ const config = loadConfig({
   SYNC_STREAM_RATE_LIMIT_MAX: "1000",
 });
 await seedSampleData(database.db);
-if (process.env.E2E_CALENDAR_FIXTURE === "true") {
+if (calendarFixture) {
   const { seedCalendarFixture } = await import("./calendar-fixture");
   await seedCalendarFixture(database.db);
 }
@@ -151,7 +152,13 @@ const gateway: PaymentGateway = {
     });
   },
 };
-const app = createApp({ db: database.db, valkey: valkey.client, config, paymentGateway: gateway });
+const app = createApp({
+  db: database.db,
+  valkey: valkey.client,
+  config,
+  paymentGateway: gateway,
+  now: calendarFixture ? () => new Date(CALENDAR_FIXTURE_NOW) : undefined,
+});
 await app.ready();
 // This simulated hosted bank page verifies the outgoing form before issuing a signed callback.
 app.post("/__recurring-fixture/settle", async (c) => {
