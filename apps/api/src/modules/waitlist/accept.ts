@@ -9,7 +9,7 @@ import {
   waitlistOffer,
 } from "@sob/db";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { recordAudit } from "../../audit";
+import { type McpAuditSource, recordAudit } from "../../audit";
 import { authorizeAppointmentCreate, authorizeAppointmentList } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { clientRoot } from "../../client-identity";
@@ -49,6 +49,7 @@ export async function acceptWaitlist(
   input: WaitlistAccept,
   p: Principal,
   now: Date,
+  via?: McpAuditSource,
 ) {
   if (p.role === "client" && input.protectionWaiverReason)
     throw new DomainError("forbidden", "Customers cannot waive deposits");
@@ -148,7 +149,7 @@ export async function acceptWaitlist(
     const created = await createAppointment(
       tx,
       { ...booking, peakPriceReview: price.review ?? undefined },
-      { userId: p.userId },
+      { userId: p.userId, via },
       { now },
     );
     await tx
@@ -172,7 +173,7 @@ export async function acceptWaitlist(
       action: "waitlist.offer_accepted",
       entity: "waitlist_entry",
       entityId: id,
-      metadata: { offerId: offer.id, appointmentId: created.id },
+      metadata: { offerId: offer.id, appointmentId: created.id, ...(via ? { via } : {}) },
     });
     return { entry: await entryView(tx, saved, p), appointment: created };
   });

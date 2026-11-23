@@ -20,6 +20,7 @@ import {
   registerClient,
   rpc,
   tokenFor,
+  tokenRequest,
 } from "../../test/oauth";
 
 let t: ApiTest;
@@ -184,7 +185,7 @@ describe("tool authorization matrix", () => {
 
   test("a client cannot call staff tools even by guessing their names", async () => {
     const who = await actor(t, "client", "lucia@example.com");
-    const { tokens } = await tokenFor(t, who, "mcp:read mcp:book schedule:read");
+    const { tokens } = await tokenFor(t, who, "mcp:read mcp:book");
     const found = await callTool(t.app, tokens.access_token, "find_client", { search: "Lucia" });
     expect(found.rpcError !== null || found.isError).toBe(true);
     expect(found.text).not.toContain("Lucia");
@@ -284,7 +285,18 @@ describe("tool authorization matrix", () => {
     const ana = await actor(t, "staff", "ana@example.com", { staffProfileId: fx.anaId });
     const { tokens } = await tokenFor(t, ana, "mcp:read schedule:read");
     expect(await listTools(t.app, tokens.access_token)).toContain("find_client");
+    const scheduleOnly = await tokenFor(t, ana, "schedule:read offline_access");
     await t.db.update(user).set({ role: "client" }).where(eq(user.id, ana.userId));
+    const denied = await rpc(t.app, scheduleOnly.tokens.access_token, "tools/list");
+    expect(denied.res.status).toBe(403);
+    expect(denied.res.headers.get("www-authenticate")).toContain('error="insufficient_scope"');
+    const refresh = await tokenRequest(t.app, {
+      grant_type: "refresh_token",
+      client_id: scheduleOnly.clientId,
+      refresh_token: scheduleOnly.tokens.refresh_token!,
+    });
+    expect(refresh.res.status).toBe(400);
+    expect(refresh.body.access_token).toBeUndefined();
     expect(await listTools(t.app, tokens.access_token)).not.toContain("find_client");
     const out = await callTool(t.app, tokens.access_token, "find_client", { search: "Luc" });
     expect(out.rpcError !== null || out.isError).toBe(true);

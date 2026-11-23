@@ -1,4 +1,4 @@
-import { isManagementScope, type OAuthScope, parseScopes } from "@sob/contracts";
+import { mcpScopeAllowedForRole, type OAuthScope, parseScopes } from "@sob/contracts";
 import { type Database, oauthClient } from "@sob/db";
 import { eq } from "drizzle-orm";
 import { createLocalJWKSet, type JSONWebKeySet, errors as joseErrors, jwtVerify } from "jose";
@@ -125,8 +125,7 @@ export function createTokenVerifier(deps: {
         (scope) =>
           consent.scopes.includes(scope) &&
           (client.scopes?.includes(scope) ?? true) &&
-          (scope !== "billing:write" || principal.role === "owner") &&
-          (!isManagementScope(scope) || principal.role !== "client"),
+          mcpScopeAllowedForRole(principal.role, scope),
       );
       return { principal, scopes, clientId, grantId: consent.id, tokenId: payload.jti };
     },

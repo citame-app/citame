@@ -3,19 +3,52 @@ import {
   appointmentSchema,
   appointmentStatusSchema,
   createAppointmentBaseSchema,
+  updateAppointmentRequestSchema,
 } from "./appointments";
 import { bookingPolicySchema } from "./booking-protection";
 import { adminClientSchema } from "./clients";
+import { cashCloseSchema } from "./commerce";
 import { idSchema, instantSchema, localDateSchema } from "./common";
 import { peakPriceQuoteSchema } from "./peak-prices";
+import {
+  reviewedSalonSettingsRequestSchema,
+  reviewedSalonSettingsSchema,
+  updateSalonSettingsRequestSchema,
+} from "./salon";
 import { serviceSchema } from "./services";
-import { staffSchema } from "./staff";
+import { setWorkingHoursRequestSchema, staffSchema } from "./staff";
 
 /**
  * Inputs and outputs of the MCP tools (ADR 0009). They are composed from the same field schemas
  * as the REST contracts, so a rule changed once (an id format, a date format) changes everywhere.
  * Inputs describe themselves because an LLM reads these descriptions to decide what to send.
  */
+
+// The shared REST handler validates combinations of fields. The MCP input deliberately
+// excludes the REST minimum-notice override.
+const appointmentUpdate = updateAppointmentRequestSchema.shape;
+export const mcpUpdateAppointmentInput = z.object({
+  version: appointmentUpdate.version,
+  status: appointmentUpdate.status,
+  startsAt: appointmentUpdate.startsAt,
+  staffId: appointmentUpdate.staffId,
+  notes: appointmentUpdate.notes,
+});
+
+export const mcpCloseCashSessionInput = cashCloseSchema.required({ reviewedExpectedCents: true });
+
+export const mcpReplaceWorkingHoursInput = setWorkingHoursRequestSchema.safeExtend({
+  expectedRevision: setWorkingHoursRequestSchema.shape.expectedRevision.unwrap(),
+});
+
+export const mcpCentreSettingsOutput = reviewedSalonSettingsSchema.omit({
+  businessProfile: true,
+  openingSchedule: true,
+});
+
+export const mcpUpdateCentreSettingsInput = reviewedSalonSettingsRequestSchema.safeExtend({
+  changes: updateSalonSettingsRequestSchema,
+});
 
 const MCP_PAGE_SIZE_MAX = 50;
 const MCP_PAGE_SIZE_DEFAULT = 20;

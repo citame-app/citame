@@ -6,6 +6,7 @@ import {
   type WaitlistPolicy,
   type WaitlistQuery,
   type WaitlistSourceEntry,
+  waitlistOfferReviewSchema,
 } from "@sob/contracts";
 import {
   appointment,
@@ -25,6 +26,7 @@ import { DomainError } from "../../errors";
 import { lockCalendars, lockScheduling, type Tx } from "../../tx";
 import { totalBlockMinutes } from "../availability/compute";
 import { assertClientCanBook } from "../clients/controls";
+import { getIntakeRequirements } from "../clients/intake";
 import { assertOnlineServices, getBookableServices } from "../services/service";
 import { assertOnlineBookingEnabled, getSalonSettings } from "../settings/service";
 import { staffQualifiedFor } from "../staff/service";
@@ -247,6 +249,15 @@ export async function entryView(
       : null,
   };
 }
+export async function reviewWaitlistOffer(db: Database, id: string, p: Principal, now: Date) {
+  const row = await entryRow(db, id, p);
+  const entry = await entryView(db, row, p);
+  if (!entry.canManage || !entry.offer || Date.parse(entry.offer.expiresAt) <= +now)
+    throw new DomainError("invalid_state", "This entry has no active offer on your calendar");
+  const intake = await getIntakeRequirements(db, row.serviceIds, p, now, row.clientId);
+  return waitlistOfferReviewSchema.parse({ entry, intake });
+}
+
 export async function listWaitlist(db: Database, p: Principal, query: WaitlistQuery) {
   const page = query.page ?? 1,
     pageSize = query.pageSize ?? 10;

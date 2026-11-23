@@ -8,6 +8,7 @@ import {
 import { clientProfile, type Database, staffProfile, user } from "@sob/db";
 import { and, eq, isNull } from "drizzle-orm";
 import type { MiddlewareHandler } from "hono";
+import type { McpAuditSource } from "../audit";
 import { clientIdentityIds } from "../client-identity";
 import { DomainError } from "../errors";
 import { BearerError, type TokenVerifier } from "../mcp/verify";
@@ -32,7 +33,9 @@ export const ownsClient = (principal: Pick<Principal, "clientId" | "clientIds">,
 export const ownedClientIds = (principal: Pick<Principal, "clientId" | "clientIds">) =>
   principal.clientIds ?? (principal.clientId ? [principal.clientId] : []);
 
-export type AppEnv = { Variables: { principal: Principal; desktopRequest?: boolean } };
+export type AppEnv = {
+  Variables: { principal: Principal; desktopRequest?: boolean; mcpAuditSource?: McpAuditSource };
+};
 
 /**
  * Resolves a principal from the database. The role is read here on every request instead of
