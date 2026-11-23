@@ -213,7 +213,12 @@ describe("AppointmentDrawer", () => {
       body: { ...appointment, version: 4, startsAt: "2026-03-10T18:00:00.000Z" },
     };
     open();
-    fireEvent.click(await screen.findByRole("button", { name: "Reschedule" }));
+    const reschedule = await screen.findByRole("button", { name: "Reschedule" });
+    expect(reschedule.closest("section")).not.toHaveAttribute("aria-labelledby");
+    fireEvent.click(reschedule);
+    const region = screen.getByRole("region", { name: "Move appointment" });
+    const heading = within(region).getByRole("heading", { name: "Move appointment" });
+    expect(region).toHaveAttribute("aria-labelledby", heading.id);
     const slot = await screen.findByRole("radio", { name: /3:00 PM/ });
     fireEvent.click(slot);
     fireEvent.click(await screen.findByRole("button", { name: /^Move to / }));
