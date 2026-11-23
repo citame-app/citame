@@ -9,6 +9,8 @@ const variant = z.object({
   price: sourceMoney,
   duration: z.number().int().nonnegative(),
   staffers: z.array(z.number().int().positive()),
+  gap_hole_duration: z.number().int().nonnegative().optional(),
+  gap_hole_start_after: z.number().int().nonnegative().optional(),
 });
 const combo = variant.extend({
   combo_children: z
@@ -16,30 +18,163 @@ const combo = variant.extend({
     .min(2),
 });
 
-function isCombination(service: Service) {
-  return typeof service.raw.combo_type === "string" && service.raw.combo_type.length > 0;
+function combinationType(service: Service) {
+  const type = service.raw.combo_type;
+  return typeof type === "string" && type.length > 0 ? type : null;
 }
 
 /** Preserve source IDs and frozen booking references, while preventing standalone booking. */
 export function holdBooksyCombinations(services: Service[]): Service[] {
   return services.map((service) =>
-    isCombination(service) && service.active ? { ...service, active: false } : service,
+    combinationType(service) && service.active ? { ...service, active: false } : service,
   );
+}
+
+type ComponentTerms = {
+  serviceRef: string;
+  priceCents: number;
+  cataloguePriceCents: number;
+  durationMinutes: number;
+  bufferMinutes: number;
+};
+
+type SourceTerms = {
+  type: string;
+  currency: Service["currency"];
+  totalCents: number;
+  durationMinutes: number;
+  bufferMinutes: number;
+  staffRefs: string[];
+  commonStaffRefs: string[];
+  components: ComponentTerms[];
+};
+
+type TermsIssue =
+  | "invalid_variant"
+  | "unresolved_component"
+  | "invalid_amount"
+  | "component_price_mismatch"
+  | "projection_mismatch"
+  | "unsupported_processing";
+
+type TermsResult = { terms: SourceTerms | null; issue: TermsIssue | null };
+
+type SourceVariant = { service: Service; variant: z.infer<typeof variant>; staff: Set<number> };
+
+function projectionMatches(service: Service, source: z.infer<typeof variant>, priceCents: number) {
+  return (
+    service.priceCents === priceCents &&
+    service.durationMinutes === source.duration &&
+    (service.raw.padding_time === undefined || service.raw.padding_time === service.bufferMinutes)
+  );
+}
+
+function requiresProcessing(source: z.infer<typeof variant>) {
+  return Boolean(source.gap_hole_duration || source.gap_hole_start_after);
+}
+
+function resolveTerms(
+  service: Service,
+  type: string,
+  originals: ReadonlyMap<number, SourceVariant | null>,
+): TermsResult {
+  const parsed = z.tuple([combo]).safeParse(service.raw.variants);
+  if (!parsed.success) return { terms: null, issue: "invalid_variant" };
+  const [terms] = parsed.data;
+  const components: ComponentTerms[] = [];
+  const assignments: Set<number>[] = [];
+  let totalCents: number;
+  try {
+    totalCents = booksyCents(terms.price);
+    if (requiresProcessing(terms)) return { terms: null, issue: "unsupported_processing" };
+    if (!projectionMatches(service, terms, totalCents))
+      return { terms: null, issue: "projection_mismatch" };
+    for (const child of terms.combo_children) {
+      const component = originals.get(child.service_variant.id);
+      if (!component) return { terms: null, issue: "unresolved_component" };
+      if (requiresProcessing(component.variant))
+        return { terms: null, issue: "unsupported_processing" };
+      if (
+        component.service.currency !== service.currency ||
+        !projectionMatches(
+          component.service,
+          component.variant,
+          booksyCents(component.variant.price),
+        )
+      )
+        return { terms: null, issue: "projection_mismatch" };
+      components.push({
+        serviceRef: component.service.sourceId,
+        priceCents: booksyCents(child.price),
+        cataloguePriceCents: component.service.priceCents,
+        durationMinutes: component.service.durationMinutes,
+        bufferMinutes: component.service.bufferMinutes,
+      });
+      assignments.push(component.staff);
+    }
+  } catch {
+    return { terms: null, issue: "invalid_amount" };
+  }
+  const componentTotal = components.reduce((sum, row) => sum + row.priceCents, 0);
+  const issue =
+    !Number.isSafeInteger(componentTotal) || componentTotal !== totalCents
+      ? "component_price_mismatch"
+      : null;
+  const commonStaff = [...(assignments[0] ?? [])].filter((staff) =>
+    assignments.every((assigned) => assigned.has(staff)),
+  );
+  return {
+    terms: {
+      type,
+      currency: service.currency,
+      totalCents,
+      durationMinutes: terms.duration,
+      bufferMinutes: service.bufferMinutes,
+      staffRefs: [...new Set(terms.staffers)].map(String),
+      commonStaffRefs: commonStaff.map(String),
+      components,
+    },
+    issue,
+  };
+}
+
+function readCombinations(services: readonly Service[]) {
+  const originals = new Map<number, SourceVariant | null>();
+  for (const service of services) {
+    if (combinationType(service)) continue;
+    const parsed = z.array(variant).safeParse(service.raw.variants);
+    if (!parsed.success) continue;
+    for (const row of parsed.data) {
+      originals.set(
+        row.id,
+        originals.has(row.id) ? null : { service, variant: row, staff: new Set(row.staffers) },
+      );
+    }
+  }
+  return services.flatMap((service) => {
+    const type = combinationType(service);
+    if (!type) return [];
+    return [
+      {
+        sourceId: service.sourceId,
+        active: service.active,
+        publiclyAvailable: service.raw.is_available_for_customer_booking === true,
+        ...resolveTerms(service, type, originals),
+      },
+    ];
+  });
+}
+
+/** Resolve ordered, discounted source terms without marking the archived service bookable. */
+export function sourceBooksyCombinationTerms(services: readonly Service[]) {
+  return readCombinations(services).map((row) => ({
+    ...row,
+    terms: row.issue ? null : row.terms,
+  }));
 }
 
 /** Aggregate differences from Citame's current catalogue-priced, same-professional shortcuts. */
 export function reviewBooksyCombinations(services: readonly Service[]) {
-  const originals = new Map<number, { service: Service; staff: Set<number> }>();
-  const ambiguous = new Set<number>();
-  for (const service of services) {
-    if (isCombination(service)) continue;
-    const parsed = z.array(variant).safeParse(service.raw.variants);
-    if (!parsed.success) continue;
-    for (const row of parsed.data) {
-      if (originals.has(row.id)) ambiguous.add(row.id);
-      originals.set(row.id, { service, staff: new Set(row.staffers) });
-    }
-  }
   const counts = {
     captured: 0,
     held: 0,
@@ -50,51 +185,25 @@ export function reviewBooksyCombinations(services: readonly Service[]) {
     componentPriceMismatch: 0,
     unverifiedTerms: 0,
   };
-  for (const service of services.filter(isCombination)) {
+  for (const { active, publiclyAvailable, terms, issue } of readCombinations(services)) {
     counts.captured++;
-    counts.held += Number(!service.active);
-    counts.publiclyOfferedAtSource += Number(
-      service.raw.is_available_for_customer_booking === true,
-    );
-    const parsed = z.tuple([combo]).safeParse(service.raw.variants);
-    if (!parsed.success) {
+    counts.held += Number(!active);
+    counts.publiclyOfferedAtSource += Number(publiclyAvailable);
+    counts.componentPriceMismatch += Number(issue === "component_price_mismatch");
+    if (!terms) {
       counts.unverifiedTerms++;
       continue;
     }
-    const [terms] = parsed.data;
-    const components = terms.combo_children.map(({ service_variant: { id } }) =>
-      ambiguous.has(id) ? undefined : originals.get(id),
-    );
-    if (components.some((component) => component === undefined)) {
-      counts.unverifiedTerms++;
-      continue;
-    }
-    let capturedTotal: number;
-    let componentTotal: number;
-    try {
-      capturedTotal = booksyCents(terms.price);
-      componentTotal = terms.combo_children.reduce((sum, row) => sum + booksyCents(row.price), 0);
-    } catch {
-      counts.unverifiedTerms++;
-      continue;
-    }
-    const resolved = components.filter((component) => component !== undefined);
-    const catalogueTotal = resolved.reduce((sum, row) => sum + row.service.priceCents, 0);
-    const duration = resolved.reduce(
-      (sum, row) => sum + row.service.durationMinutes + row.service.bufferMinutes,
+    const catalogueTotal = terms.components.reduce((sum, row) => sum + row.cataloguePriceCents, 0);
+    const duration = terms.components.reduce(
+      (sum, row) => sum + row.durationMinutes + row.bufferMinutes,
       0,
     );
-    const qualified = [...resolved[0]!.staff].filter((staff) =>
-      resolved.every((row) => row.staff.has(staff)),
-    );
-    const sourceStaff = new Set(terms.staffers);
-    counts.discountedVersusCatalogue += Number(capturedTotal < catalogueTotal);
-    counts.differentDuration += Number(
-      duration !== service.durationMinutes + service.bufferMinutes,
-    );
-    counts.componentPriceMismatch += Number(componentTotal !== capturedTotal);
+    counts.discountedVersusCatalogue += Number(terms.totalCents < catalogueTotal);
+    counts.differentDuration += Number(duration !== terms.durationMinutes + terms.bufferMinutes);
     counts.differentQualifiedStaff += Number(
-      qualified.length !== sourceStaff.size || qualified.some((staff) => !sourceStaff.has(staff)),
+      terms.staffRefs.length !== terms.commonStaffRefs.length ||
+        terms.commonStaffRefs.some((staff) => !terms.staffRefs.includes(staff)),
     );
   }
   return counts;

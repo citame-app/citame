@@ -191,6 +191,15 @@ bun src/scripts/booksy-prepare-full.ts /ruta/privada ID_CENTRO FECHA_LOCAL \
   --hold-combos HASH_SNAPSHOT
 ```
 
+To review the terms before publishing combinations, run
+`bun --no-env-file src/scripts/booksy-review-combinations.ts /private/source-snapshot-HASH.json`
+from `apps/api`. The command verifies the snapshot's artifacts and compares its terms to
+a fresh projection of the archived catalogue. It writes a private `combination-review-*.json`
+receipt with ordered components, allocated prices, total price, duration, buffers and source
+staff. It also records the professionals qualified for every component individually.
+Ambiguous references and inconsistent totals are flagged. The review leaves the combination's
+publication status and appointments intact.
+
 #### Conciliación de una candidata ya cargada
 
 El informe vuelve a comprobar la copia persistente dentro de una transacción de solo lectura. Coteja la identidad y los horarios de cada línea, los grupos, los importes congelados y sus indicadores, los comentarios, las franjas de capacidad reservadas, las asignaciones de recursos, los bloqueos y la lista de espera con el snapshot seleccionado. También comprueba los SHA-256 del archivo y coteja los identificadores, recuentos y huellas de los perfiles, el catálogo, las asignaciones profesionales y los horarios materializados. Verifica que la candidata no tenga recibos, recordatorios, ofertas ni lista de espera activa. Solo devuelve recuentos y estados de evidencias.
