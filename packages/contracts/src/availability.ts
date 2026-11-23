@@ -1,13 +1,17 @@
 import { z } from "zod";
 import { idSchema, instantSchema, localDateSchema } from "./common";
 
-export const availabilityQuerySchema = z.object({
+export const availabilityInputSchema = z.object({
+  serviceIds: z.array(idSchema).min(1).max(24),
+  staffId: idSchema.optional(),
+  date: localDateSchema,
+});
+
+export const availabilityQuerySchema = availabilityInputSchema.extend({
   serviceIds: z
     .string()
     .transform((value) => value.split(",").filter((part) => part.length > 0))
-    .pipe(z.array(idSchema).min(1).max(24)),
-  staffId: idSchema.optional(),
-  date: localDateSchema,
+    .pipe(availabilityInputSchema.shape.serviceIds),
 });
 
 export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;

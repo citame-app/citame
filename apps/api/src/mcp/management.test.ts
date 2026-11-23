@@ -583,6 +583,16 @@ test("rescheduling uses the appointment's saved services and calendar permission
   expect(new Set(own.data?.data.slots.map((slot: { staffId: string }) => slot.staffId))).toEqual(
     new Set([f.anaId]),
   );
+  const withoutStaff = new URLSearchParams({ serviceIds: f.haircutId, date: MONDAY });
+  const rest = await json(
+    t.app,
+    `/appointments/${original.id}/availability?${withoutStaff}`,
+    "GET",
+    undefined,
+    assigned.cookie,
+  );
+  expect(rest.status).toBe(200);
+  expect(await rest.json()).toEqual(own.data?.data);
   const differentServices = await callTool(t.app, ownerToken, "find_reschedule_availability", {
     ...input,
     serviceIds: [f.colorId],

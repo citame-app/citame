@@ -341,20 +341,11 @@ export function registerManagementTools(
     "Find available start times for an existing booking on one local date. Pass its original service IDs in the same order. Review the new time and professional before moving the booking.",
     read("editCalendar"),
     "GET",
-    id.extend({
-      serviceIds: z.array(C.idSchema).min(1).max(24),
-      staffId: C.idSchema.optional(),
-      date: C.localDateSchema,
-    }),
+    id.extend(C.availabilityInputSchema.shape),
     C.availabilityResponseSchema,
     ({ id, serviceIds, staffId, date }) => ({
       path: `/appointments/${id}/availability`,
-      query: {
-        date,
-        serviceIds: serviceIds.join(","),
-        staffId:
-          staffId ?? (permissions.allCalendars ? undefined : (ctx.principal.staffId ?? undefined)),
-      },
+      query: { date, serviceIds: serviceIds.join(","), staffId },
     }),
   );
   add(
