@@ -1,4 +1,4 @@
-import type { ClientListQuery, ReportSummaryQuery } from "@sob/contracts";
+import type { ClientListQuery, ReportSummaryQuery, ResourceOccupancy } from "@sob/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
 
@@ -6,6 +6,17 @@ import { api } from "./api/instance";
 export const CALENDAR_POLL_MS = 30_000;
 
 export const calendarResourceQueryKey = ["admin", "calendar", "resources"] as const;
+
+const resourceSnapshotReceipts = new WeakMap<ResourceOccupancy, number>();
+
+/** Browser-monotonic receipt time, including queries prefetched before the view opens. */
+export function observeResourceSnapshot(snapshot: ResourceOccupancy): number {
+  const known = resourceSnapshotReceipts.get(snapshot);
+  if (known !== undefined) return known;
+  const timestamp = performance.now();
+  resourceSnapshotReceipts.set(snapshot, timestamp);
+  return timestamp;
+}
 
 export interface CalendarParams {
   from: string;
@@ -24,8 +35,15 @@ export const calendarQuery = (params: CalendarParams, endpoints = api) =>
       (params.staffIds ?? []).join(","),
       params.accessScope,
     ],
-    queryFn: ({ signal }) => endpoints().admin.calendar(params, signal),
-    staleTime: 5_000,
+    queryFn: async ({ signal }) => {
+      const data = await endpoints().admin.calendar(params, signal);
+      if (typeof window !== "undefined" && data.resourceOccupancy)
+        observeResourceSnapshot(data.resourceOccupancy);
+      return data;
+    },
+    staleTime: params.resourceOccupancy ? 0 : 5_000,
+    // Preserve the identity associated with the browser receipt timestamp.
+    ...(params.resourceOccupancy ? { structuralSharing: false } : {}),
     refetchInterval: CALENDAR_POLL_MS,
     refetchOnWindowFocus: true,
   });

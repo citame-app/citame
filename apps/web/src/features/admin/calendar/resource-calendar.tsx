@@ -1,7 +1,8 @@
 import type { CalendarAppointment, CalendarResponse, ResourceOccupancy } from "@sob/contracts";
-import { useEffect, useId, useMemo, useState } from "react";
+import { useId, useLayoutEffect, useMemo, useState } from "react";
 import { EmptyState } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
+import { observeResourceSnapshot } from "~/lib/admin-queries";
 import { formatTime } from "~/lib/format";
 
 type Pool = ResourceOccupancy["pools"][number];
@@ -100,7 +101,7 @@ export function ResourceCalendar({
   );
   const captured = Date.parse(resourceOccupancy?.capturedAt ?? "");
   const instant = expired && expired.source === resourceOccupancy ? expired.through : captured;
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!resourceOccupancy) return;
     const deadlines = new Set<number>();
     for (const pool of resourceOccupancy.pools) {
@@ -112,7 +113,7 @@ export function ResourceCalendar({
       }
     }
     const times = [...deadlines].sort((a, b) => a - b);
-    const observed = performance.now();
+    const observed = observeResourceSnapshot(resourceOccupancy);
     let cursor = 0;
     let timer: number | undefined;
     function schedule() {
