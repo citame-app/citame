@@ -95,7 +95,7 @@ pg_container="$(docker compose -f compose.prod.yaml ps -q postgres)" &&
   scripts/backup.sh /backups/sob-$(date -u +%F).dump
 ```
 
-Each run stages the archive and checksum privately on the destination filesystem. The final archive appears after the checksum. Existing names are preserved and a concurrent run using the same output path fails. Use a fresh timestamped name when repeating a backup, and transfer the completed archive and checksum together.
+Each run stages the archive and checksum privately on the destination filesystem. Before publishing, it uses `pg_restore` from the same toolchain as `pg_dump` to decode the entire archive and discard the resulting SQL. Both tools must be available in that toolchain. This check reads the archive without opening a restore connection. The final archive appears after the checksum. Existing names are preserved and a concurrent run using the same output path fails. Use a fresh timestamped name when repeating a backup, and transfer the completed archive and checksum together.
 
 For a remote server, install matching native PostgreSQL client tools and use `PG_MODE=native`. The scripts pass URL connection options such as `sslmode=verify-full` and `sslrootcert` to libpq, including when opening the administrative database during restore. Specify the database in the URL path. Use a libpq service file if the client certificate key needs `sslpassword`.
 
