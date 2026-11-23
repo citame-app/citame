@@ -11,6 +11,10 @@ import {
 } from "../modules/booksy-transfer/source-read-model";
 import type { BooksyArchiveManifest } from "../modules/booksy-transfer/stage";
 import { privateWriteVerified } from "../modules/booksy-transfer/vault";
+import {
+  decodeVisibleBookingObservations,
+  type visibleBookingEnvelope,
+} from "../modules/booksy-transfer/visible-booking-evidence";
 
 const ref = z.string().regex(/^\d+$/);
 const instant = z.iso.datetime();
@@ -53,12 +57,6 @@ const profile = common.extend({
 const notes = textEvidence.extend({
   source: z.literal("booksy_visible_notes"),
   fields: z.array(z.object({ placeholder: z.string().nullable(), value: z.string() })),
-});
-export const visibleBookingEnvelope = z.object({
-  kind: z.literal("booksy-reviewed-visible-booking"),
-  businessId: z.string(),
-  parentHash: z.string().regex(/^[a-f0-9]{64}$/),
-  originals: z.array(z.object({ bytes: z.base64(), sha256: z.string() })).length(5),
 });
 const sha256 = (bytes: Uint8Array | string) => createHash("sha256").update(bytes).digest("hex");
 const normalize = (s: string) => s.trim().replace(/\s+/g, " ").normalize("NFC");
@@ -375,15 +373,9 @@ export function verifyReviewedVisibleBooking(
     group.raw.kind !== envelope.kind
   )
     throw new Error("Visible reservation evidence does not belong to this snapshot");
-  const documents = envelope.originals.map((original) => {
-    const bytes = Buffer.from(original.bytes, "base64");
-    if (sha256(bytes) !== original.sha256)
-      throw new Error("Visible reservation observation changed");
-    return JSON.parse(bytes.toString("utf8"));
-  });
   const rebuilt = appendVisibleBooking(
     parent,
-    documents,
+    decodeVisibleBookingObservations(envelope),
     artifact,
     group.raw.contactPending === true,
     Boolean(group.raw.financialHold),

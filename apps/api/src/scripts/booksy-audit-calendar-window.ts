@@ -6,10 +6,8 @@ import {
   readPrivateBooksySnapshot,
   verifyArtifacts,
 } from "../modules/booksy-transfer/vault";
-import {
-  verifyReviewedVisibleBooking,
-  visibleBookingEnvelope,
-} from "./booksy-review-visible-booking";
+import { visibleBookingEnvelope } from "../modules/booksy-transfer/visible-booking-evidence";
+import { verifyReviewedVisibleBooking } from "./booksy-review-visible-booking";
 
 if (import.meta.main) {
   try {
@@ -28,21 +26,21 @@ if (import.meta.main) {
     );
     const visibleEvidence: {
       artifact: (typeof model.base.artifacts)[number];
-      envelope: ReturnType<typeof visibleBookingEnvelope.parse>;
+      document: unknown;
     }[] = [];
     await verifyArtifacts(directory, model.base, (artifact, bytes) => {
       if (!artifact.path.endsWith(".json")) return;
       const document: unknown = JSON.parse(bytes.toString("utf8"));
       audit.inspect(document, artifact.sha256);
-      if (visibleGroups.has(artifact.sha256))
-        visibleEvidence.push({ artifact, envelope: visibleBookingEnvelope.parse(document) });
+      if (visibleGroups.has(artifact.sha256)) visibleEvidence.push({ artifact, document });
     });
     const { days, lastObservedAppointmentAt, ...summary } = audit.result();
     const absent = new Set(days.flatMap((day) => day.reconciliation?.absent ?? []));
     const visuallyReviewed = new Map<string, ReturnType<typeof verifyReviewedVisibleBooking>>();
-    for (const { artifact, envelope } of visibleEvidence) {
+    for (const { artifact, document } of visibleEvidence) {
       const group = visibleGroups.get(artifact.sha256);
       if (typeof group?.raw.itemRef !== "string" || !absent.has(group.raw.itemRef)) continue;
+      const envelope = visibleBookingEnvelope.parse(document);
       const parent = await readPrivateBooksySnapshot(
         resolve(directory, `source-snapshot-${envelope.parentHash}.json`),
       ).catch((error: unknown) => {

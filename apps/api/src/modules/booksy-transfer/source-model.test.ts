@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { calendarAppointmentSchema, calendarResponseSchema } from "@sob/contracts";
@@ -50,6 +50,7 @@ import {
   verifyBooksySourceModel,
 } from "./source-store";
 import { stageBooksyArchive } from "./stage";
+import { privateWrite } from "./vault";
 
 let t: TestDatabase;
 function fixture(): BooksySourceReadModel {
@@ -175,7 +176,7 @@ function fixture(): BooksySourceReadModel {
 }
 const model = fixture();
 
-test("reviewed visible bookings keep their exact resource and reject conflicting contact identity", () => {
+test("reviewed visible bookings keep their resource and retain independent audit evidence", async () => {
   const snapshot = fixture();
   snapshot.base.staff[0]!.sourceId = "11";
   snapshot.base.clients[0]!.sourceId = "12";
@@ -269,7 +270,7 @@ test("reviewed visible bookings keep their exact resource and reject conflicting
   if (!original) throw new Error("Missing original booking observation");
   original.bytes = Buffer.from("{}").toString("base64");
   expect(() => verifyReviewedVisibleBooking(result, group, snapshot, modified, evidence)).toThrow(
-    "observation changed",
+    "observation has changed",
   );
   const mismatched = structuredClone(result);
   const line = mismatched.appointments.find((row) => row.id === group.ids[0]);
@@ -278,6 +279,75 @@ test("reviewed visible bookings keep their exact resource and reject conflicting
   expect(() =>
     verifyReviewedVisibleBooking(mismatched, group, snapshot, envelope, evidence),
   ).toThrow("differs from the rebuilt line");
+  const directory = await mkdtemp(join(tmpdir(), "sob-visible-coverage-"));
+  try {
+    const write = async (path: string, record: unknown) => {
+      const bytes = Buffer.from(JSON.stringify(record));
+      await privateWrite(join(directory, path), bytes);
+      return {
+        path,
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      };
+    };
+    const calendar = {
+      start_date: common.date,
+      end_date: common.date,
+      resources_count: 2,
+      resources: [{ id: 11 }, { id: 77 }],
+      bookings: {},
+    };
+    const calendarArtifact = await write("calendar.json", {
+      kind: "booksy-api-response",
+      businessId: snapshot.businessId,
+      capturedAt: "2026-11-18T07:00:00Z",
+      source: `https://es.booksy.com/core/v2/business_api/me/businesses/${snapshot.businessId}/calendar?start_date=${common.date}&end_date=${common.date}&include_unconfirmed=true`,
+      data: { body: JSON.stringify(calendar), data: calendar },
+    });
+    const parent = { ...snapshot, base: { ...snapshot.base, artifacts: [calendarArtifact] } };
+    const parentHash = fingerprint(parent);
+    const parentPath = `source-snapshot-${parentHash}.json`;
+    await write(parentPath, parent);
+    const screenArtifact = await write("visible.json", { ...envelope, parentHash });
+    const projected = appendVisibleBooking(parent, documents, screenArtifact);
+    const candidatePath = `source-snapshot-${fingerprint(projected)}.json`;
+    await write(candidatePath, projected);
+    const audit = () => {
+      const command = Bun.spawnSync([
+        process.execPath,
+        "--no-env-file",
+        new URL("../../scripts/booksy-audit-calendar-window.ts", import.meta.url).pathname,
+        join(directory, candidatePath),
+        common.date,
+        common.date,
+        common.capturedAt,
+      ]);
+      expect(command.exitCode, command.stderr.toString()).toBe(0);
+      return JSON.parse(command.stdout.toString());
+    };
+    const verified = audit();
+    expect(verified).toMatchObject({
+      staleDays: 1,
+      currentDays: 0,
+      bookingReconciliation: { absent: 3 },
+      absentLineEvidence: { reviewedVisible: 1, withoutReviewedVisible: 2 },
+      canCutOver: false,
+    });
+    const receipt = await Bun.file(join(directory, verified.receipt)).json();
+    expect(receipt.days[0].reviewedVisibleAbsences).toEqual([
+      { itemRef: "15", observedAt: common.capturedAt, evidenceSha256: screenArtifact.sha256 },
+    ]);
+    await unlink(join(directory, parentPath));
+    const missingParent = audit();
+    expect(missingParent).toMatchObject({
+      staleDays: 1,
+      bookingReconciliation: { absent: 3 },
+      absentLineEvidence: { reviewedVisible: 0, withoutReviewedVisible: 3 },
+      canCutOver: false,
+    });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
   const visit = planNativeRehearsal(result).visits.find(
     (row) => row.item.sourceCopy?.itemRef === "15",
   );
