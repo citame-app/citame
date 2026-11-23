@@ -41,8 +41,11 @@ test("the operator reviews the new catalog price without losing the agreed amoun
   fireEvent.click(screen.getByRole("button", { name: "Reload catalog price" }));
   await waitFor(() => {
     const hint = document.getElementById(amount.getAttribute("aria-describedby") ?? "");
+    const announcement = screen.getByRole("status");
     expect(hint?.textContent).toBe("Catalog price €22");
-    expect(screen.getByRole("status").textContent).toBe("Catalog price €22");
+    expect(hint?.hidden).toBe(false);
+    expect(hint).not.toBe(announcement);
+    expect(announcement.textContent).toBe("Catalog price €22");
   });
   expect(onSave).not.toHaveBeenCalled();
   expect((amount as HTMLInputElement).value).toBe("18,50");
