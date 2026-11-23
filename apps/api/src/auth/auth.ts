@@ -34,6 +34,7 @@ import { localeFromRequest } from "../notifications/auth-emails";
 import type { EmailProvider } from "../notifications/providers/types";
 import { currentOAuthGrant } from "../oauth/connections";
 import { desktopResource } from "../oauth/desktop";
+import { bindMcpCodeToGrant, invalidMcpGrant } from "../oauth/grant-binding";
 import { type Logger, rootLogger } from "../observability/logger";
 import { desktopBrowserSession } from "./desktop-browser-session";
 import { type AuthMailer, createAuthMailer } from "./mailer";
@@ -212,7 +213,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         extensions: [
           {
             claims: {
-              accessToken: async ({ client, user: account, resources, scopes }) => {
+              accessToken: async ({ client, user: account, resources, scopes, referenceId }) => {
                 if (!account) return {};
                 const desktop =
                   client.clientId === "sob-desktop" &&
@@ -235,6 +236,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
                   });
                 }
                 const grant = await currentOAuthGrant(db, client.clientId, account.id);
+                if (!desktop && (!grant || referenceId !== grant.id)) throw invalidMcpGrant();
                 return { citame_grant: grant?.id ?? null };
               },
             },
@@ -266,6 +268,14 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
       database: { generateId: () => Bun.randomUUIDv7() },
     },
     databaseHooks: {
+      verification: {
+        create: {
+          before: async (record) => {
+            const value = await bindMcpCodeToGrant(db, record.value, config.oauth.mcpResource);
+            if (value !== record.value) return { data: { ...record, value } };
+          },
+        },
+      },
       user: {
         create: {
           // Every self-service sign-up is a client and gets a booking profile.
