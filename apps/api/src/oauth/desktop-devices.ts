@@ -2,9 +2,11 @@ import { createHash, createHmac, createPublicKey, randomBytes, verify } from "no
 import {
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
+  desktopCalendarTargetSchema,
   desktopDeviceLinkResponseSchema,
   desktopReceiptDestinationSchema,
   desktopWorkspaceSchema,
+  permissionsFor,
 } from "@sob/contracts";
 import { type Database, desktopDevice, oauthClient, session } from "@sob/db";
 import type { RedisClient } from "bun";
@@ -53,20 +55,7 @@ const loopbackOrigin = z
       return false;
     }
   });
-const calendarTarget = z.object({
-  date: z.iso.date(),
-  view: z.enum(["day", "week", "month", "list"]),
-  staff: z
-    .string()
-    .min(36)
-    .max(3699)
-    .refine((input) => {
-      const ids = input.split(",");
-      return ids.length <= 100 && ids.every((id) => deviceId.safeParse(id).success);
-    })
-    .optional(),
-});
-const calendarDestination = { calendar: calendarTarget };
+const calendarDestination = { calendar: desktopCalendarTargetSchema };
 const workspaceDestination = { workspace: desktopWorkspaceSchema };
 const receiptDestination = desktopReceiptDestinationSchema.shape;
 const browserOrigin = { origin: loopbackOrigin, proof: proof.optional() };
@@ -107,6 +96,11 @@ async function browserPath(
     }
     return `${sales}?${query}`;
   }
+  if (
+    saved.calendar.view === "resources" &&
+    !permissionsFor(principal.role, principal.accessPreset).allCalendars
+  )
+    return null;
   const query = new URLSearchParams({ date: saved.calendar.date, view: saved.calendar.view });
   if (saved.calendar.staff) query.set("staff", saved.calendar.staff);
   return `/admin/calendar?${query}`;

@@ -494,9 +494,21 @@ mod tests {
             cx.debug_bounds("team-calendar-block-2026-03-09-a00bd805-72d0-43eb-9461-6fc312bab883")
                 .is_some()
         );
-        let cell = cx
-            .debug_bounds("team-calendar-open-2026-03-09-01a1d81e-0000-7000-8000-000000000002")
-            .unwrap();
+        let selector = "team-calendar-open-2026-03-09-01a1d81e-0000-7000-8000-000000000002";
+        let viewport = cx.debug_bounds("team-calendar-rows").unwrap();
+        let mut cell = cx.debug_bounds(selector).unwrap();
+        if cell.bottom() > viewport.bottom() {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: viewport.center(),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(
+                    px(0.),
+                    viewport.bottom() - cell.bottom() - px(12.),
+                )),
+                ..Default::default()
+            });
+            cx.run_until_parked();
+            cell = cx.debug_bounds(selector).unwrap();
+        }
         cx.simulate_click(cell.center(), Default::default());
         cx.run_until_parked();
         root.update(cx, |root, cx| {

@@ -1,10 +1,15 @@
-import type { AppointmentStatus, UserRole } from "@sob/contracts";
+import {
+  type AppointmentStatus,
+  type CalendarView,
+  calendarViewSchema,
+  type UserRole,
+} from "@sob/contracts";
 import { addDaysLocal, localDateOf } from "~/lib/format";
 import { localDayBounds, minutesIntoLocalDay, startOfWeek, weekDates } from "~/lib/zoned";
 import { localMinuteRange } from "./presentation";
 
-export const calendarViews = ["day", "week", "month", "list", "resources"] as const;
-export type CalendarView = (typeof calendarViews)[number];
+export type { CalendarView };
+export const calendarViews = calendarViewSchema.options;
 
 export function shiftMonth(date: string, offset: number): string {
   const value = new Date(`${date.slice(0, 7)}-01T12:00:00Z`);

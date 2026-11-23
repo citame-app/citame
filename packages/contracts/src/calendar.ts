@@ -9,6 +9,23 @@ import { timeOffSchema } from "./staff";
 /** Longest window one calendar request may cover (six weeks). */
 export const CALENDAR_MAX_DAYS = 42;
 
+export const calendarViewSchema = z.enum(["day", "week", "month", "list", "resources"]);
+export type CalendarView = z.infer<typeof calendarViewSchema>;
+
+export const desktopCalendarTargetSchema = z.object({
+  date: z.iso.date(),
+  view: calendarViewSchema,
+  staff: z
+    .string()
+    .min(36)
+    .max(3699)
+    .refine((input) => {
+      const ids = input.split(",");
+      return ids.length <= 100 && ids.every((id) => idSchema.safeParse(id).success);
+    })
+    .optional(),
+});
+
 const MS_PER_DAY = 86_400_000;
 
 /**

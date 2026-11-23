@@ -40,6 +40,7 @@ mod booking_policy;
 mod calendar_date;
 mod calendar_overview;
 mod commissions;
+mod resource_calendar;
 mod visit_booking;
 mod visit_group;
 use calendar_overview::CalendarMode;
@@ -361,6 +362,8 @@ pub struct Root {
     overview_status: Option<AppointmentStatus>,
     overview_show_cancelled: bool,
     calendar_resource: Option<(String, String)>,
+    resource_calendar: resource_calendar::Desk,
+    resource_access_denied: bool,
     calendar_resources: OnceCell<Vec<calendar_overview::ResourceOption>>,
 
     calendar_layout: OnceCell<CalendarLayout>,
@@ -449,6 +452,8 @@ impl Root {
             period_views: vec![],
             overview_staff: BTreeSet::new(),
             calendar_resource: None,
+            resource_calendar: Default::default(),
+            resource_access_denied: false,
             calendar_resources: OnceCell::new(),
             overview_search,
             overview_status: None,
@@ -520,6 +525,7 @@ impl Root {
             }
             Some("month") => self.set_calendar_mode(CalendarMode::Month, cx),
             Some("list") => self.set_calendar_mode(CalendarMode::List, cx),
+            Some("resources") => self.set_calendar_mode(CalendarMode::Resources, cx),
             Some("new") => self.open_new(window, cx),
             Some("block") => self.open_block(None, self.date, cx),
             Some("reports") => self.open_reports(cx),
@@ -643,6 +649,8 @@ impl Root {
             .start_date
             .unwrap_or_else(|| Utc::now().with_timezone(&self.tz).date_naive());
         self.calendar_mode = CalendarMode::Day;
+        self.resource_access_denied = false;
+        self.reset_resource_calendar();
         self.week_staff_id.clear();
         self.week_layout = team_calendar::WeekLayout::Timeline;
         self.overview_staff.clear();
@@ -728,6 +736,7 @@ impl Root {
                 .detach();
         }
         self.screen = Screen::Login;
+        self.reset_resource_calendar();
         self.disconnecting = false;
         self.disconnect_failed = false;
         self.overlay = Overlay::None;
@@ -766,6 +775,7 @@ impl Root {
             });
             return;
         }
+        let resource_reconnected = reconnected || (status.stream_live && !self.status.stream_live);
         self.update_inbox_connectivity(&status, cx);
         self.refresh_open_report(&status, cx);
         self.refresh_commissions(&status, cx);
@@ -797,6 +807,7 @@ impl Root {
         self.refresh_open_service_catalog(reconnected, cx);
         self.refresh_service_resources(reconnected, cx);
         self.refresh_resource_pools(cx);
+        self.refresh_resource_calendar(self.status.connectivity, resource_reconnected, cx);
         self.refresh_combinations(cx);
         self.refresh_email_delivery(reconnected, cx);
         self.refresh_marketing(reconnected, cx);
@@ -825,6 +836,8 @@ impl Root {
             || self.replica_generation != generation
         {
             self.calendar_resource = None;
+            self.resource_access_denied = false;
+            self.reset_resource_calendar();
             if !self.preserve_open_salon_draft(cx)
                 && !self.preserve_open_booking_policy_draft(cx)
                 && !self.preserve_open_assignment_draft()
@@ -850,6 +863,9 @@ impl Root {
         }
         self.calendar_scope = scope;
         self.replica_generation = generation;
+        if self.calendar_mode == CalendarMode::Resources && !self.can_view_resource_calendar() {
+            self.calendar_mode = CalendarMode::Day;
+        }
         self.refresh_open_waitlist_scope();
         self.refresh_notices();
         let store = &self.svc.store;
@@ -878,7 +894,10 @@ impl Root {
             .calendar_mode
             .period(store, self.date, self.week_layout)
             .unwrap_or_default();
-        self.view = if self.calendar_mode == CalendarMode::Day {
+        self.view = if matches!(
+            self.calendar_mode,
+            CalendarMode::Day | CalendarMode::Resources
+        ) {
             calendar::day_view(store, self.date).ok()
         } else {
             self.period_views
@@ -944,6 +963,7 @@ impl Root {
         self.reload_team_shifts();
         self.refresh_weekly_conflicts_if_ready(cx);
         self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
+        self.refresh_resource_calendar(self.status.connectivity, false, cx);
         cx.notify();
     }
 
@@ -965,8 +985,13 @@ impl Root {
     }
 
     fn set_calendar_mode(&mut self, mode: CalendarMode, cx: &mut Context<Self>) {
-        if self.calendar_mode == mode {
+        if self.calendar_mode == mode
+            || (mode == CalendarMode::Resources && !self.can_view_resource_calendar())
+        {
             return;
+        }
+        if self.calendar_mode == CalendarMode::Resources {
+            self.reset_resource_calendar();
         }
         self.calendar_mode = mode;
         self.reload(cx);
@@ -1832,7 +1857,10 @@ impl Root {
                 "sync-now",
                 self.t(Key::SyncNow),
                 Kind::Ghost,
-                cx.listener(|this, _, _, _| this.svc.wake(Wake::Manual)),
+                cx.listener(|this, _, _, cx| {
+                    this.svc.wake(Wake::Manual);
+                    this.force_resource_calendar_refresh(cx);
+                }),
             ))
     }
 
@@ -1851,7 +1879,7 @@ impl Root {
             && !self.week_staff_id.is_empty()
         {
             query.append_pair("staff", &self.week_staff_id);
-        } else if !self.overview_staff.is_empty() {
+        } else if self.calendar_mode != CalendarMode::Resources && !self.overview_staff.is_empty() {
             query.append_pair(
                 "staff",
                 &self
@@ -1911,23 +1939,26 @@ impl Root {
                     .child(self.calendar_date_button(cx)),
             )
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .children(CalendarMode::ALL.map(|mode| {
-                        self.button(
-                            mode.button_id(),
-                            self.t(mode.label()),
-                            if self.calendar_mode == mode {
-                                Kind::Primary
-                            } else {
-                                Kind::Ghost
-                            },
-                            cx.listener(move |this, _, _, cx| this.set_calendar_mode(mode, cx)),
-                        )
-                        .px_2()
-                    })),
+                div().flex().items_center().gap_1().children(
+                    CalendarMode::ALL
+                        .into_iter()
+                        .filter(|mode| {
+                            *mode != CalendarMode::Resources || self.can_view_resource_calendar()
+                        })
+                        .map(|mode| {
+                            self.button(
+                                mode.button_id(),
+                                self.t(mode.label()),
+                                if self.calendar_mode == mode {
+                                    Kind::Primary
+                                } else {
+                                    Kind::Ghost
+                                },
+                                cx.listener(move |this, _, _, cx| this.set_calendar_mode(mode, cx)),
+                            )
+                            .px_2()
+                        }),
+                ),
             )
             .when(self.cloud_calendar_url().is_some(), |d| {
                 d.child(
@@ -4405,7 +4436,12 @@ impl Render for Root {
                     base.flex()
                         .flex_col()
                         .child(self.render_header(cx))
-                        .children(self.render_calendar_resource_filter(cx))
+                        .when(self.calendar_mode == CalendarMode::Resources, |frame| {
+                            frame.child(self.render_resource_calendar(content_viewport.width, cx))
+                        })
+                        .when(self.calendar_mode != CalendarMode::Resources, |frame| {
+                            frame.children(self.render_calendar_resource_filter(cx))
+                        })
                         .when(self.calendar_mode == CalendarMode::Week, |frame| {
                             frame.child(self.render_week_controls(cx))
                         })
@@ -4420,7 +4456,9 @@ impl Render for Root {
                                 .child(self.render_calendar_overview(cx))
                         })
                         .when(
-                            !self.calendar_mode.is_overview() && !self.team_calendar_visible(),
+                            self.calendar_mode != CalendarMode::Resources
+                                && !self.calendar_mode.is_overview()
+                                && !self.team_calendar_visible(),
                             |frame| {
                                 frame
                                     .when(

@@ -1405,6 +1405,7 @@ impl Store {
             "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','service_combinations','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
+        Self::invalidate_resource_days(tx)?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
         waitlist_cache::invalidate_visibility(tx)?;
@@ -1448,6 +1449,9 @@ impl Store {
             Self::clear_replica(&tx)?;
         } else {
             waitlist_cache::invalidate_visibility(&tx)?;
+            if changes.iter().any(|(key, _)| *key == "calendar_scope") {
+                Self::invalidate_resource_days(&tx)?;
+            }
         }
         for (key, scope) in changes {
             tx.execute(
@@ -1458,6 +1462,178 @@ impl Store {
         }
         tx.commit()?;
         Ok(restart)
+    }
+
+    pub fn resource_day(
+        &self,
+        date: chrono::NaiveDate,
+    ) -> Result<Option<crate::resource_calendar::CachedResourceDay>> {
+        if self.resource_denial_marker_present()? {
+            return Ok(None);
+        }
+        self.read_snapshot(|store| {
+            if store.get_meta("calendar_scope")?.as_deref() != Some("all")
+                || store.get_meta(REBUILD_KEY)?.is_some()
+                || store.get_meta("resource_day_denied")?.is_some()
+            {
+                return Ok(None);
+            }
+            store
+                .get_meta(&format!("resource_day:{date}"))?
+                .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
+                .transpose()
+        })
+    }
+
+    fn resource_denial_marker(&self) -> Option<std::path::PathBuf> {
+        self.conn
+            .path()
+            .filter(|path| !path.is_empty())
+            .map(|path| std::path::Path::new(path).with_extension("resource-denied"))
+    }
+
+    fn resource_denial_marker_present(&self) -> Result<bool> {
+        self.resource_denial_marker().map_or(Ok(false), |marker| {
+            marker.try_exists().map_err(CoreError::from)
+        })
+    }
+
+    pub(crate) fn recover_resource_denial(&mut self, generation: &str) -> Result<()> {
+        if let Some(marker) = self.resource_denial_marker()
+            && marker.try_exists()?
+        {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::ensure_generation(&tx, Some(generation))?;
+            Self::invalidate_resource_days(&tx)?;
+            tx.commit()?;
+            match std::fs::remove_file(marker) {
+                Ok(()) => (),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
+
+    fn resource_day_revision_at(conn: &Connection) -> Result<i64> {
+        Ok(Self::meta_at(conn, "resource_day_revision")?
+            .and_then(|revision| revision.parse().ok())
+            .unwrap_or(0))
+    }
+
+    pub fn resource_day_revision(&self) -> Result<i64> {
+        Self::resource_day_revision_at(&self.conn)
+    }
+
+    pub fn cache_resource_day(
+        &mut self,
+        date: chrono::NaiveDate,
+        generation: &str,
+        revision: i64,
+        snapshot: &crate::resource_calendar::CachedResourceDay,
+        session: Option<&crate::auth::SessionHandle>,
+    ) -> Result<bool> {
+        let marker = self.resource_denial_marker();
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::ensure_generation(&tx, Some(generation))?;
+        if marker.map_or(Ok(false), |path| path.try_exists())?
+            || Self::resource_day_revision_at(&tx)? != revision
+            || Self::meta_at(&tx, "calendar_scope")?.as_deref() != Some("all")
+            || Self::meta_at(&tx, REBUILD_KEY)?.is_some()
+        {
+            return Ok(false);
+        }
+        let key = format!("resource_day:{date}");
+        if let Some(raw) = Self::meta_at(&tx, &key)?
+            && let Ok(previous) =
+                serde_json::from_str::<crate::resource_calendar::CachedResourceDay>(&raw)
+            && previous
+                .occupancy()
+                .zip(snapshot.occupancy())
+                .is_some_and(|(old, new)| old.captured_at > new.captured_at)
+        {
+            return Ok(false);
+        }
+        let raw = serde_json::to_string(snapshot)?;
+        // Acquire this only after SQLite has granted the write lock. Sign-out and commit then
+        // cannot cross, and the UI never waits for SQLite's busy timeout while signing out.
+        let active = session.map(|handle| handle.read().expect("session lock"));
+        if active.as_deref().is_some_and(Option::is_none) {
+            return Ok(false);
+        }
+        Self::set_meta_at(&tx, &key, &raw)?;
+        tx.execute("DELETE FROM meta WHERE key = 'resource_day_denied'", [])?;
+        tx.execute(
+            "DELETE FROM meta WHERE key LIKE 'resource_day:%' AND key IN (
+                SELECT key FROM meta WHERE key LIKE 'resource_day:%'
+                ORDER BY julianday(json_extract(value, '$.receivedAt')) DESC, key DESC LIMIT -1 OFFSET 14
+            )",
+            [],
+        )?;
+        tx.commit()?;
+        drop(active);
+        Ok(true)
+    }
+
+    fn invalidate_resource_days(tx: &Transaction) -> Result<()> {
+        let revision = Self::resource_day_revision_at(tx)?.saturating_add(1);
+        Self::set_meta_at(tx, "resource_day_revision", &revision.to_string())?;
+        Self::set_meta_at(tx, "resource_day_denied", "1")?;
+        tx.execute("DELETE FROM meta WHERE key LIKE 'resource_day:%'", [])?;
+        Ok(())
+    }
+
+    pub(crate) fn deny_resource_days(
+        &mut self,
+        generation: &str,
+        revision: i64,
+        session: Option<&crate::auth::SessionHandle>,
+    ) -> Result<bool> {
+        let attempt = (|| {
+            let tx = self
+                .conn
+                .transaction_with_behavior(TransactionBehavior::Immediate)?;
+            Self::ensure_generation(&tx, Some(generation))?;
+            if Self::resource_day_revision_at(&tx)? != revision {
+                return Ok(false);
+            }
+            let active = session.map(|handle| handle.read().expect("session lock"));
+            if active.as_deref().is_some_and(Option::is_none) {
+                return Ok(false);
+            }
+            Self::invalidate_resource_days(&tx)?;
+            tx.commit()?;
+            drop(active);
+            Ok(true)
+        })();
+        if matches!(&attempt, Err(CoreError::Db(_)))
+            && let Some(marker) = self.resource_denial_marker()
+        {
+            // SQLite can be busy while the service has already rejected the request. The
+            // account-private marker prevents offline reads until the denial can be recorded.
+            let active = session.map(|handle| handle.read().expect("session lock"));
+            if active.as_deref().is_some_and(Option::is_none)
+                || self.replica_generation()? != generation
+                || self.resource_day_revision()? != revision
+            {
+                return Ok(false);
+            }
+            let mut options = std::fs::OpenOptions::new();
+            options.create(true).write(true).truncate(false);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(marker)?.sync_all()?;
+            drop(active);
+            return Ok(true);
+        }
+        attempt
     }
 
     pub fn booking_notice_head(&self) -> Result<i64> {

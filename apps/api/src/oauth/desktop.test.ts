@@ -1348,16 +1348,16 @@ test("linked devices renew independently and can be revoked from either client",
   const second = await connect("Despacho · Mac");
   const browserOrigin = "http://127.0.0.1:54321";
   const calendar = { date: "2026-11-18", view: "week" };
-  const issueBrowser = async () => {
+  const issueBrowser = async (destination = calendar) => {
     const response = await endpoint("browser-ticket", {
       proof: first.proof("browser-ticket", undefined, [
         browserOrigin,
-        calendar.date,
-        calendar.view,
+        destination.date,
+        destination.view,
         "",
       ]),
       origin: browserOrigin,
-      calendar,
+      calendar: destination,
     });
     expect(response.status).toBe(200);
     const { ticket } = (await response.json()) as { ticket: string };
@@ -1400,6 +1400,10 @@ test("linked devices renew independently and can be revoked from either client",
   const browserUser = await t.app.request("/me", { headers: { cookie: browserCookie } });
   expect(await browserUser.json()).toMatchObject({ user: { id: who.userId, role: "owner" } });
   expect((await redeemBrowser(browserTicket)).status).toBe(401);
+  const resourceTicket = await issueBrowser({ ...calendar, view: "resources" });
+  const resources = await redeemBrowser(resourceTicket);
+  expect(resources.status).toBe(303);
+  expect(resources.headers.get("location")).toBe("/admin/calendar?date=2026-11-18&view=resources");
   const workspaceRequest = {
     origin: browserOrigin,
     workspace: "inventory",
