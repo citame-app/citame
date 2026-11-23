@@ -16,6 +16,7 @@ import type { NotificationConfig } from "../../config";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { backfillWhatsAppReminders } from "../outbox";
+import { WHATSAPP_DELIVERY_UNKNOWN } from "../queue";
 import { createMeta, tokenCipher } from "./meta";
 
 const savedRule = whatsappRuleSchema.extend({ template: whatsappTemplateSchema });
@@ -117,7 +118,7 @@ export async function whatsappDesk(db: Database, config: NotificationConfig) {
       : null,
     deliveries: deliveries.map(({ lastError, ...delivery }) => ({
       ...delivery,
-      uncertain: !delivery.delivery && lastError === "whatsapp_delivery_unknown",
+      uncertain: !delivery.delivery && lastError === WHATSAPP_DELIVERY_UNKNOWN,
     })),
   });
 }
