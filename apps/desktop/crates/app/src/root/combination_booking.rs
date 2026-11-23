@@ -5,6 +5,25 @@ pub(super) struct BookingCombination {
     pub(super) offer: ManagedCombination,
     pub(super) review: FixedCombinationReview,
     pub(super) override_notice: bool,
+    pub(super) selected_start: Option<DateTime<Utc>>,
+    slots: CombinationSlots,
+}
+
+#[derive(Default)]
+enum CombinationSlots {
+    #[default]
+    Idle,
+    Loading(Arc<()>),
+    Ready(Vec<DateTime<Utc>>),
+    Unavailable,
+    Changed,
+}
+
+impl BookingCombination {
+    pub(super) fn forget_slots(&mut self) {
+        self.selected_start = None;
+        self.slots = CombinationSlots::Idle;
+    }
 }
 
 pub(super) fn eligible_combination_staff<'a>(
@@ -58,6 +77,8 @@ impl Root {
             offer: offer.clone(),
             review,
             override_notice: true,
+            selected_start: None,
+            slots: CombinationSlots::Idle,
         });
         if old_staff != form.staff_id {
             form.selected_end = None;
@@ -65,6 +86,180 @@ impl Root {
         form.service_scroll.set_offset(gpui::point(px(0.), px(0.)));
         form.error = None;
         cx.notify();
+    }
+
+    fn load_combination_slots(&mut self, cx: &mut Context<Self>) {
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let Overlay::New(form) = &mut self.overlay else {
+            return;
+        };
+        let (Some(selection), Some(staff)) = (&mut form.combination, &form.staff_id) else {
+            return;
+        };
+        if matches!(selection.slots, CombinationSlots::Loading(_)) {
+            return;
+        }
+        let id = selection.review.id.clone();
+        let staff = staff.clone();
+        let date = form.date;
+        let services = form.services.clone();
+        let identity = Arc::new(());
+        let session = self.svc.session.clone();
+        selection.slots = CombinationSlots::Loading(identity.clone());
+        cx.notify();
+        cx.spawn(async move |view, cx| {
+            let result = cx.background_executor()
+                .spawn(async move { transport.combination_slots(&id, &staff, date, &services) })
+                .await;
+            let _ = view.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none() {
+                    return;
+                }
+                let Overlay::New(form) = &mut root.overlay else { return; };
+                let Some(selection) = &mut form.combination else { return; };
+                if !matches!(&selection.slots, CombinationSlots::Loading(current) if Arc::ptr_eq(current, &identity)) {
+                    return;
+                }
+                selection.slots = match result {
+                    Ok(times) => CombinationSlots::Ready(times),
+                    Err(sob_core::sync::TransportError::BadRequest(_)) => {
+                        root.svc.wake(Wake::Manual);
+                        CombinationSlots::Changed
+                    }
+                    Err(_) => CombinationSlots::Unavailable,
+                };
+                cx.notify();
+            });
+        }).detach();
+    }
+
+    fn pick_combination_slot(&mut self, start: DateTime<Utc>, cx: &mut Context<Self>) {
+        let Overlay::New(form) = &mut self.overlay else {
+            return;
+        };
+        let Some(selection) = &mut form.combination else {
+            return;
+        };
+        if !matches!(&selection.slots, CombinationSlots::Ready(times) if times.contains(&start)) {
+            return;
+        }
+        let wall = start.with_timezone(&self.tz);
+        if form.date != wall.date_naive() {
+            return;
+        }
+        form.minutes = i64::from(wall.hour() * 60 + wall.minute());
+        form.selected_end = None;
+        form.error = None;
+        selection.selected_start = Some(start);
+        cx.notify();
+    }
+
+    pub(super) fn render_combination_slots(
+        &self,
+        form: &NewForm,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Div> {
+        let selection = form.combination.as_ref()?;
+        if self.status.connectivity != Connectivity::Online || form.staff_id.is_none() {
+            return None;
+        }
+        let fetch_label = if matches!(selection.slots, CombinationSlots::Loading(_)) {
+            Key::CombinationTimesLoading
+        } else {
+            Key::CombinationAvailableTimes
+        };
+        let status = match &selection.slots {
+            CombinationSlots::Idle | CombinationSlots::Loading(_) => None,
+            CombinationSlots::Ready(times) if times.is_empty() => Some(Key::CombinationTimesEmpty),
+            CombinationSlots::Ready(_) => None,
+            CombinationSlots::Unavailable => Some(Key::CombinationTimesUnavailable),
+            CombinationSlots::Changed => Some(Key::CombinationBookingChanged),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    self.button(
+                        "combination-times-fetch",
+                        self.t(fetch_label),
+                        Kind::Ghost,
+                        cx.listener(|root, _, _, cx| root.load_combination_slots(cx)),
+                    )
+                    .tab_index(0)
+                    .focus(|view| view.border_color(theme::text()))
+                    .on_key_down(cx.listener(
+                        |root, event: &gpui::KeyDownEvent, _, cx| {
+                            if activates_button(event) {
+                                cx.stop_propagation();
+                                root.load_combination_slots(cx);
+                            }
+                        },
+                    )),
+                )
+                .when_some(status, |list, key| {
+                    list.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(key)),
+                    )
+                })
+                .when_some(
+                    match &selection.slots {
+                        CombinationSlots::Ready(times) => Some(times),
+                        _ => None,
+                    },
+                    |list, times| {
+                        list.child(
+                            div()
+                                .id("combination-slot-options")
+                                .max_h(px(140.))
+                                .overflow_y_scroll()
+                                .flex()
+                                .flex_wrap()
+                                .gap_1()
+                                .children(times.iter().copied().map(|start| {
+                                    let wall = start.with_timezone(&self.tz);
+                                    let label = if self
+                                        .tz
+                                        .from_local_datetime(&wall.naive_local())
+                                        .single()
+                                        .is_none()
+                                    {
+                                        wall.format("%H:%M %Z").to_string()
+                                    } else {
+                                        wall.format("%H:%M").to_string()
+                                    };
+                                    self.chip(
+                                        SharedString::from(format!(
+                                            "combo-time-{}",
+                                            start.timestamp()
+                                        )),
+                                        label,
+                                        selection.selected_start == Some(start),
+                                        cx.listener(move |root, _, _, cx| {
+                                            root.pick_combination_slot(start, cx)
+                                        }),
+                                    )
+                                    .tab_index(0)
+                                    .focus(|view| view.border_color(theme::text()))
+                                    .on_key_down(cx.listener(
+                                        move |root, event: &gpui::KeyDownEvent, _, cx| {
+                                            if activates_button(event) {
+                                                cx.stop_propagation();
+                                                root.pick_combination_slot(start, cx);
+                                            }
+                                        },
+                                    ))
+                                })),
+                        )
+                    },
+                ),
+        )
     }
 
     fn clear_booking_combination(&mut self, cx: &mut Context<Self>) {

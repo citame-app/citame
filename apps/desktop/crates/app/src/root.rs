@@ -1165,7 +1165,7 @@ impl Root {
     /// Choosing a staff member drops selected services they do not perform.
     fn pick_new_staff(&mut self, id: String, cx: &mut Context<Self>) {
         if let Overlay::New(f) = &mut self.overlay {
-            if let Some(selection) = &f.combination {
+            if let Some(selection) = &mut f.combination {
                 if !selection.offer.permits_staff(&id)
                     || !sob_core::combinations::booking_calendar_allows(
                         self.calendar_scope.as_deref(),
@@ -1176,6 +1176,7 @@ impl Root {
                 }
                 if f.staff_id.as_deref() != Some(id.as_str()) {
                     f.selected_end = None;
+                    selection.forget_slots();
                 }
             } else {
                 let performed = ops::performed_services(&self.svc.store, &id).unwrap_or_default();
@@ -1235,7 +1236,12 @@ impl Root {
             cx.notify();
             return;
         }
-        let Some(starts_at) = salon_local_instant(self.tz, form.date, form.minutes) else {
+        let Some(starts_at) = form
+            .combination
+            .as_ref()
+            .and_then(|selection| selection.selected_start)
+            .or_else(|| salon_local_instant(self.tz, form.date, form.minutes))
+        else {
             form.error = Some(Key::ErrInvalidLocalStart);
             cx.notify();
             return;
@@ -3054,15 +3060,24 @@ impl Root {
                         self.stepper("new-start", start_label, cx, |this, minutes, cx| {
                             if let Overlay::New(form) = &mut this.overlay {
                                 let total = form.minutes + minutes;
-                                form.date += Span::days(total.div_euclid(1440));
+                                let day_change = total.div_euclid(1440);
+                                form.date += Span::days(day_change);
                                 form.minutes = total.rem_euclid(1440);
                                 form.selected_end = None;
+                                if let Some(selection) = &mut form.combination {
+                                    if day_change == 0 {
+                                        selection.selected_start = None;
+                                    } else {
+                                        selection.forget_slots();
+                                    }
+                                }
                                 form.error = None;
                             }
                             cx.notify();
                         })
                         .flex_wrap(),
                     )
+                    .children(self.render_combination_slots(f, cx))
                     .when_some(f.selected_end, |section, end| {
                         section.child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
                             self.t(Key::SelectedSlotEnd),

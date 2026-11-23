@@ -2138,6 +2138,63 @@ impl HttpTransport {
         read_response(response, false)
     }
 
+    pub fn combination_slots(
+        &self,
+        combination_id: &str,
+        staff_id: &str,
+        date: chrono::NaiveDate,
+        service_ids: &[String],
+    ) -> Result<Vec<chrono::DateTime<chrono::Utc>>, TransportError> {
+        #[derive(serde::Deserialize)]
+        struct Availability {
+            date: chrono::NaiveDate,
+            timezone: String,
+            slots: Vec<Slot>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Slot {
+            staff_id: String,
+            starts_at: chrono::DateTime<chrono::Utc>,
+            ends_at: chrono::DateTime<chrono::Utc>,
+        }
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("date", &date.to_string())
+            .append_pair("combinationId", &parse_id(combination_id)?.to_string())
+            .append_pair("staffId", &parse_id(staff_id)?.to_string())
+            .append_pair("serviceIds", &service_ids.join(","))
+            .finish();
+        let response = self.get(
+            &self.agent,
+            &format!("/appointments/combination-availability?{query}"),
+            None,
+        )?;
+        let result: Availability = read_response(response, false)?;
+        let timezone: chrono_tz::Tz = result
+            .timezone
+            .parse()
+            .map_err(|_| TransportError::Server("Unknown availability timezone".into()))?;
+        if result.date != date
+            || result.slots.iter().any(|slot| {
+                slot.staff_id != staff_id
+                    || slot.ends_at <= slot.starts_at
+                    || slot.starts_at.with_timezone(&timezone).date_naive() != date
+            })
+        {
+            return Err(TransportError::Server(
+                "Unexpected combination availability".into(),
+            ));
+        }
+        let mut starts = result
+            .slots
+            .into_iter()
+            .map(|slot| slot.starts_at)
+            .collect::<Vec<_>>();
+        starts.sort_unstable();
+        starts.dedup();
+        Ok(starts)
+    }
+
     pub fn direct_booking_requirements(
         &self,
         terms: &BookingTerms,

@@ -1281,6 +1281,17 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
     };
     let terms =
         BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)).unwrap();
+    let timezone = salon_tz(&store).unwrap();
+    let availability = device
+        .transport
+        .combination_slots(
+            combination_id,
+            &catalog.staff,
+            starts.with_timezone(&timezone).date_naive(),
+            &services,
+        )
+        .unwrap();
+    assert!(availability.contains(&starts));
     store
         .set_meta("calendar_scope", &catalog.other_staff)
         .unwrap();
