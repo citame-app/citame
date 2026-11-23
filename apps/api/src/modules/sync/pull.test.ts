@@ -4,7 +4,9 @@ import {
   appointmentContext,
   appointmentService,
   clientProfile,
+  resourcePool,
   service,
+  serviceResource,
   staffProfile,
 } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
@@ -152,6 +154,51 @@ test("an existing replica learns Booksy origin without an appointment edit", asy
   expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
     { id: imported.id, op: "delete", data: null },
   ]);
+});
+
+test("existing replicas receive confirmed resource quantities only for visible appointments", async () => {
+  const unallocated = await book(f.beaId);
+  const [room] = await t.db
+    .insert(resourcePool)
+    .values({
+      name: "Treatment room",
+      kind: "room",
+      capacity: 2,
+      idempotencyKey: "fixture-room",
+      requestHash: "fixture-room",
+    })
+    .returning();
+  if (!room) throw new Error("Missing resource pool");
+  await t.db
+    .insert(serviceResource)
+    .values({ serviceId: f.haircutId, resourceId: room.id, quantity: 2 });
+  const allocated = await book();
+  const cursor = await head();
+  const migration = await Bun.file(
+    new URL("../../../../../packages/db/drizzle/0124_sync_booked_resources.sql", import.meta.url),
+  ).text();
+  await t.db.transaction(async (tx) => {
+    for (const statement of migration.split("--> statement-breakpoint")) {
+      await tx.execute(sql.raw(statement.trim()));
+    }
+  });
+  for (const viewer of [owner, ana]) {
+    const page = await pull(t, viewer, { since: cursor });
+    expect(page.changes).toHaveLength(1);
+    expect(page.changes[0]).toMatchObject({
+      id: allocated.id,
+      entity: "appointment",
+      op: "upsert",
+      data: { resources: [{ name: "Treatment room", quantity: 2 }], version: allocated.version },
+    });
+  }
+  expect((await pull(t, bea, { since: cursor })).changes).toMatchObject([
+    { id: allocated.id, op: "delete", data: null },
+  ]);
+  const full = await pullAll(t, owner);
+  const unrelated = full.changes.find((change) => change.id === unallocated.id);
+  expect(unrelated?.op).toBe("upsert");
+  expect(unrelated?.data).not.toHaveProperty("resources");
 });
 
 test("billing holds and verified prices replicate without exposing the evidence reference or notes", async () => {

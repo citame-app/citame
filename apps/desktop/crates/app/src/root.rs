@@ -3450,8 +3450,28 @@ impl Root {
                 )
             })
             .when_some(current.as_ref(), |body, appointment| {
-                body.child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
-                    .children(self.render_related_visit(appointment, d, cx))
+                body.when(!appointment.resources.is_empty(), |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .text_sm()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(self.t(Key::AppointmentResources)),
+                            )
+                            .children(appointment.resources.iter().map(|resource| {
+                                div().child(SharedString::from(format!(
+                                    "{} × {}",
+                                    resource.name, resource.quantity
+                                )))
+                            })),
+                    )
+                })
+                .child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
+                .children(self.render_related_visit(appointment, d, cx))
             })
             .when(
                 !pending

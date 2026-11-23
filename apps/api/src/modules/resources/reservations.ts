@@ -411,24 +411,32 @@ export async function calendarResources(db: Connection, appointmentIds: string[]
   const result = new Map<string, { name: string; quantity: number }[]>();
   if (!appointmentIds.length) return result;
   const rows = await db
-    .select()
+    .select({
+      appointmentId: resourceReservation.appointmentId,
+      resourceId: resourceReservation.resourceId,
+      name: resourceReservation.name,
+      servicePosition: resourceReservation.servicePosition,
+    })
     .from(resourceReservation)
     .where(inArray(resourceReservation.appointmentId, appointmentIds));
-  for (const id of appointmentIds) {
-    const groups = new Map<string, { name: string; counts: Map<number, number> }>();
-    for (const row of rows.filter((r) => r.appointmentId === id)) {
-      const value = groups.get(row.resourceId) ?? { name: row.name, counts: new Map() };
-      value.counts.set(row.servicePosition, (value.counts.get(row.servicePosition) ?? 0) + 1);
-      groups.set(row.resourceId, value);
-    }
-    if (groups.size)
-      result.set(
-        id,
-        [...groups.values()].map((g) => ({
-          name: g.name,
-          quantity: Math.max(...g.counts.values()),
-        })),
-      );
+  type ResourceGroups = Map<string, { name: string; counts: Map<number, number> }>;
+  const appointments = new Map<string, ResourceGroups>();
+  for (const row of rows) {
+    if (!row.appointmentId) continue;
+    const groups = appointments.get(row.appointmentId) ?? new Map();
+    const value = groups.get(row.resourceId) ?? { name: row.name, counts: new Map() };
+    value.counts.set(row.servicePosition, (value.counts.get(row.servicePosition) ?? 0) + 1);
+    groups.set(row.resourceId, value);
+    appointments.set(row.appointmentId, groups);
+  }
+  for (const [id, groups] of appointments) {
+    result.set(
+      id,
+      [...groups.values()].map((g) => ({
+        name: g.name,
+        quantity: Math.max(...g.counts.values()),
+      })),
+    );
   }
   return result;
 }

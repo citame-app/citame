@@ -123,7 +123,7 @@ Las capturas de la demostración se guardan en `.taste-skill/calendar/`, una rut
 
 | Prioridad | Cambio | Condición de aceptación |
 | --- | --- | --- |
-| Alta | Agenda por recursos | Columnas y filtros por identificador de recurso, con capacidad y reservas reales; no agrupar recursos solo por su nombre |
+| Alta | Agenda por recursos | Web y Desktop muestran los recursos confirmados en la ficha. Desktop conserva la asignación en su réplica sin conexión. Quedan las columnas y los filtros por identificador de recurso con capacidad real. |
 | Alta | Interacción por servicio | Decidir y validar la asignación y reprogramación individual de servicios. Actualmente un arrastre desplaza la reserva completa |
 | Resuelto | Colores configurables | Categoría y color persistidos en servicios; lectura por lotes en la agenda, conservando precios históricos |
 | Alta | Panel de reserva | Igualar la composición y acciones del panel lateral de Booksy conservando permisos, depósitos y checkout existentes |

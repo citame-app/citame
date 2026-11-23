@@ -181,6 +181,13 @@ pub struct UpdateServiceAnnotations {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct BookedResource {
+    pub name: String,
+    pub quantity: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Appointment {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -199,6 +206,8 @@ pub struct Appointment {
     pub notes: Option<String>,
     pub version: i64,
     pub services: Vec<AppointmentService>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<BookedResource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub service_badges: Vec<CalendarServiceBadge>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -658,6 +658,7 @@ keys! {
     CatalogPhotosUseVersion => ("Keep my edits with this version", "Conservar mis cambios sobre esta versión"),
     CatalogTitle => ("Service catalogue", "Catálogo de servicios"),
     ResourceRequirements => ("Service resources", "Recursos por servicio"),
+    AppointmentResources => ("Confirmed resources", "Recursos confirmados"),
     ResourceNone => ("No required resources", "Sin recursos obligatorios"),
     ResourceNoPools => ("There are no resources configured.", "No hay recursos configurados."),
     ResourceAll => ("Require every selected resource", "Requerir todos los recursos seleccionados"),

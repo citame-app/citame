@@ -35,6 +35,7 @@ import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { giftReplicaScope } from "../gift-cards/service";
 import { offlinePeakPriceSnapshot } from "../peak-prices/service";
 import { listResources } from "../resources/catalog";
+import { calendarResources } from "../resources/reservations";
 import { listCombinations } from "../services/combinations";
 import { catalogMetadata, publicService } from "../services/options";
 import { toReviewedSettings, toSalonResponse } from "../settings/service";
@@ -90,10 +91,11 @@ async function loadVisible(
         .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
         .where(and(inArray(appointment.id, ids), isNull(appointment.deletedAt)));
       const visible = rows.filter(({ row }) => ownCalendar(row.staffId));
-      const snapshots = await loadSnapshots(
-        db,
-        visible.map(({ row }) => row.id),
-      );
+      const visibleIds = visible.map(({ row }) => row.id);
+      const [snapshots, resources] = await Promise.all([
+        loadSnapshots(db, visibleIds),
+        calendarResources(db, visibleIds),
+      ]);
       const badges = await calendarBadges(
         db,
         visible.map(({ row }) => row),
@@ -102,9 +104,11 @@ async function loadVisible(
       );
       for (const { row, clientName, itineraryId } of visible) {
         const billing = badges.get(row.id);
+        const bookedResources = resources.get(row.id);
         put(row.id, {
           ...toAppointment(row, snapshots.get(row.id) ?? []),
           clientName,
+          ...(bookedResources ? { resources: bookedResources } : {}),
           ...(itineraryId ? { itineraryId } : {}),
           ...(billing?.badges.some(
             (badge) =>

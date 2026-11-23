@@ -636,6 +636,7 @@ const upsertChangeSchema = z.discriminatedUnion("entity", [
         importedFromBooksy: true,
         booksyUnpaidConfirmed: true,
         serviceBadges: true,
+        resources: true,
       }).shape,
     }),
   ),

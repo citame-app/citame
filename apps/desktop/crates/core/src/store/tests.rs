@@ -860,6 +860,32 @@ fn booksy_origin_refreshes_an_existing_appointment_at_the_same_version() {
 }
 
 #[test]
+fn booked_resources_refresh_existing_replicas_and_survive_offline_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.db");
+    {
+        let mut store = Store::open(&path).unwrap();
+        let mut visit = appt_change(1, A1, 1);
+        store.apply_page(&[visit.clone()], 1).unwrap();
+        assert!(store.appointment(A1).unwrap().unwrap().resources.is_empty());
+
+        visit.seq = 2;
+        visit.data.as_mut().unwrap()["resources"] =
+            json!([{ "name": "Treatment room", "quantity": 2 }]);
+        store
+            .apply_sync_page(&[visit], 2, true, true, &[], None)
+            .unwrap();
+        assert_eq!(store.booking_notice_head().unwrap(), 0);
+    }
+    let store = Store::open(&path).unwrap();
+    let visit = store.appointment(A1).unwrap().unwrap();
+    assert_eq!(visit.version, 1);
+    assert_eq!(visit.resources.len(), 1);
+    assert_eq!(visit.resources[0].name, "Treatment room");
+    assert_eq!(visit.resources[0].quantity, 2);
+}
+
+#[test]
 fn replica_keeps_imported_group_billing_holds_and_reviewed_price_across_restart() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("replica.db");
