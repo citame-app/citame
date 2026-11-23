@@ -17,6 +17,7 @@ const sourceSuffix = `backup_${runId}`;
 const restoredName = `sob_test_restored_${runId}`;
 const truncatedName = `${restoredName}_truncated`;
 const restrictedName = `${restoredName}_restricted`;
+const invalidArchiveName = `${restoredName}_invalid`;
 const restoreRole = `sob_restore_${runId}`;
 
 beforeAll(async () => {
@@ -29,7 +30,13 @@ afterAll(async () => {
   const admin = new SQL(source.url.replace(/\/[^/]+$/, "/postgres"));
   try {
     await source.close();
-    for (const name of [`sob_test_${sourceSuffix}`, restoredName, truncatedName, restrictedName]) {
+    for (const name of [
+      `sob_test_${sourceSuffix}`,
+      restoredName,
+      truncatedName,
+      restrictedName,
+      invalidArchiveName,
+    ]) {
       await admin.unsafe(`drop database if exists "${name}" with (force)`);
     }
     await admin.unsafe(`drop role if exists "${restoreRole}"`);
@@ -150,6 +157,58 @@ test("restore refuses a corrupted dump and a non-empty target", async () => {
   expect(unverified.exitCode).not.toBe(0);
   expect(unverified.stderr.toString()).toContain("missing checksum");
 }, 60_000);
+
+test("a matching checksum does not create a database for an unreadable archive", async () => {
+  const dump = join(dir, "invalid-archive.dump");
+  const contents = "This is not a PostgreSQL backup.";
+  const checksum = new Bun.CryptoHasher("sha256").update(contents).digest("hex");
+  await Bun.write(dump, contents);
+  await Bun.write(`${dump}.sha256`, `${checksum}  invalid-archive.dump\n`);
+  const target = new URL(source.url);
+  target.pathname = `/${invalidArchiveName}`;
+  const restored = run(["bash", "scripts/restore.sh", dump, target.href], {});
+  expect(restored.exitCode).not.toBe(0);
+  expect(restored.stderr.toString()).toContain("archive table of contents");
+  target.pathname = "/postgres";
+  const admin = new SQL(target.href);
+  try {
+    const result = await admin`
+      select exists (select 1 from pg_database where datname = ${invalidArchiveName}) as present
+    `;
+    expect(result).toEqual([{ present: false }]);
+  } finally {
+    await admin.close();
+  }
+});
+
+test("restore refuses a remote or configured Docker target before sending archive bytes", async () => {
+  const dump = join(dir, "docker-refused.dump");
+  const contents = "synthetic archive";
+  const checksum = new Bun.CryptoHasher("sha256").update(contents).digest("hex");
+  await Bun.write(dump, contents);
+  await Bun.write(`${dump}.sha256`, `${checksum}  docker-refused.dump\n`);
+  for (const target of [
+    "postgres://owner@remote.example.invalid/salon",
+    "postgres://owner@localhost/salon?sslmode=verify-full",
+  ]) {
+    const restored = run(
+      [
+        "bash",
+        "-c",
+        `docker() { echo "Docker received the archive" >&2; exit 97; }
+        export -f docker
+        exec bash scripts/restore.sh "$@"`,
+        "restore-test",
+        dump,
+        target,
+      ],
+      { PG_MODE: "docker", PG_CONTAINER: "synthetic-postgres" },
+    );
+    expect(restored.exitCode).not.toBe(0);
+    expect(restored.stderr.toString()).toContain("native PostgreSQL");
+    expect(restored.stderr.toString()).not.toContain("Docker received the archive");
+  }
+});
 
 test("restore refuses hidden tables and standalone objects in the target", async () => {
   const dump = join(dir, "restricted.dump");
