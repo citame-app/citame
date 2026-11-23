@@ -11,15 +11,27 @@ source "$(dirname "$0")/lib.sh"
 DUMP="${1:?usage: restore.sh <dump-file> <target-database-url>}"
 TARGET="${2:?usage: restore.sh <dump-file> <target-database-url>}"
 
-if [ -f "$DUMP.sha256" ]; then
-  expected="$(cut -d' ' -f1 "$DUMP.sha256")"
-  [ "$(sha256_of "$DUMP")" = "$expected" ] || { echo "restore refused: checksum mismatch for $DUMP" >&2; exit 1; }
-else
+if [ ! -f "$DUMP.sha256" ]; then
   echo "restore refused: missing checksum file $DUMP.sha256" >&2
   exit 1
 fi
+expected="$(cut -d' ' -f1 "$DUMP.sha256")"
 
-if ! read_restore_archive "$TARGET" pg_restore --list < "$DUMP" > /dev/null; then
+# Restore the same bytes we verified, even if the source pathname is refreshed.
+umask 077
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/citame-restore.XXXXXXXX")"
+ARCHIVE="$STAGE/archive.dump"
+cleanup() {
+  rm -f -- "$ARCHIVE"
+  rmdir -- "$STAGE"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cp -- "$DUMP" "$ARCHIVE"
+[ "$(sha256_of "$ARCHIVE")" = "$expected" ] || { echo "restore refused: checksum mismatch for $DUMP" >&2; exit 1; }
+
+if ! read_restore_archive "$TARGET" pg_restore --list < "$ARCHIVE" > /dev/null; then
   echo "restore refused: could not read the PostgreSQL archive table of contents for $DUMP" >&2
   exit 1
 fi
@@ -65,5 +77,5 @@ if [ "$occupied" != "f" ] && [ "${FORCE:-0}" != "1" ]; then
   exit 1
 fi
 
-pg_tool pg_restore "$TARGET" --no-owner --no-privileges --single-transaction --exit-on-error < "$DUMP"
+pg_tool pg_restore "$TARGET" --no-owner --no-privileges --single-transaction --exit-on-error < "$ARCHIVE"
 echo "restore finished: $DB"
