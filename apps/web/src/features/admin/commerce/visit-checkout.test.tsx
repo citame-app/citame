@@ -32,6 +32,7 @@ const appointments = [
     appointmentId: first,
     staffId: id("105"),
     staffName: "Ana",
+    serviceNames: ["Style"],
     startsAt: createdAt,
     status: "completed",
     settledExternally: false,
@@ -41,6 +42,7 @@ const appointments = [
     appointmentId: second,
     staffId: id("106"),
     staffName: "Bea",
+    serviceNames: ["Cut"],
     startsAt: createdAt,
     status: "completed",
     settledExternally: false,
@@ -126,6 +128,9 @@ test("an uncertain payment can be recovered from another appointment in the same
   open(second);
   fireEvent.click(await screen.findByRole("button", { name: "Retry same payment · €31" }));
   await screen.findByText("Visit payment recorded · €31");
+  expect(screen.getByText("€12 recorded")).toBeTruthy();
+  expect(screen.getByText("€19 recorded")).toBeTruthy();
+  expect(screen.getAllByRole("button", { name: "View receipt" })).toHaveLength(2);
   expect(commands[1]?.path).toContain(second);
   expect(commands[1]?.body).toEqual(commands[0]?.body);
   expect(sessionStorage.getItem(storageKey)).toBeNull();
@@ -155,4 +160,24 @@ test("another operator cannot recover the saved payment command", async () => {
   await screen.findByRole("button", { name: "Record payment · €31" });
   expect(screen.queryByRole("button", { name: "Retry same payment · €31" })).toBeNull();
   await waitFor(() => expect(commands).toHaveLength(0));
+});
+
+test("no payment is sent if the browser cannot retain the original command", async () => {
+  open();
+  const button = await screen.findByRole("button", { name: "Record payment · €31" });
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+  if (!descriptor) throw new Error("Missing browser storage in the test environment");
+  Object.defineProperty(globalThis, "sessionStorage", {
+    configurable: true,
+    get() {
+      throw new DOMException("Storage blocked", "SecurityError");
+    },
+  });
+  try {
+    fireEvent.click(button);
+    await screen.findByText(/could not save the retry details/u);
+    expect(commands).toHaveLength(0);
+  } finally {
+    Object.defineProperty(globalThis, "sessionStorage", descriptor);
+  }
 });

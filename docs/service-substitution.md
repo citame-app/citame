@@ -56,6 +56,11 @@ service and amount, with access to open receipts. An uncertain request can be re
 another appointment in the same group on the same browser tab and account. Desktop controls
 and an aggregate hosted card or Bizum payment remain pending.
 
+Web saves the retry details before sending a new payment. If the browser blocks site storage,
+no payment is submitted. A local browser run with synthetic records verified a committed
+payment followed by a lost response, a retry from the other appointment, and access to its
+two receipts from the confirmation on mobile.
+
 ## Verification — 2026-11-17
 
 Development used Bun and Playwright TDD, as authorised for this web project. New price, catalogue, visit and footer regressions were observed failing before their corrections. Deterministic browser locators and response/state waits cover the real explored interactions.

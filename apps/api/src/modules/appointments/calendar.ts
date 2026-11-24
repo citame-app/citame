@@ -3,6 +3,8 @@ import {
   appointment,
   appointmentService,
   appointmentVisitPart,
+  bookingProtection,
+  checkout,
   clientProfile,
   type Database,
   service,
@@ -18,6 +20,7 @@ import {
   getTableColumns,
   gt,
   inArray,
+  isNotNull,
   isNull,
   lt,
   ne,
@@ -26,6 +29,7 @@ import {
   sql,
 } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
+import type { VisitCheckoutScope } from "../../auth/policy";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { workingWindows } from "../availability/windows";
@@ -41,17 +45,42 @@ type CalendarScope = {
   staffIds?: string[];
   includeBilling: boolean;
   includeInactiveStaff?: boolean;
-  visitCheckoutScope?: string;
+  visitCheckoutScope?: VisitCheckoutScope;
 };
 
-function groupedCheckout(db: Database | Tx, scope?: string) {
+function groupedCheckout(db: Database | Tx, scope?: VisitCheckoutScope) {
   if (!scope) return sql<boolean>`false`;
   const sibling = alias(appointment, "visit_checkout_sibling");
   const part = alias(appointmentVisitPart, "visit_checkout_part");
+  const receipt = alias(checkout, "visit_checkout_receipt");
+  const protection = alias(bookingProtection, "visit_checkout_protection");
+  const inaccessibleReceipt = (id: typeof appointment.id | typeof sibling.id) =>
+    scope.staffId === null
+      ? undefined
+      : exists(
+          db
+            .select({ id: receipt.id })
+            .from(receipt)
+            .leftJoin(protection, eq(protection.checkoutId, receipt.id))
+            .where(
+              and(
+                eq(receipt.appointmentId, id),
+                or(ne(receipt.status, "void"), isNotNull(protection.checkoutId)),
+                or(
+                  ne(receipt.staffId, scope.staffId),
+                  and(
+                    isNull(receipt.staffId),
+                    sql`${receipt.createdBy} IS DISTINCT FROM ${scope.actorId}`,
+                  ),
+                ),
+              ),
+            ),
+        );
   const member = and(isNull(sibling.deletedAt), ne(sibling.id, appointment.id));
   const outsideScope = or(
     ne(sibling.clientId, appointment.clientId),
-    scope === "all" ? undefined : ne(sibling.staffId, scope),
+    scope.staffId === null ? undefined : ne(sibling.staffId, scope.staffId),
+    inaccessibleReceipt(sibling.id),
   );
   const nativeMembers = (denied: boolean) =>
     db
@@ -82,7 +111,12 @@ function groupedCheckout(db: Database | Tx, scope?: string) {
     WHEN ${appointment.visitGroupId} IS NOT NULL THEN ${and(exists(importedMembers(false)), notExists(importedMembers(true)))}
     ELSE false END`;
   return sql<boolean>`(${and(
-    scope === "all" ? undefined : eq(appointment.staffId, scope),
+    scope.staffId === null
+      ? undefined
+      : and(
+          eq(appointment.staffId, scope.staffId),
+          sql`NOT ${inaccessibleReceipt(appointment.id)}`,
+        ),
     eligible,
   )})`;
 }

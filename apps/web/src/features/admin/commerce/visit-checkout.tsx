@@ -53,6 +53,7 @@ export function VisitCheckout({
   const [pending, setPending] = useState(() => recoverPayment(key));
   const [receiptId, setReceiptId] = useState<string>();
   const [method, setMethod] = useState<VisitPaymentInput["method"]>("cash");
+  const [storageError, setStorageError] = useState(false);
   const inFlight = useRef(false);
   const prepare = useMutation({
     mutationFn: () => api().commerce.prepareVisit(appointmentId),
@@ -67,6 +68,7 @@ export function VisitCheckout({
     }
   };
   const pay = useMutation({
+    networkMode: "always",
     mutationFn: (request: VisitPaymentInput) => api().commerce.payVisit(appointmentId, request),
     onSuccess: (_result, request) => {
       clear(request);
@@ -87,6 +89,10 @@ export function VisitCheckout({
   });
   const review = prepare.data?.paymentReview;
   const amount = pending?.totalCents ?? review?.totalCents;
+  const reviewHasOpenReceipts = prepare.data?.appointments.some(
+    (part) =>
+      part.status !== "cancelled" && !part.settledExternally && part.receipt?.status === "open",
+  );
   const money = (cents: number) => formatMoney(cents, "EUR", locale);
   const refresh = () => {
     setReceiptId(undefined);
@@ -102,13 +108,17 @@ export function VisitCheckout({
         totalCents: review.totalCents,
       });
     if (!draft) return;
+    if (!pending) {
+      try {
+        sessionStorage.setItem(key, JSON.stringify(draft));
+      } catch {
+        setStorageError(true);
+        return;
+      }
+    }
+    setStorageError(false);
     setPending(draft);
     inFlight.current = true;
-    try {
-      sessionStorage.setItem(key, JSON.stringify(draft));
-    } catch {
-      /* Keep the original command available in memory. */
-    }
     pay.mutate(draft.request);
   };
 
@@ -154,6 +164,12 @@ export function VisitCheckout({
                       const receipt = part.receipt;
                       const due = receipt?.payableCents ?? receipt?.balanceCents ?? 0;
                       const payable = part.status !== "cancelled" && !part.settledExternally;
+                      const bankPending = receipt?.payments.some(
+                        ({ status }) => status === "pending" || status === "reconciliation",
+                      );
+                      const pricePending =
+                        receipt?.protection?.state !== "pending" &&
+                        receipt?.lines.some(({ pricePending }) => pricePending);
                       const allocated = pay.data?.allocations.find(
                         (item) => item.receiptId === receipt?.id,
                       );
@@ -172,18 +188,18 @@ export function VisitCheckout({
                                     ? t("commerce.visit.recordedPart", {
                                         amount: money(allocated.amountCents),
                                       })
-                                    : payable && receipt?.status === "open" && due > 0
-                                      ? money(due)
-                                      : receipt
-                                        ? t(`commerce.status.${receipt.status}`)
-                                        : "—"}
+                                    : bankPending
+                                      ? t("commerce.visit.bankPending")
+                                      : pricePending
+                                        ? t("commerce.visit.pricePending")
+                                        : payable && review && receipt?.status === "open" && due > 0
+                                          ? money(due)
+                                          : receipt
+                                            ? t(`commerce.status.${receipt.status}`)
+                                            : "—"}
                             </span>
                           </div>
-                          {receipt && (
-                            <p className="text-sm text-muted">
-                              {receipt.lines.map((line) => line.description).join(" · ")}
-                            </p>
-                          )}
+                          <p className="text-sm text-muted">{part.serviceNames.join(" · ")}</p>
                           {receipt && payable && !pending && !pay.isPending && (
                             <Button
                               type="button"
@@ -192,6 +208,21 @@ export function VisitCheckout({
                             >
                               {t("commerce.details")}
                             </Button>
+                          )}
+                          {receipt && !payable && (
+                            <details className="text-sm">
+                              <summary className="cursor-pointer py-2 font-medium">
+                                {t("commerce.details")}
+                              </summary>
+                              <dl className="grid grid-cols-2 gap-1 text-muted">
+                                <dt>{t("commerce.total")}</dt>
+                                <dd>{money(receipt.totalCents)}</dd>
+                                <dt>{t("commerce.paid")}</dt>
+                                <dd>{money(receipt.paidCents)}</dd>
+                                <dt>{t("commerce.refunded")}</dt>
+                                <dd>{money(receipt.refundedCents)}</dd>
+                              </dl>
+                            </details>
                           )}
                         </li>
                       );
@@ -203,8 +234,37 @@ export function VisitCheckout({
                     {t("commerce.visit.recorded", { amount: money(pay.data.totalCents) })}
                   </p>
                 )}
+                {pay.data && !prepare.data && (
+                  <ul className="divide-y divide-line">
+                    {pay.data.allocations.map((allocation) => (
+                      <li
+                        key={allocation.receiptId}
+                        className="flex flex-wrap items-center justify-between gap-2 py-2"
+                      >
+                        <span>
+                          {t("commerce.visit.recordedPart", {
+                            amount: money(allocation.amountCents),
+                          })}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          onClick={() => setReceiptId(allocation.receiptId)}
+                        >
+                          {t("commerce.details")}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {prepare.data && !review && !pending && !pay.data && (
-                  <p className="text-sm text-muted">{t("commerce.visit.noPayment")}</p>
+                  <p className="text-sm text-muted">
+                    {t(
+                      reviewHasOpenReceipts
+                        ? "commerce.visit.noPayment"
+                        : "commerce.visit.noBalance",
+                    )}
+                  </p>
                 )}
                 {pay.isError && !pending && (
                   <p role="alert" className="text-danger-fg">
@@ -218,7 +278,7 @@ export function VisitCheckout({
                 )}
                 {(prepare.isError ||
                   (pay.isError && !pending) ||
-                  (prepare.data && !review && !pending && !pay.data)) && (
+                  (reviewHasOpenReceipts && !review && !pending && !pay.data)) && (
                   <Button
                     type="button"
                     variant="secondary"
@@ -238,10 +298,20 @@ export function VisitCheckout({
                       submit();
                     }}
                   >
-                    {pending ? (
-                      <p role="status" className="text-sm text-muted">
-                        {t(pay.isPending ? "commerce.visit.recording" : "commerce.visit.uncertain")}
+                    {storageError && (
+                      <p role="alert" className="text-danger-fg">
+                        {t("commerce.visit.storageError")}
                       </p>
+                    )}
+                    {pending ? (
+                      <div className="space-y-1 text-sm">
+                        <p className="font-medium">{t(`commerce.${pending.request.method}`)}</p>
+                        <p role="status" className="text-muted">
+                          {t(
+                            pay.isPending ? "commerce.visit.recording" : "commerce.visit.uncertain",
+                          )}
+                        </p>
+                      </div>
                     ) : (
                       <fieldset className="space-y-1">
                         <legend className="font-medium">{t("commerce.method")}</legend>

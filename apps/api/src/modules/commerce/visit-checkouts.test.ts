@@ -122,6 +122,29 @@ function collect(id: string, body: object, who = owner) {
   return json(t.app, `/admin/commerce/visits/${id}/payments`, "POST", body, who.cookie);
 }
 
+test("reassigning a calendar part does not expose a receipt owned by another professional", async () => {
+  const { first, second } = await group("import");
+  const sale = await json(
+    t.app,
+    "/admin/commerce/checkouts",
+    "POST",
+    {
+      appointmentId: second,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.cookie,
+  );
+  expect(sale.status).toBe(201);
+  await t.db.update(appointment).set({ staffId: f.anaId }).where(eq(appointment.id, second));
+  const path = "/appointments/calendar?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  const visible = calendarResponseSchema.parse(
+    await (await json(t.app, path, "GET", undefined, staff.cookie)).json(),
+  );
+  expect(visible.appointments).toHaveLength(2);
+  expect(visible.appointments.every((entry) => !entry.hasVisitCheckout)).toBe(true);
+  expect((await prepare(first, staff)).status).toBe(404);
+});
+
 async function paymentReview(id: string) {
   const result = await prepare(id);
   expect(result.status, await result.clone().text()).toBe(200);

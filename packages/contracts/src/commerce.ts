@@ -356,6 +356,7 @@ export const visitCheckoutSchema = z.object({
       appointmentId: idSchema,
       staffId: idSchema,
       staffName: z.string(),
+      serviceNames: z.array(z.string()),
       startsAt: instantSchema,
       status: appointmentStatusSchema,
       settledExternally: z.boolean(),

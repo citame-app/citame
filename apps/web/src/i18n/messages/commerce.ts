@@ -36,6 +36,11 @@ export const commerceEn = {
   "commerce.visit.recordedPart": "{amount} recorded",
   "commerce.visit.noPayment":
     "No amount can be collected together now. Check any price reviews or pending payments on the receipts.",
+  "commerce.visit.noBalance": "There is no outstanding balance for this visit.",
+  "commerce.visit.bankPending": "Bank payment pending",
+  "commerce.visit.pricePending": "Final price needs review",
+  "commerce.visit.storageError":
+    "This browser could not save the retry details. Allow site storage before recording the payment.",
   "commerce.visit.changed":
     "The payment was rejected. Review the latest amounts and cash register status before recording it again.",
   "commerce.visit.reconnect": "Reconnect to continue with this payment.",
@@ -157,6 +162,11 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.visit.recordedPart": "{amount} registrado",
   "commerce.visit.noPayment":
     "Ahora no hay un importe que se pueda cobrar en conjunto. Comprueba los precios por revisar y los pagos pendientes en los recibos.",
+  "commerce.visit.noBalance": "Esta visita no tiene saldo pendiente.",
+  "commerce.visit.bankPending": "Pago bancario pendiente",
+  "commerce.visit.pricePending": "Precio final por revisar",
+  "commerce.visit.storageError":
+    "Este navegador no pudo guardar los datos del reintento. Habilita el almacenamiento del sitio antes de registrar el pago.",
   "commerce.visit.changed":
     "Se rechazó el pago. Revisa los importes y el estado de caja antes de volver a registrarlo.",
   "commerce.visit.reconnect": "Vuelve a conectarte para continuar con el pago.",

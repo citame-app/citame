@@ -21,6 +21,7 @@ import { canReviewVisitCheckouts } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
+import { loadSnapshots } from "../appointments/service";
 import { appointmentBillingHolds, externallySettledAppointments } from "./appointment-billing";
 import {
   createCheckoutInTransaction,
@@ -129,11 +130,16 @@ async function visitReview(
     .from(staffProfile)
     .where(inArray(staffProfile.id, [...new Set(bookings.map(({ staffId }) => staffId))]));
   const staffNames = new Map(staff.map(({ id, name }) => [id, name]));
+  const services = await loadSnapshots(
+    tx,
+    bookings.map(({ id }) => id),
+  );
   for (const booking of bookings) {
     appointments.push({
       appointmentId: booking.id,
       staffId: booking.staffId,
       staffName: staffNames.get(booking.staffId) ?? "",
+      serviceNames: (services.get(booking.id) ?? []).map(({ name }) => name),
       startsAt: booking.startsAt.toISOString(),
       status: booking.status,
       settledExternally: settled.has(booking.id),
