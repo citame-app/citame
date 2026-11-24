@@ -11,6 +11,29 @@ pub(super) enum Annotations {
     Unavailable,
 }
 
+impl Annotations {
+    pub(super) fn protection(&self) -> Option<&AppointmentProtection> {
+        match self {
+            Self::Loading { previous, .. } => previous.as_ref()?.protection.as_ref(),
+            Self::Ready(context) => context.protection.as_ref(),
+            Self::Editing(draft) => draft.notes.protection.as_ref(),
+            Self::Unavailable => None,
+        }
+    }
+
+    fn forget_protection(&mut self) {
+        let context = match self {
+            Self::Loading { previous, .. } => previous.as_mut(),
+            Self::Ready(context) => Some(context),
+            Self::Editing(draft) => Some(&mut draft.notes),
+            Self::Unavailable => None,
+        };
+        if let Some(context) = context {
+            context.protection = None;
+        }
+    }
+}
+
 pub(super) struct NoteDraft {
     notes: AppointmentAnnotations,
     position: usize,
@@ -70,6 +93,12 @@ fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
 
 impl Root {
     pub(super) fn refresh_open_annotations(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
+        if force_refresh
+            && let Overlay::Details(details) = &mut self.overlay
+            && let Some(annotations) = &mut details.annotations
+        {
+            annotations.forget_protection();
+        }
         if self.status.connectivity != Connectivity::Online {
             return;
         }
@@ -691,6 +720,7 @@ mod tests {
                     appointment_version: Some(3),
                     can_edit: None,
                     default_requested: None,
+                    protection: None,
                     customer_comment: None,
                     business_message: None,
                     rows: vec![],
@@ -770,6 +800,7 @@ mod tests {
                 appointment_version: Some(3),
                 can_edit: Some(true),
                 default_requested: Some(true),
+                protection: None,
                 customer_comment: Some("Customer message".into()),
                 business_message: None,
                 rows: vec![],
@@ -855,6 +886,7 @@ mod tests {
                     appointment_version: Some(3),
                     can_edit: Some(true),
                     default_requested: Some(false),
+                    protection: None,
                     customer_comment: None,
                     business_message: None,
                     rows: vec![ServiceAnnotations {

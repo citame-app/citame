@@ -50,6 +50,7 @@ mod checkout;
 mod combination_booking;
 mod combinations;
 mod connection;
+mod deposit_context;
 mod directory;
 mod email_delivery;
 mod form_admin;
@@ -1530,6 +1531,16 @@ impl Root {
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
+        if let Some(key) = d
+            .annotations
+            .as_ref()
+            .and_then(annotations::Annotations::protection)
+            .and_then(deposit_context::blocked_outcome)
+        {
+            d.error = Some(i18n::t(self.locale, key).to_owned());
+            cx.notify();
+            return;
+        }
         let result = ops::queue_reviewed_appointment_edit(
             &mut self.svc.store,
             &d.id,
@@ -3587,9 +3598,19 @@ impl Root {
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
             });
+        let protection = d
+            .annotations
+            .as_ref()
+            .and_then(annotations::Annotations::protection);
         let outcomes = current
             .as_ref()
-            .filter(|a| !stale && self.can_edit_staff_calendar(&a.staff_id))
+            .filter(|a| {
+                !stale
+                    && self.can_edit_staff_calendar(&a.staff_id)
+                    && protection
+                        .and_then(deposit_context::blocked_outcome)
+                        .is_none()
+            })
             .map_or(&[][..], |a| {
                 ops::appointment_outcome_options(
                     a,
@@ -3639,6 +3660,13 @@ impl Root {
             .child(div().text_sm().child(SharedString::from(
                 self.date_time_label(d.reviewed.starts_at),
             )))
+            .when_some(protection, |details, protection| {
+                details.child(self.render_appointment_protection(
+                    protection,
+                    matches!(d.annotations, Some(annotations::Annotations::Ready(_))),
+                    cx,
+                ))
+            })
             .when_some(current.as_ref(), |x, appointment| {
                 x.child(
                     div()
@@ -6231,6 +6259,55 @@ mod tests {
             assert_eq!(outbox_kinds(root).len(), 1);
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    async fn the_details_show_protection_and_hide_attendance_until_the_deposit_is_paid(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1280.), px(1000.)));
+        let now = "2026-03-10T12:00:00Z".parse().unwrap();
+        root.update(cx, |root, cx| {
+            root.open_details(EXISTING, cx);
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            details.annotations = Some(annotations::Annotations::Ready(AppointmentAnnotations {
+                appointment_version: Some(3),
+                can_edit: Some(true),
+                default_requested: None,
+                protection: Some(AppointmentProtection {
+                    state: AppointmentProtectionState::Pending,
+                    expires_at: now,
+                    cancellation_cutoff: now,
+                    deposit_cents: Some(2500),
+                    fee_cents: None,
+                    refund_due_cents: None,
+                }),
+                rows: vec![],
+                customer_comment: None,
+                business_message: None,
+            }));
+            root.set_outcome(AppointmentStatus::Completed, now, cx);
+            assert!(outbox_kinds(root).is_empty());
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("appointment-protection").is_some());
+        assert!(cx.debug_bounds("mark-completed").is_none());
+        root.update(cx, |root, cx| {
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            let Some(annotations::Annotations::Ready(notes)) = &mut details.annotations else {
+                panic!("expected payment status");
+            };
+            notes.protection.as_mut().unwrap().state = AppointmentProtectionState::Confirmed;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mark-completed").is_some());
     }
 
     #[gpui::test]
