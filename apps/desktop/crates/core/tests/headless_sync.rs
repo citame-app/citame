@@ -1297,8 +1297,9 @@ fn native_fixed_combination_books_offline_and_online_with_the_same_review() {
         .unwrap();
     assert!(matches!(
         BookingTerms::prepare_reviewed(&store, booking(starts), None, Some(&review)),
-        Err(sob_core::error::CoreError::IncompatibleServices)
+        Err(sob_core::error::CoreError::AppointmentScopeDenied)
     ));
+    assert!(store.outbox(1).unwrap().is_empty());
     store.set_meta("calendar_scope", "all").unwrap();
     let quote = device.transport.booking_peak_price(&terms).unwrap();
     assert!(terms.matches_price_quote(&quote));
