@@ -65,7 +65,14 @@ beforeEach(() => {
         groupId,
         source: "itinerary",
         appointments,
-        paymentReview: { token, totalCents: 3100 },
+        paymentReview: {
+          token,
+          totalCents: 3100,
+          allocations: [
+            { receiptId: id("103"), amountCents: 1200 },
+            { receiptId: id("104"), amountCents: 1900 },
+          ],
+        },
       });
     if (!path.endsWith("/payments")) return Response.json({}, { status: 404 });
     commands.push({ path, body: JSON.parse(String(init?.body)) });

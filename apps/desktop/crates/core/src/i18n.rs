@@ -493,6 +493,7 @@ keys! {
     VisitPaymentRecording => ("Recording the payment…", "Registrando el pago…"),
     VisitPaymentRetry => ("Retry the same payment", "Reintentar el mismo pago"),
     VisitPaymentRecorded => ("Visit payment recorded", "Pago de la visita registrado"),
+    VisitPaymentRefunded => ("Refunded", "Devuelto"),
     ViewDay => ("Day", "Día"),
     CalendarJumpDate => ("Go to date", "Ir a fecha"),
     CalendarWeekTeam => ("Team week", "Semana de equipo"),

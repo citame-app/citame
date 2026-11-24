@@ -162,7 +162,9 @@ export function VisitCheckout({
                   <ul className="divide-y divide-line">
                     {prepare.data.appointments.map((part) => {
                       const receipt = part.receipt;
-                      const due = receipt?.payableCents ?? receipt?.balanceCents ?? 0;
+                      const due =
+                        review?.allocations.find((line) => line.receiptId === receipt?.id)
+                          ?.amountCents ?? 0;
                       const payable = part.status !== "cancelled" && !part.settledExternally;
                       const bankPending = receipt?.payments.some(
                         ({ status }) => status === "pending" || status === "reconciliation",

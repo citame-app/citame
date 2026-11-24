@@ -349,6 +349,9 @@ export const visitCheckoutSchema = z.object({
     .object({
       token: z.string().regex(/^[a-f0-9]{64}$/),
       totalCents: z.number().int().positive(),
+      allocations: z
+        .array(z.object({ receiptId: idSchema, amountCents: moneyCentsSchema.positive() }))
+        .min(1),
     })
     .nullable(),
   appointments: z.array(

@@ -111,6 +111,14 @@ impl VisitPart {
 pub struct VisitReviewToken {
     token: String,
     pub total_cents: u64,
+    allocations: Vec<ReviewedAllocation>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewedAllocation {
+    receipt_id: Uuid,
+    amount_cents: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,34 +131,39 @@ pub struct VisitCheckout {
 }
 
 impl VisitCheckout {
-    fn collectable_amounts(&self) -> Option<Vec<VisitPaymentAmount>> {
-        self.appointments
+    fn reviewed_amounts(&self, review: &VisitReviewToken) -> Option<Vec<VisitPaymentAmount>> {
+        let mut unique = BTreeSet::new();
+        review
+            .allocations
             .iter()
-            .filter(|part| part.eligible())
-            .filter_map(|part| {
-                let receipt = match &part.receipt {
-                    Some(receipt) => receipt,
-                    None => return Some(None),
-                };
-                if receipt.has_unresolved_payment()
-                    || (receipt.lines.iter().any(|line| line.price_pending)
-                        && !receipt
-                            .protection
-                            .as_ref()
-                            .is_some_and(|p| p.state == "pending"))
-                {
-                    return Some(None);
-                }
-                let amount_cents = receipt.collectible_cents();
-                (amount_cents > 0).then(|| {
-                    Some(VisitPaymentAmount {
+            .map(|line| {
+                let part = self.appointments.iter().find(|part| {
+                    part.eligible()
+                        && part.receipt.as_ref().is_some_and(|receipt| {
+                            Uuid::parse_str(&receipt.id).ok() == Some(line.receipt_id)
+                                && receipt.status == "open"
+                                && line.amount_cents <= receipt.balance_cents
+                        })
+                })?;
+                (line.amount_cents > 0 && unique.insert(line.receipt_id)).then_some(
+                    VisitPaymentAmount {
                         appointment_id: part.appointment_id,
-                        receipt_id: Uuid::parse_str(&receipt.id).ok()?,
-                        amount_cents,
-                    })
-                })
+                        receipt_id: line.receipt_id,
+                        amount_cents: line.amount_cents,
+                    },
+                )
             })
             .collect()
+    }
+
+    pub fn payable_for(&self, receipt: &str) -> Option<u32> {
+        let receipt = Uuid::parse_str(receipt).ok()?;
+        self.payment_review
+            .as_ref()?
+            .allocations
+            .iter()
+            .find(|line| line.receipt_id == receipt)
+            .map(|line| line.amount_cents)
     }
 
     pub(crate) fn matches(&self, group: VisitPaymentGroup, anchor: Uuid) -> bool {
@@ -188,7 +201,7 @@ impl VisitCheckout {
                     .bytes()
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
                 && review.total_cents > 0
-                && self.collectable_amounts().is_some_and(|amounts| {
+                && self.reviewed_amounts(review).is_some_and(|amounts| {
                     amounts
                         .iter()
                         .map(|line| u64::from(line.amount_cents))
@@ -200,7 +213,7 @@ impl VisitCheckout {
 
     pub fn payment(&self, actor_user_id: String, method: VisitTender) -> Option<SavedVisitPayment> {
         let review = self.payment_review.as_ref()?;
-        let amounts = self.collectable_amounts()?;
+        let amounts = self.reviewed_amounts(review)?;
         Some(SavedVisitPayment {
             group: self.group,
             actor_user_id,

@@ -113,6 +113,14 @@ impl Root {
         if self.status.connectivity != Connectivity::Online {
             return;
         }
+        if force_refresh
+            && matches!(&self.overlay, Overlay::Details(details)
+                if details.visit_payment.is_some()
+                && matches!(details.annotations, Some(Annotations::Loading { .. })))
+        {
+            self.open_annotations(cx);
+            return;
+        }
         let Overlay::Details(details) = &self.overlay else {
             return;
         };

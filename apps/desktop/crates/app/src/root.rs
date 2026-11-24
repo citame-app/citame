@@ -857,6 +857,7 @@ impl Root {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        let previous_cursor = self.status.cursor;
         self.calendar_layout.take();
         self.calendar_resources.take();
         // Capture the version before reading the view. A sync commit during the reads must
@@ -1011,7 +1012,12 @@ impl Root {
             details.checkout = None;
             details.checkout_access = None;
         }
-        self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
+        let visit_access_may_have_changed = previous_cursor != self.status.cursor
+            && matches!(&self.overlay, Overlay::Details(details) if details.visit_payment.is_some());
+        self.refresh_open_annotations(
+            previous_time_off_scope != self.time_off_scope || visit_access_may_have_changed,
+            cx,
+        );
         self.refresh_resource_calendar(self.status.connectivity, false, cx);
         cx.notify();
     }

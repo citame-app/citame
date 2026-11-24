@@ -14,7 +14,7 @@ enum State {
         payment: SavedVisitPayment,
         sending: bool,
     },
-    Recorded(RecordedVisitPayment, SavedVisitPayment),
+    Recorded(RecordedVisitPayment, SavedVisitPayment, bool),
 }
 
 pub(super) struct Panel {
@@ -66,6 +66,12 @@ fn tender_label(method: VisitTender) -> Key {
     }
 }
 
+fn has_pending_changes(store: &sob_core::store::Store, ids: &[String]) -> bool {
+    !store
+        .outbox(usize::MAX)
+        .is_ok_and(|entries| entries.iter().all(|entry| !ids.contains(&entry.entity_id)))
+}
+
 impl Root {
     pub(super) fn visit_payment_button(
         &self,
@@ -113,15 +119,10 @@ impl Root {
             return;
         };
         let id = details.id.clone();
-        let Some(group) = self
-            .svc
-            .store
-            .appointment(&id)
-            .ok()
-            .flatten()
-            .as_ref()
-            .and_then(VisitPaymentGroup::from_appointment)
-        else {
+        let Some(appointment) = self.svc.store.appointment(&id).ok().flatten() else {
+            return;
+        };
+        let Some(group) = VisitPaymentGroup::from_appointment(&appointment) else {
             return;
         };
         let state = match self
@@ -133,7 +134,20 @@ impl Root {
                 payment,
                 sending: false,
             },
-            Ok(None) => State::Loading(Arc::new(())),
+            Ok(None) => {
+                let synced = calendar::related_visit_appointments(&self.svc.store, &appointment)
+                    .map(|related| {
+                        let mut ids = vec![id.clone()];
+                        ids.extend(related.into_iter().map(|appointment| appointment.id));
+                        ids
+                    })
+                    .is_ok_and(|ids| !has_pending_changes(&self.svc.store, &ids));
+                if synced {
+                    State::Loading(Arc::new(()))
+                } else {
+                    State::Failed(Key::VisitPaymentSync)
+                }
+            }
             Err(_) => State::Failed(Key::VisitPaymentStorage),
         };
         let token = match &state {
@@ -216,15 +230,12 @@ impl Root {
                 let Some(payment) = review.payment(account.user_id.clone(), panel.method) else {
                     return;
                 };
-                let queued = self.svc.store.outbox(usize::MAX);
-                if !queued.is_ok_and(|entries| {
-                    entries.iter().all(|entry| {
-                        !review
-                            .appointments
-                            .iter()
-                            .any(|part| entry.entity_id == part.appointment_id.to_string())
-                    })
-                }) {
+                let ids = review
+                    .appointments
+                    .iter()
+                    .map(|part| part.appointment_id.to_string())
+                    .collect::<Vec<_>>();
+                if has_pending_changes(&self.svc.store, &ids) {
                     panel.state = State::Failed(Key::VisitPaymentSync);
                     cx.notify();
                     return;
@@ -276,9 +287,9 @@ impl Root {
                 }
                 let next = match result {
                     Ok(receipt) => {
-                        let _ = this.svc.store.clear_visit_payment(&payment);
+                        let cleanup_failed = this.svc.store.clear_visit_payment(&payment).is_err();
                         this.svc.wake(Wake::Manual);
-                        State::Recorded(receipt, payment.clone())
+                        State::Recorded(receipt, payment.clone(), cleanup_failed)
                     }
                     Err(VisitPaymentError::Rejected) => {
                         if this.svc.store.clear_visit_payment(&payment).is_ok() {
@@ -324,7 +335,16 @@ impl Root {
         if !online {
             body = body.child(self.t(Key::CheckoutOffline));
         } else if !panel.visible(self, details) {
-            body = body.child(self.t(Key::VisitPaymentUnavailable));
+            body = body.child(self.t(
+                if matches!(
+                    details.annotations,
+                    Some(annotations::Annotations::Loading { .. })
+                ) {
+                    Key::CheckoutLoading
+                } else {
+                    Key::VisitPaymentUnavailable
+                },
+            ));
         } else {
             body = match &panel.state {
                 State::Loading(_) => body.child(self.t(Key::CheckoutLoading)),
@@ -366,7 +386,7 @@ impl Root {
                         let amount = part
                             .receipt
                             .as_ref()
-                            .map(|receipt| receipt.collectible_cents())
+                            .and_then(|receipt| review.payable_for(&receipt.id))
                             .unwrap_or_default();
                         let label =
                             if review.payment_review.is_some() && part.eligible() && amount > 0 {
@@ -390,12 +410,26 @@ impl Root {
                                     id,
                                     cx,
                                 ));
-                            } else if !part.eligible() && receipt.paid_cents > 0 {
-                                row = row.child(div().text_sm().child(format!(
-                                    "{} · {}",
-                                    self.t(Key::CheckoutPaidInCitame),
-                                    money(receipt.paid_cents)
-                                )));
+                            } else if !part.eligible() {
+                                row = row.child(
+                                    div().text_sm().text_color(theme::muted()).children(
+                                        [
+                                            (Key::CheckoutTotal, u64::from(receipt.total_cents)),
+                                            (Key::CheckoutPaidInCitame, receipt.paid_cents),
+                                            (Key::VisitPaymentRefunded, receipt.refunded_cents),
+                                        ]
+                                        .into_iter()
+                                        .map(
+                                            |(label, amount)| {
+                                                div().child(format!(
+                                                    "{} · {}",
+                                                    self.t(label),
+                                                    money(amount)
+                                                ))
+                                            },
+                                        ),
+                                    ),
+                                );
                             }
                         }
                         body = body.child(row);
@@ -456,7 +490,7 @@ impl Root {
                         )
                     }
                 }
-                State::Recorded(result, saved) => {
+                State::Recorded(result, saved, cleanup_failed) => {
                     body = body.child(
                         div()
                             .text_color(theme::online())
@@ -467,6 +501,9 @@ impl Root {
                                 money(result.total_cents)
                             )),
                     );
+                    if *cleanup_failed {
+                        body = body.child(self.t(Key::VisitPaymentStorage));
+                    }
                     for line in &result.allocations {
                         if let Some(part) = saved
                             .amounts
@@ -493,14 +530,23 @@ impl Root {
             };
         }
         self.modal_with_height(
-            div().tab_group().child(body).child(
-                self.button(
-                    "back-from-visit-payment",
-                    self.t(Key::Back),
-                    Kind::Ghost,
-                    cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
-                )
-                .tab_index(0),
+            div().tab_group().child(body).when(
+                !panel.sending()
+                    && details
+                        .checkout
+                        .as_ref()
+                        .is_none_or(|receipt| receipt.can_go_back()),
+                |body| {
+                    body.child(
+                        self.button(
+                            "back-from-visit-payment",
+                            self.t(Key::Back),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
+                        )
+                        .tab_index(0),
+                    )
+                },
             ),
             px(560.),
             (viewport_height - px(24.)).clamp(px(0.), px(720.)),

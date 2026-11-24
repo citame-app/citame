@@ -153,6 +153,7 @@ async function visitReview(
     totalCents > 0
       ? {
           totalCents,
+          allocations,
           token: digest([
             generation,
             principal.userId,

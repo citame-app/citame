@@ -64,8 +64,10 @@ payment followed by a lost response, a retry from the other appointment, and acc
 two receipts from the confirmation on mobile.
 
 Desktop saves the original command in SQLite before its first submission and requires an
-explicit retry. It validates the receipt IDs and the amount assigned to each receipt before
-acknowledging the saved command. The live review and receipt display require connectivity.
+explicit retry. It checks the acknowledgement against the receipt IDs and amounts returned by
+the server review. A synthetic API run verified the client recovered a committed payment after
+a lost response by reopening SQLite and retrying from another appointment. The live review and
+receipt display require connectivity.
 
 ## Verification — 2026-11-17
 

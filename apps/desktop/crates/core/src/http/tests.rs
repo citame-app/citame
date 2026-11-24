@@ -2002,7 +2002,9 @@ fn visit_checkout_replays_a_durable_command_from_another_appointment() {
     };
     let review = json!({
         "groupId": group.group_id, "source": "itinerary",
-        "paymentReview": { "token": "a".repeat(64), "totalCents": 3100 },
+        "paymentReview": { "token": "a".repeat(64), "totalCents": 3100, "allocations": [
+            {"receiptId": a, "amountCents": 1200}, {"receiptId": b, "amountCents": 1900}
+        ] },
         "appointments": [part(first, receipt(a, first, 1200)), part(second, receipt(b, second, 1900))],
     });
     let recorded = json!({
