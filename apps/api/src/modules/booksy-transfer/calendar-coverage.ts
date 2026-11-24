@@ -80,10 +80,9 @@ export function auditCalendarCoverage(
       if (rows.has(ref) || Temporal.Instant.compare(startsAt, endsAt) >= 0)
         throw new Error("Calendar has a duplicate booking reference or a nonpositive interval");
       const resourceRefs = bookingResources.safeParse(resources).data?.map(({ id }) => String(id));
-      const staffRefs =
-        resourceRefs?.every((ref) => knownStaff.has(ref) || knownEquipment.has(ref))
-          ? resourceRefs.filter((ref) => knownStaff.has(ref)).sort()
-          : null;
+      const staffRefs = resourceRefs?.every((ref) => knownStaff.has(ref) || knownEquipment.has(ref))
+        ? resourceRefs.filter((ref) => knownStaff.has(ref)).sort()
+        : null;
       rows.set(ref, { date, startsAt, endsAt, staffRefs });
     }
     return rows;
