@@ -481,6 +481,7 @@ export async function pullChanges(
     ...(query.clientGroups && permissions.clients ? { clientGroups: true as const } : {}),
     viewerRole: principal.role === "owner" ? "owner" : "staff",
     viewerEditCatalogue: permissions.editCatalog,
+    viewerEditCalendar: permissions.editCalendar,
     ...(query.portfolio === "1" ? { portfolioUploads: permissions.editCatalog } : {}),
     ...(query.inventoryAccess === "1"
       ? {

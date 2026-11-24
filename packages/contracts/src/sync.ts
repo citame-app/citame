@@ -730,6 +730,7 @@ export const syncPullResponseSchema = z.object({
   bookedResourceIds: z.literal(true).optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
+  viewerEditCalendar: z.boolean().optional(),
   portfolioUploads: z.boolean().optional(),
   viewerWriteInventory: z.boolean().optional(),
   viewerReadInventory: z.boolean().optional(),

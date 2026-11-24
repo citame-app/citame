@@ -86,6 +86,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         client_groups: None,
         booked_resource_ids: None,
         calendar_scope: None,
+        viewer_edit_calendar: None,
         viewer_role: None,
         viewer_edit_catalogue: None,
         peak_prices: None,
@@ -528,6 +529,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             client_groups: None,
             booked_resource_ids: None,
             calendar_scope: None,
+            viewer_edit_calendar: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
             peak_prices: None,
@@ -627,6 +629,23 @@ fn pull_follows_has_more_and_stores_the_cursor_with_each_page() {
 }
 
 #[test]
+fn edit_permission_changes_even_when_there_are_no_new_calendar_rows() {
+    let mut store = Store::open_in_memory().unwrap();
+    for allowed in [true, false, true] {
+        let transport = Fake::new(
+            Box::new(applied_all),
+            Box::new(move |since, query| {
+                let mut response = empty_pull(since, query)?;
+                response.viewer_edit_calendar = Some(allowed);
+                Ok(response)
+            }),
+        );
+        pull_all(&mut store, &transport).unwrap();
+        assert_eq!(store.calendar_edits_allowed().unwrap(), allowed);
+    }
+}
+
+#[test]
 fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
     let mut store = Store::open_in_memory().unwrap();
     let allowed = Fake::new(
@@ -663,6 +682,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 client_groups: None,
                 booked_resource_ids: None,
                 calendar_scope: Some("staff".into()),
+                viewer_edit_calendar: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 peak_prices: None,
@@ -735,6 +755,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 client_groups: None,
                 booked_resource_ids: None,
                 calendar_scope: None,
+                viewer_edit_calendar: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 peak_prices: None,
@@ -819,6 +840,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 client_groups: None,
                 booked_resource_ids: None,
                 calendar_scope: None,
+                viewer_edit_calendar: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 peak_prices: None,
@@ -859,6 +881,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 client_groups: None,
                 booked_resource_ids: None,
                 calendar_scope: None,
+                viewer_edit_calendar: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 peak_prices: None,
@@ -1015,6 +1038,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 client_groups: None,
                 booked_resource_ids: None,
                 calendar_scope: None,
+                viewer_edit_calendar: None,
                 viewer_role: None,
                 viewer_edit_catalogue: None,
                 peak_prices: None,

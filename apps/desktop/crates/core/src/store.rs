@@ -203,6 +203,7 @@ struct PullMetadata<'a> {
     refresh: &'a [String],
     generation: Option<&'a str>,
     catalogue_access: Option<bool>,
+    calendar_edit_access: Option<bool>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     booking_combinations: Option<&'a [crate::combinations::ManagedCombination]>,
@@ -465,6 +466,11 @@ impl Store {
         self.get_meta("peak_price_snapshot")?
             .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
             .transpose()
+    }
+
+    pub fn calendar_edits_allowed(&self) -> Result<bool> {
+        // Older backends omit the flag. Keep the server's last explicit decision when present.
+        Ok(self.get_meta("viewer_edit_calendar")?.as_deref() != Some("0"))
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
@@ -1158,6 +1164,7 @@ impl Store {
                 refresh: &page.refresh,
                 generation: Some(generation),
                 catalogue_access: page.viewer_edit_catalogue,
+                calendar_edit_access: page.viewer_edit_calendar,
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
                 booking_combinations: page.booking_combinations.as_deref(),
@@ -1208,6 +1215,12 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
+        if let Some(allowed) = metadata.calendar_edit_access {
+            let value = if allowed { "1" } else { "0" };
+            if Self::meta_at(&tx, "viewer_edit_calendar")?.as_deref() != Some(value) {
+                Self::set_meta_at(&tx, "viewer_edit_calendar", value)?;
+            }
+        }
         if let Some(allowed) = metadata.inventory_read_access {
             Self::apply_inventory_read_access_at(&tx, allowed)?;
         }

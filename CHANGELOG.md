@@ -8,7 +8,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
-- Desktop calendar shortcuts navigate between dates and views, open a new appointment, and sync the replica. Find the key guide in the calendar header.
+- Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
 
 - Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
 

@@ -380,6 +380,7 @@ pub struct Root {
     team_calendar_scroll: gpui::ScrollHandle,
     time_off_scope: String,
     calendar_scope: Option<String>,
+    calendar_edits_allowed: bool,
     replica_generation: Option<String>,
     theme_override: Option<bool>,
     pending_local_today: bool,
@@ -474,6 +475,7 @@ impl Root {
             team_calendar_scroll: gpui::ScrollHandle::new(),
             time_off_scope: String::new(),
             calendar_scope: None,
+            calendar_edits_allowed: false,
             replica_generation: None,
             theme_override,
             pending_local_today,
@@ -870,6 +872,7 @@ impl Root {
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
         self.calendar_scope = scope;
+        self.calendar_edits_allowed = self.svc.store.calendar_edits_allowed().unwrap_or(false);
         self.replica_generation = generation;
         if self.calendar_mode == CalendarMode::Resources && !self.can_view_resource_calendar() {
             self.calendar_mode = CalendarMode::Day;
@@ -1519,6 +1522,10 @@ impl Root {
                     CoreError::TimeOffOverlap => self.t(Key::TimeOffOverlap).to_owned(),
                     CoreError::StaffCapacityExceeded => self.t(Key::ConflictSlotTaken).to_owned(),
                     CoreError::AppointmentChanged => self.t(Key::AppointmentChanged).to_owned(),
+                    CoreError::AppointmentScopeDenied => self.t(Key::ConflictForbidden).to_owned(),
+                    CoreError::IncompatibleServices => {
+                        self.t(Key::AppointmentStaffIncompatible).to_owned()
+                    }
                     other => other.to_string(),
                 };
                 if let Overlay::Details(d) = &mut self.overlay {
@@ -2209,8 +2216,8 @@ impl Root {
         item: &CalendarItem,
         (start, end): (f32, f32),
         (lane, lane_count): (usize, usize),
-        first_hour: u32,
-        total_h: f32,
+        (date, first_hour, total_h): (NaiveDate, u32, f32),
+        can_focus: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let a = &item.appointment;
@@ -2224,8 +2231,9 @@ impl Root {
             .collect::<Vec<_>>()
             .join(", ");
         let indicators = appointment_badges::calendar(item);
+        let can_focus = can_focus && matches!(self.overlay, Overlay::None);
         let card = div()
-            .id(SharedString::from(format!("appt-{}", a.id)))
+            .id(SharedString::from(format!("appt-{}-{date}", a.id)))
             .debug_selector(|| format!("calendar-appointment-{}", a.id))
             .h_full()
             .px_2()
@@ -2238,9 +2246,24 @@ impl Root {
             .text_xs()
             .cursor_pointer()
             .hover(|s| s.opacity(0.85))
-            .on_click(cx.listener(move |this, _, _, cx| {
+            .when(can_focus, |card| {
+                card.tab_index(0)
+                    .focus(|style| style.border_color(theme::text()))
+            })
+            .when(
+                can_focus && self.calendar_edits_allowed && a.status == AppointmentStatus::Booked,
+                |card| {
+                    let id = a.id.clone();
+                    let reviewed = ops::ReviewedAppointment::from(a);
+                    card.on_key_down(cx.listener(move |this, event, window, cx| {
+                        this.move_from_calendar_key(&id, &reviewed, date, event, window, cx);
+                    }))
+                },
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
                 if matches!(this.overlay, Overlay::None) {
                     this.open_details(&id, cx);
+                    this.focus.focus(window);
                 }
             }))
             .child(
@@ -2313,7 +2336,7 @@ impl Root {
 
     fn render_calendar(
         &self,
-        viewport_height: gpui::Pixels,
+        viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let Some(view) = &self.view else {
@@ -2376,13 +2399,18 @@ impl Root {
         let (first, last) = (*first, *last);
         let total_h = (last - first) as f32 * HOUR_PX;
         // Keep an hour of cards beyond the viewport. Lane placement still uses the whole column.
-        let height = f32::from(viewport_height);
+        let height = f32::from(viewport.height);
         let handle = &self.vertical_scroll.handle;
         let last_body_height = f32::from(handle.bounds().size.height).min(height);
         let scroll_y =
             (-f32::from(handle.offset().y)).clamp(0., (total_h - last_body_height).max(0.));
         let visible_start = first as f32 * HOUR_PX + scroll_y;
         let visible_end = visible_start + height;
+        let focus_end = visible_start + last_body_height;
+        let width_for_focus = (f32::from(viewport.width) - GUTTER_PX - scrollbar::WIDTH).max(0.);
+        let scroll_x = (-f32::from(self.horizontal_scroll.handle.offset().x))
+            .clamp(0., (*columns_width - width_for_focus).max(0.));
+        let mut column_left = 0.;
         let local_now = self.calendar_now.with_timezone(&self.tz);
         let today = local_now.date_naive();
         let minute = local_now.hour() * 60 + local_now.minute();
@@ -2441,6 +2469,8 @@ impl Root {
                     lanes,
                     width,
                 } = &layouts[index];
+                let left = column_left;
+                column_left += *width;
                 let weak = root.clone();
                 let preview = selected_slot
                     .as_ref()
@@ -2525,7 +2555,23 @@ impl Root {
                                 *end >= visible_start - HOUR_PX && *start <= visible_end + HOUR_PX
                             })
                             .map(|(item, (bounds, lanes))| {
-                                self.render_block(item, bounds, lanes, first, total_h, cx)
+                                let lane_width = *width / lanes.1 as f32;
+                                let card_left = left + lane_width * lanes.0 as f32;
+                                let horizontally_visible = *columns_width <= width_for_focus
+                                    || (card_left + lane_width > scroll_x
+                                        && card_left < scroll_x + width_for_focus);
+                                let can_focus = last_body_height > 0.
+                                    && horizontally_visible
+                                    && bounds.1 > visible_start
+                                    && bounds.0 < focus_end;
+                                self.render_block(
+                                    item,
+                                    bounds,
+                                    lanes,
+                                    (*date, first, total_h),
+                                    can_focus,
+                                    cx,
+                                )
                             }),
                     )
                     .when_some(time_position.filter(|_| *date == today), |column, top| {
@@ -3457,7 +3503,8 @@ impl Root {
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
-        let editable = !stale
+        let editable = self.calendar_edits_allowed
+            && !stale
             && current
                 .as_ref()
                 .is_some_and(|a| a.status == AppointmentStatus::Booked);
@@ -4421,7 +4468,9 @@ impl Render for Root {
                 Screen::Main => {
                     let overlay = match &self.overlay {
                         Overlay::None => None,
-                        Overlay::CalendarShortcuts => Some(self.render_calendar_shortcuts(cx)),
+                        Overlay::CalendarShortcuts => {
+                            Some(self.render_calendar_shortcuts(content_viewport, cx))
+                        }
                         Overlay::Cloud(desk) => {
                             Some(self.render_web_management(desk, content_viewport, cx))
                         }
@@ -4554,7 +4603,7 @@ impl Render for Root {
                                             && !self.overview_staff.is_empty(),
                                         |frame| frame.child(self.render_overview_staff_filter(cx)),
                                     )
-                                    .child(self.render_calendar(content_viewport.height, cx))
+                                    .child(self.render_calendar(content_viewport, cx))
                             },
                         )
                         .when(!self.notices.is_empty(), |d| {
@@ -5799,6 +5848,93 @@ mod tests {
             );
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    async fn calendar_card_shortcuts_move_by_a_slot_and_validate_the_next_staff_member(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1440.), px(1080.)));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("tab tab alt-down");
+        root.update(cx, |root, _| {
+            let moved = calendar::effective_appointment(&root.svc.store, EXISTING)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                moved.starts_at,
+                "2026-03-09T15:15:00Z".parse::<DateTime<Utc>>().unwrap()
+            );
+            assert_eq!(moved.staff_id, ANA);
+            assert_eq!(outbox_kinds(root), ["appointment.reschedule"]);
+            assert!(matches!(root.overlay, Overlay::None));
+        });
+        cx.simulate_keystrokes("alt-right");
+        root.update(cx, |root, cx| {
+            assert_eq!(outbox_kinds(root), ["appointment.reschedule"]);
+            assert!(
+                matches!(&root.overlay, Overlay::Details(details)
+                    if details.error.as_deref() == Some(root.t(Key::AppointmentStaffIncompatible)))
+            );
+            root.svc
+                .store
+                .apply_page(
+                    &[up(
+                        10,
+                        "service_staff",
+                        "l3",
+                        json!({"id":"l3", "staffId":BEA, "serviceId":CUT}),
+                    )],
+                    10,
+                )
+                .unwrap();
+            root.reload(cx);
+        });
+        cx.simulate_keystrokes("escape tab tab alt-right");
+        root.update(cx, |root, _| {
+            let moved = calendar::effective_appointment(&root.svc.store, EXISTING)
+                .unwrap()
+                .unwrap();
+            assert_eq!(moved.staff_id, BEA);
+            let pending = root.svc.store.outbox(5).unwrap();
+            assert_eq!(pending.len(), 2);
+            assert_eq!(pending[1].payload["version"], json!(4));
+            assert!(matches!(root.overlay, Overlay::None));
+        });
+    }
+
+    #[gpui::test]
+    async fn calendar_card_shortcuts_ignore_appointments_beyond_the_scrolled_viewport(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(520.)));
+        cx.run_until_parked();
+
+        cx.simulate_keystrokes("pagedown");
+        root.update(cx, |root, cx| {
+            let scroll = &root.vertical_scroll.handle;
+            assert!(scroll.offset().y < px(0.));
+            let view = root.view.as_ref().unwrap();
+            let item = &view.columns[0].items[0];
+            let (_, end) = appointment_bounds(item, root.date, root.tz);
+            let first = root.visible_hours(view).0;
+            let offset = px(end - first as f32 * HOUR_PX + 8.);
+            assert!(scroll.max_offset().height >= offset);
+            scroll.set_offset(gpui::point(px(0.), -offset));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("calendar-appointment-01a1d81e-0000-7000-8000-0000000000e1")
+                .is_some()
+        );
+        cx.simulate_keystrokes("tab tab alt-down");
+        root.update(cx, |root, _| assert!(outbox_kinds(root).is_empty()));
     }
 
     #[gpui::test]

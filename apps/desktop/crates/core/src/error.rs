@@ -36,6 +36,8 @@ pub enum CoreError {
     CalendarGenerationChanged,
     #[error("the reviewed appointment has changed")]
     AppointmentChanged,
+    #[error("the appointment assignment is outside the account calendar")]
+    AppointmentScopeDenied,
     #[error("not found: {0}")]
     NotFound(String),
     #[error("io error: {0}")]
