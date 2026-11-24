@@ -92,9 +92,14 @@ fn can_edit_service_annotations(notes: &AppointmentAnnotations, time_off_scope: 
     notes.appointment_version.is_some() && time_off_scope != "none" && notes.can_edit != Some(false)
 }
 
-fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+pub(super) fn note_field(text: &str, multiline: bool, cx: &mut Context<Root>) -> Entity<TextField> {
     let field = cx.new(|cx| {
-        let mut field = TextField::new("", false, cx);
+        let field = TextField::new("", false, cx);
+        let mut field = if multiline {
+            field.with_line_paste(ops::APPOINTMENT_NOTES_LIMIT)
+        } else {
+            field
+        };
         field.set_text(text, cx);
         field
     });
@@ -172,6 +177,12 @@ impl Root {
         let Overlay::Details(details) = &mut self.overlay else {
             return;
         };
+        if details.note_draft.is_some()
+            || self.svc.store.appointment_edit_sync(&details.id).ok()
+                == Some(AppointmentEditSync::Pending)
+        {
+            return;
+        }
         let Some(Annotations::Ready(notes)) = details.annotations.as_ref() else {
             return;
         };
@@ -201,7 +212,10 @@ impl Root {
         let text = row
             .and_then(|row| row.internal_note.as_deref())
             .unwrap_or_default();
-        let lines = text.split('\n').map(|line| note_field(line, cx)).collect();
+        let lines = text
+            .split('\n')
+            .map(|line| note_field(line, false, cx))
+            .collect();
         if let Some(Annotations::Ready(notes)) = details.annotations.take() {
             details.annotations = Some(Annotations::Editing(Box::new(NoteDraft {
                 notes,
@@ -386,9 +400,10 @@ impl Root {
     pub(super) fn render_annotations(
         &self,
         appointment: &Appointment,
-        state: Option<&Annotations>,
+        details: &Details,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let state = details.annotations.as_ref();
         let booking_note = appointment
             .notes
             .as_deref()
@@ -408,9 +423,7 @@ impl Root {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.t(Key::AppointmentAnnotations)),
             )
-            .when_some(booking_note, |section, note| {
-                section.child(div().text_sm().child(note.to_owned()))
-            });
+            .child(self.render_appointment_note(appointment, details, cx));
         match state {
             Some(Annotations::Editing(draft)) => {
                 let name = appointment
@@ -482,6 +495,9 @@ impl Root {
                 }
                 if matches!(state, Some(Annotations::Ready(_)))
                     && can_edit_service_annotations(notes, &self.time_off_scope)
+                    && details.note_draft.is_none()
+                    && self.svc.store.appointment_edit_sync(&appointment.id).ok()
+                        != Some(AppointmentEditSync::Pending)
                 {
                     content = content.children(appointment.services.iter().enumerate().map(
                         |(position, service)| {
@@ -646,7 +662,7 @@ impl Root {
                         if let Some(draft) = this.draft()
                             && draft.lines.len() <= 2000
                         {
-                            let line = note_field("", cx);
+                            let line = note_field("", false, cx);
                             line.read(cx).focus(window);
                             draft.lines.push(line);
                             cx.notify();
@@ -667,7 +683,7 @@ impl Root {
                                     .replace("\r\n", "\n")
                                     .replace('\r', "\n")
                                     .split('\n')
-                                    .map(|line| note_field(line, cx))
+                                    .map(|line| note_field(line, false, cx))
                                     .collect();
                                 if !draft.conflicted {
                                     draft.error = None;

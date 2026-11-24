@@ -753,6 +753,57 @@ fn queue_reschedule(
     Ok(())
 }
 
+pub const APPOINTMENT_NOTES_KIND: &str = "appointment.set_notes";
+pub const APPOINTMENT_NOTES_LIMIT: usize = 2000;
+
+/// Saves the reviewed note without changing the appointment's slot or status.
+pub fn queue_appointment_notes(
+    store: &mut Store,
+    id: &str,
+    reviewed_notes: &str,
+    notes: &str,
+    conflict_to_resolve: Option<&str>,
+) -> Result<()> {
+    if notes.encode_utf16().count() > APPOINTMENT_NOTES_LIMIT {
+        return Err(CoreError::Invalid(
+            "Appointment notes must fit in 2000 characters".into(),
+        ));
+    }
+    store.write_transaction(|store| {
+        let current = writable_appointment(store, id)?;
+        if current.notes.as_deref().unwrap_or_default() != reviewed_notes {
+            return Err(CoreError::AppointmentChanged);
+        }
+        if let Some(mutation_id) = conflict_to_resolve
+            && store.conflict(mutation_id)?.is_none_or(|conflict| {
+                conflict.entity_id != id
+                    || conflict.kind != APPOINTMENT_NOTES_KIND
+                    || conflict.requires_restored_review()
+            })
+        {
+            return Err(CoreError::NotFound(format!(
+                "open appointment note conflict {mutation_id}"
+            )));
+        }
+        if let Some(mutation_id) = conflict_to_resolve
+            && !store.appointment_note_review_ready(mutation_id, id)?
+        {
+            return Err(CoreError::AppointmentNoteRefreshRequired);
+        }
+        if notes != reviewed_notes {
+            store.enqueue(
+                APPOINTMENT_NOTES_KIND,
+                id,
+                json!({"id": id, "version": current.version, "notes": notes}),
+            )?;
+        }
+        if let Some(mutation_id) = conflict_to_resolve {
+            store.resolve_conflict(mutation_id, "reviewed")?;
+        }
+        Ok(())
+    })
+}
+
 pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
     let current = editable(store, id)?;
     store.enqueue(

@@ -149,6 +149,7 @@ export async function applyMutation(
     }
     case "appointment.reschedule":
     case "appointment.cancel":
+    case "appointment.set_notes":
     case "appointment.set_status": {
       const { id, ...rest } = mutation.payload;
       const body: UpdateAppointmentRequest =

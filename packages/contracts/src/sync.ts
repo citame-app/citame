@@ -139,6 +139,16 @@ const appointmentSetStatus = z.object({
   }),
 });
 
+const appointmentSetNotes = z.object({
+  ...envelope,
+  kind: z.literal("appointment.set_notes"),
+  payload: z.strictObject({
+    id: idSchema,
+    version: z.number().int().positive(),
+    notes: z.string().max(LIMITS.notes),
+  }),
+});
+
 const clientCreate = z.object({
   ...envelope,
   kind: z.literal("client.create"),
@@ -406,6 +416,7 @@ export const syncMutationSchema = z.discriminatedUnion("kind", [
   appointmentReschedule,
   appointmentCancel,
   appointmentSetStatus,
+  appointmentSetNotes,
   clientCreate,
   clientUpdate,
   timeOffCreate,
