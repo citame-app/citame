@@ -20,6 +20,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop appointment details show the server-confirmed deposit state and payment deadlines, including the last synced state when offline. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
 
 - Desktop edits general appointment notes in the detail panel, including offline. Drafts rejected during sync can be compared with the current note and submitted again after review.
+- Desktop refreshes service details while the private note editor is open. The editor keeps the draft and shows the saved details when another session changes the same note or preference.
 
 - Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
 

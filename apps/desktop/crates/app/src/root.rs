@@ -3670,7 +3670,10 @@ impl Root {
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
         let editing_note = d.note_draft.is_some() && current.is_some();
+        let editing_service_note =
+            matches!(d.annotations, Some(annotations::Annotations::Editing(_)));
         let editable = !editing_note
+            && !editing_service_note
             && !stale
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
@@ -3687,6 +3690,7 @@ impl Root {
             .as_ref()
             .filter(|a| {
                 !editing_note
+                    && !editing_service_note
                     && !stale
                     && !awaiting_deposit_sync
                     && self.can_edit_staff_calendar(&a.staff_id)
@@ -4012,7 +4016,7 @@ impl Root {
                         })),
                 )
             })
-            .when(!editing_note && stale, |x| {
+            .when(!editing_note && !editing_service_note && stale, |x| {
                 x.child(
                     div()
                         .text_sm()
