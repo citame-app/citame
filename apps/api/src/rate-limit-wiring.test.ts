@@ -77,6 +77,30 @@ describe("auth endpoints are strictly limited", () => {
     expect((await signIn("9.9.9.9")).status).toBe(401);
   });
 
+  test("password reset submissions and links each use one shared email attempt", async () => {
+    const ip = "9.9.9.9";
+    const headers = { origin: "http://localhost:3000", ...from(ip) };
+    const submit = () =>
+      t.app.request("/api/auth/reset-password", {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ token: "invalid-reset-token", newPassword: PASSWORD }),
+      });
+    const open = () =>
+      t.app.request("/api/auth/reset-password/invalid-reset-token?callbackURL=%2Freset-password", {
+        headers,
+      });
+
+    expect((await submit()).status).toBe(400);
+    expect((await open()).status).toBe(302);
+    expect((await submit()).status).toBe(400);
+    const blocked = await open();
+    expect(blocked.status).toBe(429);
+    expect(errorResponseSchema.parse(await blocked.json()).error.code).toBe("rate_limited");
+    expect((await submit()).status).toBe(429);
+    expect((await signIn(ip)).status).toBe(401);
+  });
+
   test("session reads and sign-out are not counted against the auth budget", async () => {
     const { cookie } = await signUp(t.app, "lucia@example.com");
     t.clock.advance(60);
