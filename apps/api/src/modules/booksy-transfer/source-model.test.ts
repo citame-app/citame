@@ -925,13 +925,14 @@ test("a prepared copy reconciles the audited restoration of archived package con
   await t.db.execute(
     sql`update booksy_rehearsal.source_entity set target_hash=${fingerprint(legacy)} where kind='sourceProducts'`,
   );
+  const repairedAt = new Date(product.updatedAt.getTime() + 1000);
   await t.db
     .update(retailProduct)
     .set({
       packageContentQuantity: "12.5",
       packageContentUnit: "ml",
       version: 2,
-      updatedAt: new Date(product.updatedAt.getTime() + 1000),
+      updatedAt: repairedAt,
     })
     .where(eq(retailProduct.id, product.id));
   const settings = { exclusiveExtensions: true, preparedCopy: true };
@@ -946,7 +947,8 @@ test("a prepared copy reconciles the audited restoration of archived package con
     metadata: { source: "booksy archive", fields: ["packageContent"] },
     createdAt: new Date(product.updatedAt.getTime() + 500),
   };
-  await t.db.insert(auditLog).values(repairAudit);
+  const [audit] = await t.db.insert(auditLog).values(repairAudit).returning();
+  if (!audit) throw new Error("Expected the repair audit");
   expect(await verifyBooksySourceModel(t.db, model, settings)).toMatchObject({
     sourceAppointmentsVerified: true,
     canCutOver: false,
@@ -954,16 +956,33 @@ test("a prepared copy reconciles the audited restoration of archived package con
   await expect(verifyBooksySourceModel(t.db, model)).rejects.toThrow(
     "Native product/resource fields changed",
   );
+  for (const createdAt of [
+    new Date(product.createdAt.getTime() - 1000),
+    new Date(repairedAt.getTime() + 1000),
+  ]) {
+    await t.db.update(auditLog).set({ createdAt }).where(eq(auditLog.id, audit.id));
+    await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+      "Native product/resource fields changed",
+    );
+  }
+  await t.db
+    .update(auditLog)
+    .set({ createdAt: repairAudit.createdAt })
+    .where(eq(auditLog.id, audit.id));
   await t.db
     .update(retailProduct)
-    .set({ packageContentQuantity: "10" })
+    .set({ packageContentQuantity: "10", updatedAt: repairedAt })
     .where(eq(retailProduct.id, product.id));
   await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
     "Native product/resource fields changed",
   );
   await t.db
     .update(retailProduct)
-    .set({ packageContentQuantity: "12.5", priceCents: product.priceCents + 100 })
+    .set({
+      packageContentQuantity: "12.5",
+      priceCents: product.priceCents + 100,
+      updatedAt: repairedAt,
+    })
     .where(eq(retailProduct.id, product.id));
   await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
     "Native product/resource fields changed",
@@ -973,7 +992,7 @@ test("a prepared copy reconciles the audited restoration of archived package con
     .set({
       priceCents: product.priceCents,
       stockAllocated: 1,
-      updatedAt: new Date(product.updatedAt.getTime() + 1000),
+      updatedAt: repairedAt,
     })
     .where(eq(retailProduct.id, product.id));
   await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
@@ -981,7 +1000,7 @@ test("a prepared copy reconciles the audited restoration of archived package con
   );
   await t.db
     .update(retailProduct)
-    .set({ stockAllocated: 0, updatedAt: new Date(product.updatedAt.getTime() + 1000) })
+    .set({ stockAllocated: 0, updatedAt: repairedAt })
     .where(eq(retailProduct.id, product.id));
   expect((await verifyBooksySourceModel(t.db, model, settings)).sourceAppointmentsVerified).toBe(
     true,
