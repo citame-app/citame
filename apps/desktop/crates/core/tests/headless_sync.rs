@@ -6150,6 +6150,77 @@ fn an_appointment_created_offline_reaches_the_server_and_other_devices() {
     );
 }
 
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn general_appointment_notes_round_trip_between_native_and_web_with_conflict_review() {
+    let mut desktop = Device::sign_in();
+    desktop.sync();
+    let catalog = catalog(&desktop);
+    let start = free_slot(&desktop, &catalog.staff);
+    let client = ops::create_client(&mut desktop.store, "Appointment note fixture", None).unwrap();
+    let id = ops::create_appointment(
+        &mut desktop.store,
+        booking(&catalog, &catalog.staff, &client, start),
+    )
+    .unwrap();
+    assert_eq!(desktop.sync().push.applied, 2);
+    let current = |desktop: &Device| desktop.store.appointment(&id).unwrap().unwrap();
+    let before = current(&desktop);
+    let original = before.notes.as_deref().unwrap_or_default();
+    let desktop_note = "Native draft\nConfirm shade on arrival";
+    ops::queue_appointment_notes(&mut desktop.store, &id, original, desktop_note, None).unwrap();
+    desktop.store = Store::open(&desktop.path).unwrap();
+    let pending = calendar::effective_appointment(&desktop.store, &id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(pending.notes.as_deref(), Some(desktop_note));
+    assert_eq!(desktop.sync().push.applied, 1);
+
+    let web = Device::sign_in();
+    let query = format!(
+        "/appointments?from={}&to={}",
+        urlenc(&(start - Span::hours(1)).to_rfc3339()),
+        urlenc(&(start + Span::hours(2)).to_rfc3339()),
+    );
+    let get_web = || {
+        web.rest_get(&query)["appointments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|appointment| appointment["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(get_web()["notes"], desktop_note);
+    let web_version = get_web()["version"].as_i64().unwrap();
+    let revised = "Desktop note entered offline";
+    ops::queue_appointment_notes(&mut desktop.store, &id, desktop_note, revised, None).unwrap();
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let web_note = "Newer note saved from Web";
+    ureq::patch(&format!("{}{prefix}/appointments/{id}", web.base))
+        .header("Cookie", &web.cookie)
+        .content_type("application/json")
+        .send(json!({ "version": web_version, "notes": web_note }).to_string())
+        .unwrap();
+
+    assert_eq!(desktop.sync().push.rejected, 1);
+    assert_eq!(current(&desktop).notes.as_deref(), Some(web_note));
+    let conflict = desktop.store.conflicts().unwrap().remove(0);
+    assert_eq!(conflict.payload["notes"], revised);
+    ops::queue_appointment_notes(
+        &mut desktop.store,
+        &id,
+        web_note,
+        revised,
+        Some(&conflict.mutation_id),
+    )
+    .unwrap();
+    assert_eq!(desktop.sync().push.applied, 1);
+    assert!(desktop.store.conflicts().unwrap().is_empty());
+    assert_eq!(get_web()["notes"], revised);
+    assert_eq!(current(&desktop).starts_at, start);
+}
+
 fn urlenc(s: &str) -> String {
     s.replace('+', "%2B").replace(':', "%3A")
 }

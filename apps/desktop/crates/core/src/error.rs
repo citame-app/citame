@@ -38,6 +38,8 @@ pub enum CoreError {
     CalendarGenerationChanged,
     #[error("the reviewed appointment has changed")]
     AppointmentChanged,
+    #[error("synchronize the latest saved note before reviewing this draft")]
+    AppointmentNoteRefreshRequired,
     #[error("the appointment assignment is outside the account calendar")]
     AppointmentScopeDenied,
     #[error("booking protection blocks attendance")]

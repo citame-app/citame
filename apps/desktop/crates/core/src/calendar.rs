@@ -206,7 +206,11 @@ fn overlay_calendar_outbox(
             map.insert(a.id.clone(), a);
         }
     }
+    let mut stale_note_chains = HashSet::new();
     for e in &outbox {
+        if e.kind.starts_with("appointment.") && stale_note_chains.contains(&e.entity_id) {
+            continue;
+        }
         let p = &e.payload;
         let stamp = DateTime::parse_from_rfc3339(&e.created_at)
             .map(|d| d.with_timezone(&Utc))
@@ -282,6 +286,21 @@ fn overlay_calendar_outbox(
                     },
                 );
                 pending.insert(e.entity_id.clone());
+            }
+            crate::ops::APPOINTMENT_NOTES_KIND => {
+                if let Some(a) = map.get_mut(&e.entity_id) {
+                    if p["version"].as_i64() == Some(a.version)
+                        && let Some(notes) = str_of(p, "notes")
+                    {
+                        a.notes = Some(notes);
+                        a.version += 1;
+                        a.updated_at = stamp;
+                        pending.insert(e.entity_id.clone());
+                    } else {
+                        // Later note revisions may depend on this draft, not the newer mirror.
+                        stale_note_chains.insert(e.entity_id.clone());
+                    }
+                }
             }
             "appointment.reschedule" => {
                 if let Some(a) = map.get_mut(&e.entity_id) {

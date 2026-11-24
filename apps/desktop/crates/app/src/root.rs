@@ -33,6 +33,7 @@ use crate::theme;
 mod account_roles;
 mod annotations;
 mod appointment_badges;
+mod appointment_notes;
 mod billing;
 mod blocks;
 mod booking_intake;
@@ -289,6 +290,7 @@ struct Details {
     checkout_access: Option<DetailsCheckoutAccess>,
     visit_payment: Option<visit_payment::Panel>,
     annotations: Option<annotations::Annotations>,
+    note_draft: Option<appointment_notes::Draft>,
     deposit_outcome_block: Option<AttendanceProtectionBlock>,
     annotations_requested_version: Option<i64>,
     annotations_commerce_revision: i64,
@@ -1462,6 +1464,7 @@ impl Root {
             checkout_access: None,
             visit_payment: None,
             annotations: None,
+            note_draft: None,
             deposit_outcome_block: None,
             annotations_requested_version: None,
             annotations_commerce_revision: 0,
@@ -1647,6 +1650,10 @@ impl Root {
     }
 
     fn start_conflict_edit(&mut self, c: &Conflict, cx: &mut Context<Self>) {
+        if c.kind == ops::APPOINTMENT_NOTES_KIND {
+            self.open_appointment_note_conflict(c, cx);
+            return;
+        }
         if c.kind != "appointment.create" {
             let appointment_changed = self.t(Key::AppointmentChanged);
             let Ok(Some(current)) = calendar::effective_appointment(&self.svc.store, &c.entity_id)
@@ -2946,6 +2953,16 @@ impl Root {
                 }
                 details.visit_payment = None;
             }
+            Overlay::Details(details)
+                if details.note_draft.is_some()
+                    && calendar::effective_appointment(&self.svc.store, &details.id)
+                        .ok()
+                        .flatten()
+                        .is_some() =>
+            {
+                self.request_appointment_note_close(cx);
+                return;
+            }
             Overlay::Details(_) => self.close_appointment_details(false),
             _ => self.overlay = Overlay::None,
         }
@@ -3659,7 +3676,9 @@ impl Root {
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
-        let editable = !stale
+        let editing_note = d.note_draft.is_some() && current.is_some();
+        let editable = !editing_note
+            && !stale
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
             });
@@ -3674,7 +3693,8 @@ impl Root {
         let outcomes = current
             .as_ref()
             .filter(|a| {
-                !stale
+                !editing_note
+                    && !stale
                     && !awaiting_deposit_sync
                     && self.can_edit_staff_calendar(&a.staff_id)
                     && deposit_block.is_none()
@@ -3869,12 +3889,16 @@ impl Root {
                             })),
                     )
                 })
-                .child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
-                .children(self.render_related_visit(appointment, d, cx))
-                .children(self.visit_payment_button(appointment, d, cx))
+                .child(self.render_annotations(appointment, d, cx))
+                .when(!editing_note, |panel| {
+                    panel
+                        .children(self.render_related_visit(appointment, d, cx))
+                        .children(self.visit_payment_button(appointment, d, cx))
+                })
             })
             .when(
-                !pending
+                !editing_note
+                    && !pending
                     && (deposit.is_none()
                         || protection
                             .is_some_and(|p| p.checkout_id.is_none() && !p.receipt_restricted))
@@ -3891,7 +3915,8 @@ impl Root {
                 },
             )
             .when(
-                !pending
+                !editing_note
+                    && !pending
                     && current
                         .as_ref()
                         .is_some_and(|a| self.can_open_price_review(a)),
@@ -3904,7 +3929,7 @@ impl Root {
                     ))
                 },
             )
-            .when(!pending, |view| {
+            .when(!editing_note && !pending, |view| {
                 view.children(
                     [
                         ("open-imported-settlement", SettlementMode::Full),
@@ -3994,7 +4019,7 @@ impl Root {
                         })),
                 )
             })
-            .when(stale, |x| {
+            .when(!editing_note && stale, |x| {
                 x.child(
                     div()
                         .text_sm()
@@ -4067,8 +4092,10 @@ impl Root {
             div().tab_group().child(content).child(footer),
             px(560.),
             (viewport_height - px(24.)).clamp(px(0.), px(720.)),
-            (!changed && !matches!(d.annotations, Some(annotations::Annotations::Editing(_))))
-                .then_some(cx),
+            (!changed
+                && !editing_note
+                && !matches!(d.annotations, Some(annotations::Annotations::Editing(_))))
+            .then_some(cx),
         )
     }
 
@@ -4085,6 +4112,7 @@ impl Root {
                 "appointment.reschedule" => Key::ConflictReschedule,
                 "appointment.cancel" => Key::ConflictCancel,
                 "appointment.set_status" => requested_outcome.unwrap_or(Key::ConflictOther),
+                ops::APPOINTMENT_NOTES_KIND => Key::AppointmentAnnotations,
                 "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
                 "settings.update" => Key::SalonConfiguration,
                 "service.staff_replace" => Key::ServiceAssignments,
@@ -4228,6 +4256,21 @@ impl Root {
                             ))
                         })
                         .when(
+                            c.requires_restored_review()
+                                && self.appointment_note_conflict_access(c),
+                            |row| {
+                                let id = mid.clone();
+                                row.child(self.button(
+                                    ("copy-restored-appointment-note", i),
+                                    self.t(Key::CopyNoteDraft),
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.copy_appointment_note_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
                             c.kind == "settings.update"
                                 && c.payload.get("expectedRevision").is_some()
                                 && self.can_configure_salon(),
@@ -4242,6 +4285,7 @@ impl Root {
                         )
                         .when(
                             (c.requires_restored_review()
+                                && c.kind != ops::APPOINTMENT_NOTES_KIND
                                 && !matches!(
                                     c.kind.as_str(),
                                     sob_core::inventory_documents::SUPPLIER_SAVE

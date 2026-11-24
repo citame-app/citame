@@ -2094,7 +2094,25 @@ impl Store {
                 AND resolved_at IS NULL)",
             [],
         )?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'note_review_head:*' AND CAST(value AS INTEGER) <= ?1",
+            [cursor],
+        )?;
         Ok(())
+    }
+
+    /// A rejected note is reviewable once the replica has seen the server head from its rejection.
+    pub fn appointment_note_review_ready(
+        &self,
+        mutation_id: &str,
+        appointment_id: &str,
+    ) -> Result<bool> {
+        let required = self
+            .get_meta(&format!("note_review_head:{mutation_id}"))?
+            .and_then(|value| value.parse::<i64>().ok())
+            .unwrap_or_default();
+        Ok(self.cursor()? >= required
+            && self.appointment_edit_sync(appointment_id)? != AppointmentEditSync::Pending)
     }
 
     pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {
@@ -2420,6 +2438,15 @@ impl Store {
                             params![last_sent, s.entity_id],
                         )?;
                         out.rejected += moved;
+                        if let Some(head) = response_head {
+                            tx.execute(
+                                "INSERT INTO meta (key, value)
+                                 SELECT 'note_review_head:' || mutation_id, ?1 FROM conflict
+                                 WHERE entity_id = ?2 AND kind = ?3 AND resolved_at IS NULL
+                                 ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), ?1)",
+                                params![head, s.entity_id, crate::ops::APPOINTMENT_NOTES_KIND],
+                            )?;
+                        }
                     }
                 }
                 MutationResult::Retry { message, .. } => {

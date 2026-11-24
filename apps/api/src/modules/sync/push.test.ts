@@ -1085,6 +1085,47 @@ describe("appointments are server-authoritative", () => {
     expect(body.results[2]).toMatchObject({ status: "rejected", reason: "invalid_state" });
   });
 
+  test("an appointment note syncs once, with calendar permissions and a reviewed version", async () => {
+    const create = createAppt();
+    const { id } = create.payload;
+    expect((await push(t, owner, [create])).body.results[0]?.status).toBe("applied");
+    const notes = (version: number, text: string) =>
+      mutation("appointment.set_notes", { id, version, notes: text });
+    expect((await push(t, bea, [notes(1, "Out of scope")])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "forbidden",
+    });
+    const proposal = notes(1, "Confirm shade on arrival");
+    expect((await push(t, ana, [proposal])).body.results[0]?.status).toBe("applied");
+    expect((await push(t, ana, [proposal])).body.results[0]).toMatchObject({
+      status: "applied",
+      replayed: true,
+    });
+    const web = await json(
+      t.app,
+      `/appointments/${id}`,
+      "PATCH",
+      { version: 2, notes: "Web confirmed shade" },
+      owner.cookie,
+    );
+    expect(web.status).toBe(200);
+    expect((await push(t, ana, [notes(2, "Stale draft")])).body.results[0]).toMatchObject({
+      status: "rejected",
+      reason: "conflict",
+    });
+    const read = async () =>
+      (await t.db.select().from(appointment).where(eq(appointment.id, id)))[0];
+    expect(await read()).toMatchObject({
+      staffId: f.anaId,
+      startsAt: new Date(MONDAY_0900),
+      status: "booked",
+      version: 3,
+      notes: "Web confirmed shade",
+    });
+    expect((await push(t, ana, [notes(3, "")])).body.results[0]?.status).toBe("applied");
+    expect(await read()).toMatchObject({ version: 4, notes: "" });
+  });
+
   test("an appointment cannot be marked completed before it starts", async () => {
     const create = createAppt();
     await push(t, owner, [create]);

@@ -118,6 +118,7 @@ function appointmentBasis(mutation: SyncMutation) {
       return { id: mutation.payload.id.toLowerCase(), version: 0 };
     case "appointment.reschedule":
     case "appointment.cancel":
+    case "appointment.set_notes":
     case "appointment.set_status":
       return { id: mutation.payload.id.toLowerCase(), version: mutation.payload.version };
     default:
