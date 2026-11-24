@@ -1378,6 +1378,38 @@ fn recording_an_outcome_offline_updates_the_calendar_and_preserves_the_version()
 }
 
 #[test]
+fn all_calendar_editors_can_correct_attendance_in_both_directions() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", "all").unwrap();
+    let now = at("2026-03-10T12:00:00Z");
+
+    for status in [
+        AppointmentStatus::NoShow,
+        AppointmentStatus::Completed,
+        AppointmentStatus::NoShow,
+    ] {
+        set_appointment_status(&mut store, EXISTING, status, now).unwrap();
+        assert_eq!(
+            effective_appointment(&store, EXISTING)
+                .unwrap()
+                .unwrap()
+                .status,
+            status
+        );
+    }
+    let outbox = store.outbox(10).unwrap();
+    assert_eq!(
+        outbox
+            .iter()
+            .map(|entry| &entry.payload["version"])
+            .collect::<Vec<_>>(),
+        [&json!(3), &json!(4), &json!(5)]
+    );
+    assert!(cancel_appointment(&mut store, EXISTING).is_err());
+    assert!(set_appointment_status(&mut store, EXISTING, AppointmentStatus::NoShow, now).is_err());
+}
+
+#[test]
 fn outcomes_cannot_close_future_or_already_closed_appointments() {
     let mut store = seeded();
     assert!(

@@ -1098,6 +1098,30 @@ describe("appointments are server-authoritative", () => {
     expect(body.results[0]).toMatchObject({ status: "rejected", reason: "invalid_state" });
   });
 
+  test("attendance corrections sync only for staff who can edit all calendars", async () => {
+    const create = createAppt();
+    const id = create.payload.id;
+    expect((await push(t, owner, [create])).body.results[0]?.status).toBe("applied");
+    await t.db.update(appointment).set({ status: "completed" }).where(eq(appointment.id, id));
+
+    const correction = (version: number, status: "completed" | "no_show") =>
+      mutation("appointment.set_status", { id, version, status });
+    const denied = await push(t, ana, [correction(1, "no_show")]);
+    expect(denied.body.results[0]).toMatchObject({ status: "rejected", reason: "forbidden" });
+
+    await t.db
+      .update(staffProfile)
+      .set({ accessPreset: "receptionist" })
+      .where(eq(staffProfile.id, f.anaId));
+    const { headSeq } = await pull(t, owner);
+    const corrected = await push(t, ana, [correction(1, "no_show"), correction(2, "completed")]);
+    expect(corrected.body.results.map((result) => result.status)).toEqual(["applied", "applied"]);
+    const { changes } = await pull(t, owner, { since: headSeq });
+    expect(
+      changes.find((change) => change.entity === "appointment" && change.id === id),
+    ).toMatchObject({ op: "upsert", data: { status: "completed", version: 3 } });
+  });
+
   test("an unknown appointment is not_found", async () => {
     const { body } = await push(t, owner, [
       mutation("appointment.cancel", { id: uuid(), version: 1 }),
