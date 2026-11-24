@@ -8,9 +8,11 @@ import { SelectField } from "~/components/ui/select-field";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useNow } from "~/features/admin/use-now";
+import { useAuth } from "~/features/auth/use-auth";
 import { BookingProtectionNotice } from "~/features/booking/protection";
 import { totalPriceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
+import { calendarScope } from "~/lib/admin-queries";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
@@ -38,6 +40,7 @@ export function WaitlistView({
   onNavigate?: () => void;
 }) {
   const { t, locale, timeZone } = useI18n();
+  const { refreshSession } = useAuth();
   const canBookOnline = mode === "admin" || onlineBookingEnabled;
   const online = useOnline();
   const queries = useQueryClient();
@@ -100,6 +103,19 @@ export function WaitlistView({
     setImported(null);
     setJoining(false);
   }, [lostAccess]);
+  async function retry() {
+    if (lostAccess) {
+      // Another tab may have changed the cookie used by this still-open view.
+      const current = await refreshSession();
+      if (
+        !current ||
+        current.user.id !== viewer.userId ||
+        calendarScope(current) !== viewer.accessScope
+      )
+        return;
+    }
+    await query.refetch();
+  }
   const reviewPanel = review && !lostAccess && (
     <WaitlistOfferReview
       key={`${review.id}:${review.version}`}
@@ -137,7 +153,7 @@ export function WaitlistView({
           {query.isPending ? (
             <Skeleton className="h-52" />
           ) : (
-            <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+            <ErrorState error={query.error} onRetry={() => void retry()} />
           )}
           {!lostAccess && bookedResult}
         </div>
