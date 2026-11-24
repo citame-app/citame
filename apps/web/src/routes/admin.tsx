@@ -11,6 +11,7 @@ import { useCallback } from "react";
 import { adminGuard, sectionOfPath } from "~/features/admin/nav";
 import { adminHead } from "~/features/admin/route-head";
 import { AdminShell } from "~/features/admin/shell";
+import { calendarScope, clearCalendarInbox } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { resolveAccess } from "~/lib/auth/access";
@@ -60,14 +61,13 @@ function AdminLayout() {
       const cached = queryClient.getQueryData(bootstrapQuery.queryKey);
       const prior = cached?.session;
       if (!cached || !prior || prior.user.id !== accountId) return;
-      if (
-        current?.user.id === prior.user.id &&
-        current.user.role === prior.user.role &&
-        current.staffId === prior.staffId &&
-        current.accessPreset === prior.accessPreset
-      )
+      const priorScope = calendarScope(prior);
+      if (current && calendarScope(current) === priorScope) return;
+      await clearCalendarInbox(queryClient, prior.user.id);
+      const latest = queryClient.getQueryData(bootstrapQuery.queryKey);
+      if (signal.aborted || !latest?.session || calendarScope(latest.session) !== priorScope)
         return;
-      queryClient.setQueryData(bootstrapQuery.queryKey, { ...cached, session: current });
+      queryClient.setQueryData(bootstrapQuery.queryKey, { ...latest, session: current });
       await router.invalidate();
     },
     [accountId, queryClient, router],

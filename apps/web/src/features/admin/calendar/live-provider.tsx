@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react";
 import { BellIcon, CloseIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
+import { calendarInboxQueryKey } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatTime, localDateOf } from "~/lib/format";
 import { isLocalCalendarWrite } from "./appointment-writes";
@@ -72,7 +73,7 @@ export function CalendarLiveProvider({
             queryKey[0] === "staff" ||
             queryKey[0] === "portfolio" ||
             queryKey[0] === "marketing" ||
-            queryKey[0] === "calendar-inbox" ||
+            queryKey[0] === calendarInboxQueryKey[0] ||
             ((queryKey[0] === "rewards" || queryKey[0] === "creative") &&
               queryKey[1] === "promotions") ||
             (queryKey[0] === "rewards" &&

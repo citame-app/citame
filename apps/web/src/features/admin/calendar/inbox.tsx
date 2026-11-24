@@ -1,11 +1,5 @@
 import type { CalendarInboxQuery, CalendarNotice } from "@sob/contracts";
-import {
-  type QueryClient,
-  type QueryKey,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -14,21 +8,13 @@ import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { StampNotices, useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import { useI18n } from "~/i18n/react";
+import { calendarInboxUserKey, clearCalendarInbox } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
 
-const inboxKey = (userId: string) => ["calendar-inbox", userId] as const;
-
 function isAccessDenied(error: unknown) {
   return error instanceof ApiError && (error.status === 401 || error.status === 403);
-}
-
-async function clearInboxAccess(queries: QueryClient, userId: string, failingKey?: QueryKey) {
-  const scope = { queryKey: inboxKey(userId) };
-  // Cancel older reads before they can put the prior pages back in the cache.
-  await queries.cancelQueries({ ...scope, predicate: ({ queryKey }) => queryKey !== failingKey });
-  queries.setQueriesData(scope, null);
 }
 
 function useCalendarInboxQuery(
@@ -38,13 +24,13 @@ function useCalendarInboxQuery(
 ) {
   const queries = useQueryClient();
   return useQuery({
-    queryKey: [...inboxKey(userId), accessScope, query],
+    queryKey: [...calendarInboxUserKey(userId), accessScope, query],
     queryFn: async ({ signal, queryKey }) => {
       try {
         return await api().calendarInbox.list(query, signal);
       } catch (error) {
         if (!isAccessDenied(error)) throw error;
-        await clearInboxAccess(queries, userId, queryKey);
+        await clearCalendarInbox(queries, userId, queryKey);
         return null;
       }
     },
@@ -161,15 +147,18 @@ function InboxContents({
     page,
   });
   const archive = useMutation({
-    mutationFn: (ids: string[]) => api().calendarInbox.archive(ids, !archived),
-    onSuccess: () => {
-      setPage(1);
-      void queries.invalidateQueries({ queryKey: inboxKey(userId) });
+    mutationKey: calendarInboxUserKey(userId),
+    mutationFn: (request: { ids: string[]; userId: string; archived: boolean }) =>
+      api().calendarInbox.archive(request.ids, request.archived),
+    onSuccess: (_, request) => {
+      if (request.userId === userId) setPage(1);
+      void queries.invalidateQueries({ queryKey: calendarInboxUserKey(request.userId) });
     },
-    onError: async (error) => {
-      if (isAccessDenied(error)) await clearInboxAccess(queries, userId);
+    onError: async (error, request) => {
+      if (isAccessDenied(error)) await clearCalendarInbox(queries, request.userId);
     },
   });
+  const updateArchive = (ids: string[]) => archive.mutate({ ids, archived: !archived, userId });
   const groups = new Map<string, CalendarNotice[]>();
   for (const notice of query.data?.entries ?? []) {
     const day = localDateOf(notice.createdAt, timeZone);
@@ -177,6 +166,9 @@ function InboxContents({
   }
   return (
     <div className="space-y-5">
+      <div role="status" className="sr-only">
+        {query.data === null ? t("calendar.inbox.unavailable") : ""}
+      </div>
       <fieldset className="flex gap-2">
         <legend className="sr-only">{t("calendar.inbox.state")}</legend>
         {[false, true].map((value) => (
@@ -221,7 +213,10 @@ function InboxContents({
           <Button
             variant="secondary"
             onClick={() =>
-              void queries.refetchQueries({ queryKey: inboxKey(userId), type: "active" })
+              void queries.refetchQueries({
+                queryKey: calendarInboxUserKey(userId),
+                type: "active",
+              })
             }
           >
             {t("common.retry")}
@@ -238,7 +233,7 @@ function InboxContents({
                   <Button
                     variant="ghost"
                     disabled={!online || archive.isPending}
-                    onClick={() => archive.mutate(notices.map((n) => n.id))}
+                    onClick={() => updateArchive(notices.map((n) => n.id))}
                   >
                     {t("calendar.inbox.archiveDay")}
                   </Button>
@@ -275,7 +270,7 @@ function InboxContents({
                         variant="ghost"
                         className="mt-1"
                         disabled={!online || archive.isPending}
-                        onClick={() => archive.mutate([notice.id])}
+                        onClick={() => updateArchive([notice.id])}
                       >
                         {t(archived ? "calendar.inbox.restore" : "calendar.inbox.archive")}
                       </Button>

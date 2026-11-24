@@ -4,7 +4,7 @@ import type {
   ReportSummaryQuery,
   ResourceOccupancy,
 } from "@sob/contracts";
-import { queryOptions } from "@tanstack/react-query";
+import { type QueryClient, type QueryKey, queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
 
 /** SSE refreshes the web calendar; focus/interval remain the fallback when disconnected. */
@@ -20,6 +20,19 @@ export function calendarScope(session: MeResponse) {
 }
 
 export const calendarResourceQueryKey = ["admin", "calendar", "resources"] as const;
+export const calendarInboxQueryKey = ["calendar-inbox"] as const;
+export const calendarInboxUserKey = (userId: string) => [...calendarInboxQueryKey, userId] as const;
+
+export async function clearCalendarInbox(
+  queries: QueryClient,
+  userId: string,
+  failingKey?: QueryKey,
+) {
+  const scope = { queryKey: calendarInboxUserKey(userId) };
+  // Cancel older reads before they can put the prior pages back in the cache.
+  await queries.cancelQueries({ ...scope, predicate: ({ queryKey }) => queryKey !== failingKey });
+  queries.setQueriesData(scope, null);
+}
 
 const resourceSnapshotReceipts = new WeakMap<ResourceOccupancy, number>();
 

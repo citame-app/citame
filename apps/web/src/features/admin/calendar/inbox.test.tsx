@@ -1,6 +1,6 @@
 import { afterEach, expect, mock, test } from "bun:test";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { renderApp } from "../../../../test/render";
 import { CalendarInbox } from "./inbox";
 
@@ -26,6 +26,20 @@ function WithScope() {
       <CalendarInbox userId={userId} accessScope={scope} />
     </>
   );
+}
+
+function SwitchingInbox({ accountChanged }: { accountChanged: Promise<void> }) {
+  const [account, setAccount] = useState(userId);
+  useEffect(() => {
+    let mounted = true;
+    void accountChanged.then(() => {
+      if (mounted) setAccount("other-account");
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [accountChanged]);
+  return <CalendarInbox userId={account} accessScope="reception" />;
 }
 
 afterEach(() => {
@@ -62,7 +76,9 @@ test.each([401, 403])(
     const refetch = queryClient.refetchQueries({ queryKey: countKey, exact: true });
     const outstanding = await pendingFetch.promise;
     fireEvent.click(open);
-    expect(await screen.findByText("Notifications are unavailable for this account")).toBeVisible();
+    const unavailable = "Notifications are unavailable for this account";
+    expect(await screen.findByRole("heading", { name: unavailable })).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(unavailable);
     expect(
       await screen.findByRole("button", { name: "Notifications", hidden: true }),
     ).toBeInTheDocument();
@@ -97,4 +113,54 @@ test("a narrower calendar scope never renders a wider cached inbox count", async
   expect(screen.queryByRole("button", { name: "Notifications 5" })).toBeNull();
   staffCount.resolve(Response.json(page(1)));
   expect(await screen.findByRole("button", { name: "Notifications 1" })).toBeVisible();
+});
+
+test("a delayed archive denial clears only the account that attempted to archive", async () => {
+  const archiveStarted = Promise.withResolvers<void>();
+  const archiveResult = Promise.withResolvers<Response>();
+  const accountChanged = Promise.withResolvers<void>();
+  const date = "2026-11-25T12:00:00.000Z";
+  const id = "0198f5a0-7b1c-7000-8000-000000000100";
+  const notice = {
+    id,
+    kind: "new",
+    createdAt: date,
+    startsAt: date,
+    appointmentStartsAt: date,
+    appointmentId: id,
+    staffId: id,
+    clientName: "Synthetic customer",
+    serviceNames: ["Haircut"],
+  };
+  let switched = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      archiveStarted.resolve();
+      return archiveResult.promise;
+    }
+    const url = new URL(String(input), "http://localhost");
+    if (switched) return Response.json(page(url.search ? 0 : 7));
+    return Response.json({ ...page(1), entries: url.search ? [notice] : [] });
+  }) as unknown as typeof fetch;
+
+  const { queryClient } = renderApp(<SwitchingInbox accountChanged={accountChanged.promise} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Notifications 1" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  await archiveStarted.promise;
+  queryClient.setQueryData(archivedKey, page(3));
+
+  await act(async () => {
+    switched = true;
+    accountChanged.resolve();
+  });
+  await waitFor(() => expect(queryClient.getQueryData(otherKey)).toEqual(page(7)));
+  await act(async () => {
+    archiveResult.resolve(Response.json({}, { status: 403 }));
+  });
+  await waitFor(() => expect(queryClient.getQueryData(archivedKey)).toBeNull());
+  expect(queryClient.getQueryData(countKey)).toBeNull();
+  expect(queryClient.getQueryData(otherKey)).toEqual(page(7));
+  expect(
+    screen.queryByRole("heading", { name: "Notifications are unavailable for this account" }),
+  ).toBeNull();
 });

@@ -1,6 +1,7 @@
 import type { SyncEntity, SyncLiveView } from "@sob/contracts";
 import {
   calendarEntryQueryKey,
+  calendarInboxQueryKey,
   calendarResourceQueryKey,
   inventoryNumberingQueryKey,
   teamShiftWeekKey,
@@ -44,7 +45,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     ["admin", "clients"],
     ["admin", "report"],
     ["commerce", "unpaid"],
-    ["calendar-inbox"],
+    calendarInboxQueryKey,
   ],
   client: [
     reviewRequestQueryKey,
@@ -100,7 +101,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
   ],
   commerce: [...commerce, ["admin", "calendar"], ["admin", "appointment-context"]],
   waitlist: [["waitlist"], calendarResourceQueryKey],
-  inbox: [["calendar-inbox"]],
+  inbox: [calendarInboxQueryKey],
   review_requests: [reviewRequestQueryKey, moderation],
   portfolio: [["portfolio"]],
   marketing: [["marketing"]],
