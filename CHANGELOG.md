@@ -97,6 +97,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Password reset and staff invitation submissions consume one email rate-limit attempt per request.
+
 - Production Compose waits for Caddy to load its listener configuration before reporting the gateway healthy.
 
 - Database recovery restores the exact archive verified by checksum, including when a newer backup replaces the input file during validation.

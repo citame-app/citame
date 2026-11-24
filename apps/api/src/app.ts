@@ -319,9 +319,9 @@ export function createApp(input: AppDeps): App {
     rule: limits.auth,
     trustProxy,
   });
+  // The wildcard also matches the reset form POST at the base path.
   for (const path of [
     "/api/auth/request-password-reset",
-    "/api/auth/reset-password",
     "/api/auth/reset-password/*",
     "/api/auth/send-verification-email",
     "/api/auth/verify-email",
