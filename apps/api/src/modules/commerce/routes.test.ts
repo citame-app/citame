@@ -657,6 +657,16 @@ test.each(["current", "legacy"] as const)(
 );
 
 test("the owner can verify a full Booksy payment after the Citame receipt is fully refunded", async () => {
+  const previous = await checkout();
+  const attempted = await pay(previous.id, "redsys_card", 10000);
+  expect(attempted.status).toBe(201);
+  const { payment: bankPayment } = (await attempted.json()) as {
+    payment: { id: string; order: string };
+  };
+  expect((await notify(bankPayment.order, { Ds_Response: "0190" })).status).toBe(200);
+  expect((await call(owner, `/admin/commerce/checkouts/${previous.id}/void`, "POST")).status).toBe(
+    200,
+  );
   await t.db.insert(appointmentContext).values({
     appointmentId,
     servicePosition: 0,
@@ -728,32 +738,56 @@ test("the owner can verify a full Booksy payment after the Citame receipt is ful
   const before = await readReceipt();
   expect(before).toMatchObject({ status: "refunded", paidCents: 6500, refundedCents: 6500 });
   expect((await verify(staff)).status).toBe(403);
-  const [late] = await t.db
-    .insert(checkoutPayment)
-    .values({
-      checkoutId: sale.id,
-      method: "redsys_card",
-      amountCents: 6500,
-      status: "pending",
-      idempotencyKey: crypto.randomUUID(),
-      requestHash: "synthetic-late-payment",
-    })
-    .returning({ id: checkoutPayment.id });
-  if (!late) throw new Error("Expected a synthetic pending payment");
   expect((await verify()).status).toBe(409);
+  expect((await notify(bankPayment.order)).status).toBe(200);
+  expect((await verify()).status).toBe(409);
+  const requested = await call(
+    owner,
+    `/admin/commerce/payments/${bankPayment.id}/refunds`,
+    "POST",
+    {
+      amountCents: 10000,
+      reason: "Return the late capture on the void receipt",
+      idempotencyKey: crypto.randomUUID(),
+    },
+  );
+  expect(requested.status, await requested.clone().text()).toBe(201);
+  const { id: bankRefundId } = (await requested.json()) as { id: string };
   await t.db
-    .update(checkoutPayment)
-    .set({ status: "failed" })
-    .where(eq(checkoutPayment.id, late.id));
-  const retained = await readReceipt();
+    .update(checkoutRefund)
+    .set({ status: "reconciliation" })
+    .where(eq(checkoutRefund.id, bankRefundId));
+  expect((await verify()).status).toBe(409);
+  expect(
+    (
+      await call(owner, `/admin/commerce/refunds/${bankRefundId}/reconcile`, "POST", {
+        outcome: "succeeded",
+        reference: "Synthetic bank refund proof",
+      })
+    ).status,
+  ).toBe(200);
+  const beforeSync = syncPullResponseSchema.parse(
+    await (await call(owner, "/sync/pull?since=0&limit=500")).json(),
+  );
   const recorded = await verify();
   expect(recorded.status, await recorded.clone().text()).toBe(200);
   const saved = importedSettlementResponseSchema.parse(await recorded.json());
   expect(saved).toMatchObject({ appointmentVersion: 4, settlement: { amountCents: 10000 } });
   expect(await (await verify()).json()).toEqual(saved);
-  expect(await readReceipt()).toEqual(retained);
-  expect(await t.db.select().from(checkoutTable)).toHaveLength(1);
-  expect(await t.db.select().from(checkoutRefund)).toHaveLength(2);
+  expect(await readReceipt()).toEqual(before);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(2);
+  expect(await t.db.select().from(checkoutRefund)).toHaveLength(3);
+  const synced = syncPullResponseSchema.parse(
+    await (await call(owner, `/sync/pull?since=${beforeSync.nextCursor}&limit=500`)).json(),
+  );
+  const updated = synced.changes.find(({ id }) => id === appointmentId);
+  expect(updated?.data).toMatchObject({
+    externallySettled: true,
+    version: 4,
+    serviceBadges: [{ paid: true, invoiced: false, billingSource: "booksy" }],
+  });
+  expect(updated?.data).not.toHaveProperty("externalBalance");
+  expect(updated?.data).not.toHaveProperty("reference");
   const [audit] = await t.db
     .select({ metadata: auditLog.metadata })
     .from(auditLog)

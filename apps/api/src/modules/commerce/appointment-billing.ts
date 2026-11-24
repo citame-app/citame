@@ -338,20 +338,38 @@ export async function getImportedSettlement(db: Database, id: string, principal:
   return { appointmentVersion: booking.version, settlement: await importedSettlement(db, id) };
 }
 
-async function checkoutFullyRefunded(db: Pick<Database, "select">, checkoutId: string) {
+async function nativePaymentsResolved(
+  db: Pick<Database, "select">,
+  appointmentId: string,
+  refundedCheckoutId?: string,
+) {
   const payments = await db
     .select({
       id: checkoutPayment.id,
+      checkoutId: checkoutPayment.checkoutId,
       status: checkoutPayment.status,
       amountCents: checkoutPayment.amountCents,
+      bankOrder: checkoutPayment.bankOrder,
     })
     .from(checkoutPayment)
-    .where(eq(checkoutPayment.checkoutId, checkoutId));
+    .innerJoin(checkout, eq(checkoutPayment.checkoutId, checkout.id))
+    .where(eq(checkout.appointmentId, appointmentId));
+  // A signed late bank success can still capture an order marked as failed.
   if (
-    payments.some(({ status }) => status === "pending") ||
-    !payments.some(({ status }) => recordedPaymentStatuses.includes(status))
+    payments.some(
+      ({ status, bankOrder }) => status === "pending" || (status === "failed" && bankOrder),
+    )
   )
     return false;
+  if (
+    refundedCheckoutId &&
+    !payments.some(
+      ({ checkoutId, status }) =>
+        checkoutId === refundedCheckoutId && recordedPaymentStatuses.includes(status),
+    )
+  )
+    return false;
+  if (payments.length === 0) return true;
 
   const refunds = await db
     .select({
@@ -379,7 +397,7 @@ async function checkoutFullyRefunded(db: Pick<Database, "select">, checkoutId: s
   );
 }
 
-async function assertNoNativeCollection(
+async function assertNativeCollectionReconciled(
   db: Pick<Database, "select">,
   id: string,
   { allowFullyRefunded = false } = {},
@@ -389,12 +407,9 @@ async function assertNoNativeCollection(
     .from(checkout)
     .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
     .limit(1);
-  if (
-    receipt &&
-    (!allowFullyRefunded ||
-      receipt.status !== "refunded" ||
-      !(await checkoutFullyRefunded(db, receipt.id)))
-  )
+  if (receipt && (!allowFullyRefunded || receipt.status !== "refunded"))
+    throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
+  if (allowFullyRefunded && !(await nativePaymentsResolved(db, id, receipt?.id)))
     throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
   const [nativeDeposit] = await db
     .select({ id: bookingProtection.appointmentId })
@@ -450,7 +465,9 @@ export async function confirmImportedSettlement(
         "invalid_state",
         "This appointment has no Booksy payment or invoice to reconcile",
       );
-    const refundedCheckoutId = await assertNoNativeCollection(tx, id, { allowFullyRefunded: true });
+    const refundedCheckoutId = await assertNativeCollectionReconciled(tx, id, {
+      allowFullyRefunded: true,
+    });
     const lines = await tx
       .select()
       .from(appointmentService)
@@ -524,7 +541,7 @@ export async function confirmImportedUnpaid(
       return { appointmentVersion: booking.version };
     if (previous || booking.version !== input.appointmentVersion)
       throw new DomainError("version_conflict", "Reload the appointment before reviewing payment");
-    await assertNoNativeCollection(tx, id);
+    await assertNativeCollectionReconciled(tx, id);
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: importedUnpaidAudit,
@@ -553,7 +570,7 @@ async function originalPartialPaymentTotal(
     .where(and(eq(appointmentContext.appointmentId, id), eq(appointmentContext.source, "booksy")))
     .limit(1);
   if (!source) throw new DomainError("invalid_state", "This appointment has no Booksy origin");
-  await assertNoNativeCollection(db, id);
+  await assertNativeCollectionReconciled(db, id);
   const lines = await db
     .select()
     .from(appointmentService)

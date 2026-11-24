@@ -273,19 +273,21 @@ export async function calendarBadges(
       externalBalance,
       badges: services.map((s) => {
         const c = indexed.get(`${visit.id}:${s.position}`);
-        const native = billed.get(visit.id);
+        const native = settled ? undefined : billed.get(visit.id);
         const billingContext = includeBilling ? c : undefined;
         const annotatedPaid = !externalBalance && billingContext?.paid === true;
         return {
           servicePosition: s.position,
           requested: Boolean(c ? c.requestedStaffId : visit.requestedStaffId),
           invoiced: Boolean(native || billingContext?.invoiced),
-          paid: native ? native !== "refunded" : annotatedPaid,
-          billingSource: native
-            ? "citame"
-            : billingContext && (billingContext.invoiced || annotatedPaid)
-              ? (billingContext.source as "booksy" | "citame")
-              : null,
+          paid: settled || (native ? native !== "refunded" : annotatedPaid),
+          billingSource: settled
+            ? "booksy"
+            : native
+              ? "citame"
+              : billingContext && (billingContext.invoiced || annotatedPaid)
+                ? (billingContext.source as "booksy" | "citame")
+                : null,
           internalNote: c?.internalNote ?? false,
           customerComment: Boolean(c?.customerComment || visit.customerComment?.trim()),
         };
