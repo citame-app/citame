@@ -210,6 +210,7 @@ struct PullMetadata<'a> {
     generation: Option<&'a str>,
     catalogue_access: Option<bool>,
     calendar_edit_access: Option<bool>,
+    time_off_scope: Option<&'a str>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     booking_combinations: Option<&'a [crate::combinations::ManagedCombination]>,
@@ -1238,6 +1239,7 @@ impl Store {
                 generation: Some(generation),
                 catalogue_access: page.viewer_edit_catalogue,
                 calendar_edit_access: page.viewer_edit_calendar,
+                time_off_scope: page.time_off_scope.as_deref(),
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
                 booking_combinations: page.booking_combinations.as_deref(),
@@ -1288,6 +1290,11 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
+        if let Some(scope) = metadata.time_off_scope
+            && Self::meta_at(&tx, "time_off_scope")?.as_deref() != Some(scope)
+        {
+            Self::set_meta_at(&tx, "time_off_scope", scope)?;
+        }
         if let Some(allowed) = metadata.calendar_edit_access {
             let value = if allowed { "1" } else { "0" };
             if Self::meta_at(&tx, "viewer_edit_calendar")?.as_deref() != Some(value) {
@@ -1882,6 +1889,29 @@ impl Store {
         raw.iter().map(|j| Ok(serde_json::from_str(j)?)).collect()
     }
 
+    pub fn time_off(&self, id: &str) -> Result<Option<TimeOff>> {
+        let json: Option<String> = self
+            .conn
+            .query_row("SELECT json FROM time_off WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        json.map(|json| Ok(serde_json::from_str(&json)?))
+            .transpose()
+    }
+
+    /// Returns whether the replica has reached the head recorded on this rejection.
+    pub(crate) fn time_off_review_ready(&self, mutation_id: &str) -> Result<Option<bool>> {
+        let head = self.get_meta(&format!("time_off_review_head:{mutation_id}"))?;
+        head.map(|value| {
+            let expected: i64 = value.parse().map_err(|_| {
+                CoreError::Protocol("Invalid time block conflict checkpoint".into())
+            })?;
+            Ok(self.cursor()? >= expected)
+        })
+        .transpose()
+    }
+
     pub fn salon_settings(&self) -> Result<Option<SalonSettings>> {
         let j: Option<String> = self
             .conn
@@ -2056,6 +2086,13 @@ impl Store {
         tx.execute(
             "DELETE FROM meta WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1",
             [cursor],
+        )?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'time_off_review_head:*'
+             AND NOT EXISTS (SELECT 1 FROM conflict
+                WHERE mutation_id = substr(meta.key, length('time_off_review_head:') + 1)
+                AND resolved_at IS NULL)",
+            [],
         )?;
         tx.execute(
             "DELETE FROM meta WHERE key GLOB 'note_review_head:*' AND CAST(value AS INTEGER) <= ?1",
@@ -2376,6 +2413,16 @@ impl Store {
                         ],
                     )?;
                     out.rejected += 1;
+                    if let Some(head) = response_head
+                        && reason == "conflict"
+                        && matches!(s.kind.as_str(), "time_off.update" | "time_off.delete")
+                    {
+                        Self::set_meta_at(
+                            &tx,
+                            &format!("time_off_review_head:{}", s.mutation_id),
+                            &head.to_string(),
+                        )?;
+                    }
                     if s.kind.starts_with("appointment.") {
                         let last_sent = sent.last().map_or(s.seq, |entry| entry.seq);
                         let moved = tx.execute(

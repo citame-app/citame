@@ -44,6 +44,7 @@ fn validate_block(
     end: DateTime<Utc>,
     reason: &str,
 ) -> Result<()> {
+    verify_time_off_scope(store, staff_id)?;
     if start >= end {
         return Err(CoreError::Invalid("The end must be after the start".into()));
     }
@@ -57,6 +58,18 @@ fn validate_block(
         ));
     }
     check_len("reason", reason.trim(), MAX_REASON)
+}
+
+fn verify_time_off_scope(store: &Store, staff_id: &str) -> Result<()> {
+    if store
+        .get_meta("time_off_scope")?
+        .is_some_and(|scope| scope != "all" && scope != staff_id)
+    {
+        return Err(CoreError::Invalid(
+            "This calendar cannot be changed from this account".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn create_time_off(
@@ -78,6 +91,7 @@ pub fn create_time_off(
 }
 
 fn verify_block(store: &Store, expected: &TimeOff) -> Result<()> {
+    verify_time_off_scope(store, &expected.staff_id)?;
     let Some(block) = effective_time_off(store, expected.starts_at, expected.ends_at)?
         .into_iter()
         .find(|block| &block.time_off == expected)
@@ -101,6 +115,18 @@ pub fn update_time_off(
     end: DateTime<Utc>,
     reason: &str,
 ) -> Result<()> {
+    store.write_transaction(|store| {
+        queue_time_off_update(store, expected, start, end, reason).map(|_| ())
+    })
+}
+
+fn queue_time_off_update(
+    store: &mut Store,
+    expected: &TimeOff,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    reason: &str,
+) -> Result<bool> {
     verify_block(store, expected)?;
     validate_block(store, &expected.staff_id, start, end, reason)?;
     let reason = (!reason.trim().is_empty()).then_some(reason.trim());
@@ -108,16 +134,34 @@ pub fn update_time_off(
         && expected.ends_at == end
         && expected.reason.as_deref() == reason
     {
-        return Ok(());
+        return Ok(false);
     }
-    store.enqueue_after("time_off.update", &expected.id, json!({
-        "id": expected.id, "staffId": expected.staff_id, "startsAt": iso(start), "endsAt": iso(end),
-        "reason": reason, "expectedUpdatedAt": iso(expected.updated_at)
-    }), expected.updated_at)?;
-    Ok(())
+    let mut changes = json!({
+        "id": expected.id, "staffId": expected.staff_id, "expectedUpdatedAt": iso(expected.updated_at)
+    });
+    if start != expected.starts_at {
+        changes["startsAt"] = json!(iso(start));
+    }
+    if end != expected.ends_at {
+        changes["endsAt"] = json!(iso(end));
+    }
+    if reason != expected.reason.as_deref() {
+        changes["reason"] = json!(reason);
+    }
+    store.enqueue_after(
+        "time_off.update",
+        &expected.id,
+        changes,
+        expected.updated_at,
+    )?;
+    Ok(true)
 }
 
 pub fn delete_time_off(store: &mut Store, expected: &TimeOff) -> Result<()> {
+    store.write_transaction(|store| queue_time_off_removal(store, expected))
+}
+
+fn queue_time_off_removal(store: &mut Store, expected: &TimeOff) -> Result<()> {
     verify_block(store, expected)?;
     store.enqueue_after(
         "time_off.delete",
@@ -129,6 +173,94 @@ pub fn delete_time_off(store: &mut Store, expected: &TimeOff) -> Result<()> {
         expected.updated_at,
     )?;
     Ok(())
+}
+
+pub struct TimeOffReview {
+    pub saved: TimeOff,
+    pub proposal: Option<TimeOff>,
+    /// Older clients sent all fields even if only one was changed.
+    pub requires_field_selection: bool,
+}
+
+pub fn review_time_off_conflict(store: &Store, mutation_id: &str) -> Result<TimeOffReview> {
+    store.read_snapshot(|store| current_time_off_review(store, mutation_id))
+}
+
+fn current_time_off_review(store: &Store, mutation_id: &str) -> Result<TimeOffReview> {
+    let conflict = store
+        .conflict(mutation_id)?
+        .filter(crate::model::Conflict::is_time_off_revision_conflict)
+        .ok_or_else(|| CoreError::NotFound(format!("open time off conflict {mutation_id}")))?;
+    let saved = store
+        .time_off(&conflict.entity_id)?
+        .ok_or_else(|| CoreError::NotFound("This time block is no longer available".into()))?;
+    verify_time_off_scope(store, &saved.staff_id)?;
+    let payload = &conflict.payload;
+    let rejected_version: DateTime<Utc> =
+        serde_json::from_value(payload["expectedUpdatedAt"].clone())?;
+    let fresh = store
+        .time_off_review_ready(mutation_id)?
+        .unwrap_or(saved.updated_at > rejected_version);
+    if payload["staffId"].as_str() != Some(saved.staff_id.as_str())
+        || !fresh
+        || store
+            .calendar_outbox()?
+            .iter()
+            .any(|entry| entry.entity_id == saved.id && entry.kind.starts_with("time_off."))
+    {
+        return Err(CoreError::Invalid(
+            "Synchronize the current time block before review".into(),
+        ));
+    }
+    let proposal = if conflict.kind == "time_off.update" {
+        let mut proposed = saved.clone();
+        if let Some(start) = payload.get("startsAt") {
+            proposed.starts_at = serde_json::from_value(start.clone())?;
+        }
+        if let Some(end) = payload.get("endsAt") {
+            proposed.ends_at = serde_json::from_value(end.clone())?;
+        }
+        if let Some(reason) = payload.get("reason") {
+            proposed.reason = serde_json::from_value(reason.clone())?;
+        }
+        Some(proposed)
+    } else {
+        None
+    };
+    let requires_field_selection = proposal.is_some()
+        && ["startsAt", "endsAt", "reason"]
+            .into_iter()
+            .all(|field| payload.get(field).is_some());
+    Ok(TimeOffReview {
+        saved,
+        proposal,
+        requires_field_selection,
+    })
+}
+
+pub fn retry_reviewed_time_off(
+    store: &mut Store,
+    mutation_id: &str,
+    expected: &TimeOff,
+    changes: Option<(DateTime<Utc>, DateTime<Utc>, &str)>,
+) -> Result<()> {
+    store.write_transaction(|store| {
+        let reviewed = current_time_off_review(store, mutation_id)?;
+        if &reviewed.saved != expected || reviewed.proposal.is_some() != changes.is_some() {
+            return Err(CoreError::Invalid(
+                "The time block changed during review".into(),
+            ));
+        }
+        if let Some((start, end, reason)) = changes {
+            let queued = queue_time_off_update(store, expected, start, end, reason)?;
+            if !queued && reviewed.requires_field_selection {
+                return Err(CoreError::TimeOffReviewNeedsChanges);
+            }
+        } else {
+            queue_time_off_removal(store, expected)?;
+        }
+        store.resolve_conflict(mutation_id, "reviewed")
+    })
 }
 
 type Slot = (DateTime<Utc>, DateTime<Utc>);

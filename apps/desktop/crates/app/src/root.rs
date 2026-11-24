@@ -1016,6 +1016,9 @@ impl Root {
         }
         let visit_access_may_have_changed = previous_cursor != self.status.cursor
             && matches!(&self.overlay, Overlay::Details(details) if details.visit_payment.is_some());
+        if previous_time_off_scope != self.time_off_scope {
+            self.refresh_block_write_scope(cx);
+        }
         self.refresh_open_annotations(
             previous_time_off_scope != self.time_off_scope || visit_access_may_have_changed,
             cx,
@@ -2857,6 +2860,10 @@ impl Root {
         }
         match &mut self.overlay {
             Overlay::None => return,
+            Overlay::Block(_) => {
+                self.close_block_form(cx);
+                return;
+            }
             Overlay::New(form)
                 if form
                     .intake
@@ -4247,6 +4254,17 @@ impl Root {
                         .flex()
                         .flex_wrap()
                         .gap_2()
+                        .when(c.is_time_off_revision_conflict(), |row| {
+                            let id = mid.clone();
+                            row.child(self.button(
+                                ("review-time-off", i),
+                                self.t(Key::TimeOffReview),
+                                Kind::Primary,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.review_block_conflict(&id, cx)
+                                }),
+                            ))
+                        })
                         .when(
                             c.requires_restored_review()
                                 && self.appointment_note_conflict_access(c),
@@ -4781,7 +4799,7 @@ impl Render for Root {
                         Overlay::Details(d) => {
                             Some(self.render_details(d, content_viewport.height, cx))
                         }
-                        Overlay::Block(f) => Some(self.render_block_form(f, cx)),
+                        Overlay::Block(f) => Some(self.render_block_form(f, content_viewport, cx)),
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
                         Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
@@ -5941,6 +5959,122 @@ mod tests {
             assert_eq!(root.summary.pending, 1);
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_rejected_block_removal_requires_review_of_the_current_block(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let mut saved = TimeOff {
+                    id: "01a1d81e-0000-7000-8000-0000000000ff".into(),
+                    staff_id: root.staff[0].id.clone(),
+                    starts_at: "2026-03-09T18:30:00Z".parse().unwrap(),
+                    ends_at: "2026-03-09T19:00:00Z".parse().unwrap(),
+                    reason: Some("Original block".into()),
+                    updated_at: T0.parse().unwrap(),
+                };
+                let change =
+                    |seq, row: &TimeOff| up(seq, "time_off", &row.id, serde_json::json!(row));
+                let store = &mut root.svc.store;
+                store.apply_page(&[change(11, &saved)], 11).unwrap();
+                ops::delete_time_off(store, &saved).unwrap();
+                let sent = store.outbox(10).unwrap();
+                saved.reason = Some("Changed in Cloud".into());
+                saved.updated_at = "2026-03-09T09:01:00Z".parse().unwrap();
+                store.apply_page(&[change(12, &saved)], 12).unwrap();
+                let mutation_id = sent[0].mutation_id.clone();
+                store
+                    .apply_push_results(
+                        &sent,
+                        &[MutationResult::Rejected {
+                            mutation_id: mutation_id.clone(),
+                            reason: "conflict".into(),
+                            message: "Changed in Cloud".into(),
+                            replayed: false,
+                        }],
+                    )
+                    .unwrap();
+                root.overlay = Overlay::Conflicts {
+                    editing: None,
+                    error: None,
+                };
+                root.review_block_conflict(&mutation_id, cx);
+                assert!(matches!(root.overlay, Overlay::Block(_)));
+                root.remove_block(cx);
+                assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
+                assert!(root.svc.store.conflict(&mutation_id).unwrap().is_some());
+                root.remove_block(cx);
+                let pending = root.svc.store.outbox(10).unwrap();
+                assert_eq!(pending[0].kind, "time_off.delete");
+                assert_eq!(
+                    pending[0].payload["expectedUpdatedAt"],
+                    "2026-03-09T09:01:00.000Z"
+                );
+                assert!(root.svc.store.conflict(&mutation_id).unwrap().is_none());
+                assert!(matches!(root.overlay, Overlay::Conflicts { .. }));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    async fn a_legacy_block_edit_keeps_unselected_cloud_values(cx: &mut TestAppContext) {
+        let (_dir, window) = open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let saved = TimeOff {
+                    id: "01a1d81e-0000-7000-8000-0000000000ff".into(),
+                    staff_id: root.staff[0].id.clone(),
+                    starts_at: "2026-03-09T19:30:00Z".parse().unwrap(),
+                    ends_at: "2026-03-09T20:00:00Z".parse().unwrap(),
+                    reason: Some("Cloud reason".into()),
+                    updated_at: "2026-03-09T09:01:00Z".parse().unwrap(),
+                };
+                let store = &mut root.svc.store;
+                store
+                    .apply_page(&[up(11, "time_off", &saved.id, json!(saved))], 11)
+                    .unwrap();
+                let sent = store
+                    .enqueue(
+                        "time_off.update",
+                        &saved.id,
+                        json!({
+                            "id": saved.id, "staffId": saved.staff_id, "expectedUpdatedAt": T0,
+                            "startsAt": "2026-03-09T18:30:00Z", "endsAt": "2026-03-09T19:00:00Z",
+                            "reason": "Offline reason",
+                        }),
+                    )
+                    .unwrap();
+                let mutation_id = sent.mutation_id.clone();
+                store
+                    .apply_push_results(
+                        &[sent],
+                        &[MutationResult::Rejected {
+                            mutation_id: mutation_id.clone(),
+                            reason: "conflict".into(),
+                            message: String::new(),
+                            replayed: false,
+                        }],
+                    )
+                    .unwrap();
+                root.overlay = Overlay::Conflicts {
+                    editing: None,
+                    error: None,
+                };
+                root.review_block_conflict(&mutation_id, cx);
+                root.save_block(cx);
+                assert!(root.svc.store.conflict(&mutation_id).unwrap().is_some());
+                assert_eq!(root.svc.store.outbox_len().unwrap(), 0);
+                root.use_block_proposal_field(blocks::BlockField::Reason, cx);
+                root.save_block(cx);
+                let pending = root.svc.store.outbox(10).unwrap().remove(0);
+                assert_eq!(pending.payload["reason"], "Offline reason");
+                assert!(pending.payload.get("startsAt").is_none());
+                assert!(pending.payload.get("endsAt").is_none());
+            })
+            .unwrap();
     }
 
     #[gpui::test]

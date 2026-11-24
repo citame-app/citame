@@ -709,6 +709,134 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
     assert_eq!(store.outbox_len().unwrap(), 1);
 }
 
+#[test]
+fn a_rejected_block_edit_keeps_cloud_times_and_retries_only_reviewed_fields() {
+    let mut store = seeded();
+    store.set_meta("time_off_scope", ANA).unwrap();
+    let mut block = TimeOff {
+        id: "01a1d81e-0000-7000-8000-0000000000d0".into(),
+        staff_id: ANA.into(),
+        starts_at: at("2026-03-09T18:30:00Z"),
+        ends_at: at("2026-03-09T19:00:00Z"),
+        reason: Some("Original".into()),
+        updated_at: at(T0),
+    };
+    store
+        .apply_page(&[up(8, "time_off", &block.id, json!(block))], 8)
+        .unwrap();
+    update_time_off(
+        &mut store,
+        &block,
+        block.starts_at,
+        block.ends_at,
+        "Offline reason",
+    )
+    .unwrap();
+    let sent = store.outbox(10).unwrap();
+    assert!(sent[0].payload.get("startsAt").is_none());
+    assert_eq!(sent[0].payload["reason"], "Offline reason");
+    assert_eq!(
+        effective_time_off(&store, block.starts_at, block.ends_at).unwrap()[0]
+            .time_off
+            .reason
+            .as_deref(),
+        Some("Offline reason")
+    );
+
+    block.starts_at = at("2026-03-09T20:00:00Z");
+    block.ends_at = at("2026-03-09T20:30:00Z");
+    block.updated_at = at("2026-03-09T12:30:00Z");
+    store
+        .apply_page(&[up(9, "time_off", &block.id, json!(block))], 9)
+        .unwrap();
+    let current = effective_time_off(&store, block.starts_at, block.ends_at).unwrap();
+    assert!(!current[0].pending);
+    assert_eq!(current[0].time_off, block);
+
+    update_time_off(
+        &mut store,
+        &block,
+        block.starts_at,
+        block.ends_at,
+        "Fresh offline edit",
+    )
+    .unwrap();
+    let current = effective_time_off(&store, block.starts_at, block.ends_at).unwrap();
+    assert!(current[0].pending);
+    assert_eq!(
+        current[0].time_off.reason.as_deref(),
+        Some("Fresh offline edit")
+    );
+    let fresh = store.outbox(10).unwrap().remove(1);
+    store
+        .apply_push_results(
+            std::slice::from_ref(&fresh),
+            &[MutationResult::Applied {
+                mutation_id: fresh.mutation_id.clone(),
+                applied_seq: None,
+                replayed: false,
+            }],
+        )
+        .unwrap();
+
+    let mutation_id = &sent[0].mutation_id;
+    store
+        .apply_push_results_in(
+            &sent,
+            &[MutationResult::Rejected {
+                mutation_id: mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "The block was moved in Cloud".into(),
+                replayed: false,
+            }],
+            None,
+            Some(10),
+        )
+        .unwrap();
+    assert!(review_time_off_conflict(&store, mutation_id).is_err());
+    store.apply_page(&[], 10).unwrap();
+    let review = review_time_off_conflict(&store, mutation_id).unwrap();
+    assert_eq!(review.saved, block);
+    assert!(!review.requires_field_selection);
+    let proposed = review.proposal.unwrap();
+    assert_eq!(proposed.starts_at, block.starts_at);
+    assert_eq!(proposed.reason.as_deref(), Some("Offline reason"));
+
+    block.ends_at = at("2026-03-09T20:45:00Z");
+    block.updated_at = at("2026-03-09T12:31:00Z");
+    store
+        .apply_page(&[up(11, "time_off", &block.id, json!(block))], 11)
+        .unwrap();
+    assert!(
+        retry_reviewed_time_off(
+            &mut store,
+            mutation_id,
+            &review.saved,
+            Some((proposed.starts_at, proposed.ends_at, "Offline reason")),
+        )
+        .is_err()
+    );
+    assert!(store.conflict(mutation_id).unwrap().is_some());
+    assert!(store.outbox(10).unwrap().is_empty());
+    let reviewed = review_time_off_conflict(&store, mutation_id).unwrap();
+    let proposed = reviewed.proposal.unwrap();
+    retry_reviewed_time_off(
+        &mut store,
+        mutation_id,
+        &reviewed.saved,
+        Some((proposed.starts_at, proposed.ends_at, "Offline reason")),
+    )
+    .unwrap();
+    let pending = store.outbox(10).unwrap().remove(0);
+    assert_eq!(
+        pending.payload["expectedUpdatedAt"],
+        "2026-03-09T12:31:00.000Z"
+    );
+    assert_eq!(pending.payload["reason"], "Offline reason");
+    assert!(pending.payload.get("endsAt").is_none());
+    assert!(store.conflict(mutation_id).unwrap().is_none());
+}
+
 fn seed(s: &mut Store) {
     let changes = vec![
         up(
