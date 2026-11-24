@@ -38,12 +38,13 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     });
   }
   const form = page.getByRole("form", { name: "Public business profile" });
-  const description = form.getByLabel("Short description");
+  const description = form.getByRole("textbox", { name: "Description", exact: true });
   const publish = form.getByRole("checkbox", {
     name: "Publish on the booking site",
   });
   const save = form.getByRole("button", { name: "Save settings" });
   const label = `Studio overview ${crypto.randomUUID()}`;
+  const longDescription = `${label}\n\n${"Opening and treatment details. ".repeat(42).trim()}`;
   const publicPage = () => visitor.goto(fixture.baseURL);
   async function saveAndWait() {
     const saved = page.waitForResponse(
@@ -55,7 +56,16 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await expect(page.getByText("Settings saved", { exact: true }).first()).toBeVisible();
   }
   try {
-    await description.fill(label);
+    await description.fill("Paragraph\n".repeat(64) + "Last line");
+    await save.click();
+    await expect(description).toHaveAttribute("aria-invalid", "true");
+    await expect(description).toBeFocused();
+    const overlong = "x".repeat(2_001);
+    await description.fill(overlong);
+    await save.click();
+    await expect(description).toHaveAttribute("aria-invalid", "true");
+    await expect(description).toHaveValue(overlong);
+    await description.fill(longDescription);
     await form.getByLabel("Public address").fill("9 Synthetic Street");
     await form.getByLabel("Website (HTTPS)").fill("https://example.test/studio");
     await form.getByRole("checkbox", { name: "Wi-Fi", exact: true }).check();
@@ -109,7 +119,10 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await saveAndWait();
     await publicPage();
     const profile = visitor.getByRole("region", { name: "About the centre" });
-    await expect(profile.getByText(label)).toBeVisible();
+    const publishedDescription = profile.getByText(label);
+    await expect(publishedDescription).toBeVisible();
+    await expect(publishedDescription).toHaveJSProperty("textContent", longDescription);
+    await expect(publishedDescription).toHaveCSS("white-space", "pre-wrap");
     await expect(profile.getByText("9 Synthetic Street")).toBeVisible();
     await expect(
       profile.getByText("9:00 AM–12:00 PM, 2:00 PM–6:00 PM", { exact: true }).first(),

@@ -12,6 +12,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
 
+- Business profiles retain multiline descriptions up to 2,000 characters in Web and Desktop.
+
 - Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
 
 - Web and Desktop can issue gift cards for selected treatments and show the terms on vouchers and when checking balances. Checkout verifies the eligible amount even for mixed payments.
@@ -100,6 +102,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - This expansion remains in development. [The delivery checklist](docs/FEATURE-EXPANSION.md) tracks unfinished marketing, mobile and additional single-business features. Vendor credentials, a production domain and verified salon content remain external activation steps; no deployment or bank activation is implied.
 
 ### Fixed
+
+- Reconciliation recognizes audited package content restored from the original inventory archive in a prepared local copy.
 
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
