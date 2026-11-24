@@ -1,5 +1,6 @@
 import { createHash, generateKeyPairSync, randomBytes, sign } from "node:crypto";
 import {
+  type CalendarAppointment,
   type CalendarResponse,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
@@ -68,6 +69,21 @@ export async function hydrateRehearsalDesktop(
   generation: string,
   calendar: CalendarResponse,
 ) {
+  const resources = (value: Pick<CalendarAppointment, "resources">) =>
+    (value.resources ?? []).toSorted((left, right) =>
+      (left.resourceId ?? left.name).localeCompare(right.resourceId ?? right.name),
+    );
+  const visibleBadges = (value: Pick<CalendarAppointment, "serviceBadges">) =>
+    (value.serviceBadges ?? [])
+      .filter(
+        (badge) =>
+          badge.requested ||
+          badge.invoiced ||
+          badge.paid ||
+          badge.internalNote ||
+          badge.customerComment,
+      )
+      .sort((left, right) => left.servicePosition - right.servicePosition);
   const { appointments, cursor } = await collectDesktopAppointments(get, generation, 0);
   const staff = new Set(calendar.staff.map((column) => column.id));
   const from = Date.parse(calendar.from);
@@ -90,17 +106,9 @@ export async function hydrateRehearsalDesktop(
         data.startsAt !== visit.startsAt ||
         data.endsAt !== visit.endsAt ||
         data.importedFromBooksy !== visit.importedFromBooksy ||
-        data.services.length !== visit.services.length ||
-        data.services.some((service, position) => {
-          const expected = visit.services[position];
-          return (
-            !expected ||
-            expected.serviceId !== service.serviceId ||
-            expected.name !== service.name ||
-            expected.durationMinutes !== service.durationMinutes ||
-            expected.bufferMinutes !== service.bufferMinutes
-          );
-        })
+        !Bun.deepEquals(data.services, visit.services) ||
+        !Bun.deepEquals(resources(data), resources(visit)) ||
+        !Bun.deepEquals(visibleBadges(data), visibleBadges(visit))
       );
     })
   )
@@ -188,6 +196,7 @@ export async function linkOperationalRehearsalDevice(
     resource,
     scope: DESKTOP_SIGN_IN_SCOPE,
     state,
+    prompt: "consent",
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
   });
