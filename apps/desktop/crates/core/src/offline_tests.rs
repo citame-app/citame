@@ -623,6 +623,7 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
         None,
     )
     .unwrap();
+    cancel_appointment(&mut store, EXISTING).unwrap();
     let mut cloud = before;
     cloud.version += 1;
     cloud.notes = Some("Cloud note".into());
@@ -636,10 +637,17 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
             .notes,
         cloud.notes
     );
+    assert_eq!(
+        effective_appointment(&store, EXISTING)
+            .unwrap()
+            .unwrap()
+            .status,
+        AppointmentStatus::Booked
+    );
     let sent = store.outbox(10).unwrap();
     let id = &sent[0].mutation_id;
     store
-        .apply_push_results(
+        .apply_push_results_in(
             &sent[..1],
             &[MutationResult::Rejected {
                 mutation_id: id.clone(),
@@ -647,6 +655,8 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
                 message: "Version changed".into(),
                 replayed: false,
             }],
+            None,
+            Some(10),
         )
         .unwrap();
     assert!(matches!(
@@ -665,6 +675,17 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
             .payload["notes"],
         "Continued offline draft"
     );
+    assert!(matches!(
+        queue_appointment_notes(
+            &mut store,
+            EXISTING,
+            "Cloud note",
+            "Offline draft",
+            Some(id)
+        ),
+        Err(crate::error::CoreError::AppointmentNoteRefreshRequired)
+    ));
+    store.apply_page(&[], 10).unwrap();
     queue_appointment_notes(
         &mut store,
         EXISTING,

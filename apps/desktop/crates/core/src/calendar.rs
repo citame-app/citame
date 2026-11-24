@@ -208,6 +208,9 @@ fn overlay_calendar_outbox(
     }
     let mut stale_note_chains = HashSet::new();
     for e in &outbox {
+        if e.kind.starts_with("appointment.") && stale_note_chains.contains(&e.entity_id) {
+            continue;
+        }
         let p = &e.payload;
         let stamp = DateTime::parse_from_rfc3339(&e.created_at)
             .map(|d| d.with_timezone(&Utc))
@@ -285,9 +288,7 @@ fn overlay_calendar_outbox(
                 pending.insert(e.entity_id.clone());
             }
             crate::ops::APPOINTMENT_NOTES_KIND => {
-                if let Some(a) = map.get_mut(&e.entity_id)
-                    && !stale_note_chains.contains(&e.entity_id)
-                {
+                if let Some(a) = map.get_mut(&e.entity_id) {
                     if p["version"].as_i64() == Some(a.version)
                         && let Some(notes) = str_of(p, "notes")
                     {

@@ -92,9 +92,14 @@ fn can_edit_service_annotations(notes: &AppointmentAnnotations, time_off_scope: 
     notes.appointment_version.is_some() && time_off_scope != "none" && notes.can_edit != Some(false)
 }
 
-pub(super) fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+pub(super) fn note_field(text: &str, multiline: bool, cx: &mut Context<Root>) -> Entity<TextField> {
     let field = cx.new(|cx| {
-        let mut field = TextField::new("", false, cx);
+        let field = TextField::new("", false, cx);
+        let mut field = if multiline {
+            field.with_line_paste(ops::APPOINTMENT_NOTES_LIMIT)
+        } else {
+            field
+        };
         field.set_text(text, cx);
         field
     });
@@ -207,7 +212,10 @@ impl Root {
         let text = row
             .and_then(|row| row.internal_note.as_deref())
             .unwrap_or_default();
-        let lines = text.split('\n').map(|line| note_field(line, cx)).collect();
+        let lines = text
+            .split('\n')
+            .map(|line| note_field(line, false, cx))
+            .collect();
         if let Some(Annotations::Ready(notes)) = details.annotations.take() {
             details.annotations = Some(Annotations::Editing(Box::new(NoteDraft {
                 notes,
@@ -654,7 +662,7 @@ impl Root {
                         if let Some(draft) = this.draft()
                             && draft.lines.len() <= 2000
                         {
-                            let line = note_field("", cx);
+                            let line = note_field("", false, cx);
                             line.read(cx).focus(window);
                             draft.lines.push(line);
                             cx.notify();
@@ -675,7 +683,7 @@ impl Root {
                                     .replace("\r\n", "\n")
                                     .replace('\r', "\n")
                                     .split('\n')
-                                    .map(|line| note_field(line, cx))
+                                    .map(|line| note_field(line, false, cx))
                                     .collect();
                                 if !draft.conflicted {
                                     draft.error = None;

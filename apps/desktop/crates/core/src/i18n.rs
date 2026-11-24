@@ -1382,6 +1382,7 @@ keys! {
     AppointmentNoteKeepDraft => ("Keep my draft", "Conservar mi borrador"),
     AppointmentNoteNoText => ("The saved note is empty.", "La nota guardada está vacía."),
     AppointmentNoteDiscardPrompt => ("Discard the changes to this note?", "¿Descartar los cambios de esta nota?"),
+    AppointmentNoteRefreshRequired => ("Sync the latest saved note before reviewing this conflict.", "Sincroniza la última nota guardada antes de revisar este conflicto."),
     AppointmentNoteLocalSaveFailed => ("Could not save the note locally. Your draft is still open.", "No se pudo guardar la nota en este equipo. El borrador sigue abierto."),
     AppointmentBusinessMessage => ("Message from the centre", "Mensaje del centro"),
     AppointmentAnnotationsLoading => ("Loading notes…", "Cargando notas…"),

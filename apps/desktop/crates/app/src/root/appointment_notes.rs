@@ -19,7 +19,10 @@ impl Draft {
     ) -> Self {
         Self {
             reviewed: reviewed.to_owned(),
-            lines: text.split('\n').map(|line| note_field(line, cx)).collect(),
+            lines: text
+                .split('\n')
+                .map(|line| appointment_note_field(line, cx))
+                .collect(),
             review_required: conflict_id.is_some(),
             discard_requested: false,
             conflict_id,
@@ -38,6 +41,35 @@ impl Draft {
     fn needs_review(&self, latest: &str) -> bool {
         self.review_required || self.reviewed != latest
     }
+}
+
+fn appointment_note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+    let field = note_field(text, true, cx);
+    cx.subscribe(&field, |root, sender, event, cx| {
+        let Some(draft) = root.appointment_note_draft() else {
+            return;
+        };
+        let Some(index) = draft.lines.iter().position(|field| *field == sender) else {
+            return;
+        };
+        match event {
+            FieldEvent::PasteLines(tail) => {
+                draft.lines.splice(
+                    index + 1..index + 1,
+                    tail.iter().map(|line| appointment_note_field(line, cx)),
+                );
+                draft.error = None;
+            }
+            FieldEvent::PasteTooLong => draft.error = Some(Key::InternalNoteTooLong),
+            FieldEvent::Changed if draft.error == Some(Key::InternalNoteTooLong) => {
+                draft.error = None
+            }
+            _ => return,
+        }
+        cx.notify();
+    })
+    .detach();
+    field
 }
 
 impl Root {
@@ -81,11 +113,49 @@ impl Root {
         cx.notify();
     }
 
+    pub(super) fn appointment_note_conflict_access(&self, conflict: &Conflict) -> bool {
+        conflict.kind == ops::APPOINTMENT_NOTES_KIND
+            && self
+                .svc
+                .store
+                .appointment(&conflict.entity_id)
+                .ok()
+                .flatten()
+                .is_some_and(|appointment| self.can_edit_staff_calendar(&appointment.staff_id))
+    }
+
+    pub(super) fn copy_appointment_note_conflict(&self, id: &str, cx: &App) {
+        if let Ok(Some(conflict)) = self.svc.store.conflict(id)
+            && self.appointment_note_conflict_access(&conflict)
+            && let Some(note) = conflict.payload["notes"].as_str()
+        {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(note.to_owned()));
+        }
+    }
+
+    fn explain_note_review_wait(&mut self, cx: &mut Context<Self>) {
+        let message = self.t(Key::AppointmentNoteRefreshRequired).to_owned();
+        if let Overlay::Conflicts { error, .. } = &mut self.overlay {
+            *error = Some(message);
+        }
+        self.svc.wake(Wake::Manual);
+        cx.notify();
+    }
+
     pub(super) fn open_appointment_note_conflict(
         &mut self,
         conflict: &Conflict,
         cx: &mut Context<Self>,
     ) {
+        if !self
+            .svc
+            .store
+            .appointment_note_review_ready(&conflict.mutation_id)
+            .unwrap_or(false)
+        {
+            self.explain_note_review_wait(cx);
+            return;
+        }
         let current = calendar::effective_appointment(&self.svc.store, &conflict.entity_id)
             .ok()
             .flatten()
@@ -170,6 +240,9 @@ impl Root {
                             Key::AppointmentNoteReview
                         }
                         CoreError::AppointmentScopeDenied => Key::ConflictForbidden,
+                        CoreError::AppointmentNoteRefreshRequired => {
+                            Key::AppointmentNoteRefreshRequired
+                        }
                         _ if text.encode_utf16().count() > ops::APPOINTMENT_NOTES_LIMIT => {
                             Key::InternalNoteTooLong
                         }
@@ -339,51 +412,21 @@ impl Root {
                     )
                 },
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .child(self.button(
-                        "add-appointment-note-line",
-                        self.t(Key::AddNoteLine),
-                        Kind::Ghost,
-                        cx.listener(|root, _, window, cx| {
-                            if let Some(draft) = root.appointment_note_draft()
-                                && draft.lines.len() <= ops::APPOINTMENT_NOTES_LIMIT
-                            {
-                                let line = note_field("", cx);
-                                line.read(cx).focus(window);
-                                draft.lines.push(line);
-                                cx.notify();
-                            }
-                        }),
-                    ))
-                    .child(self.button(
-                        "paste-appointment-note",
-                        self.t(Key::PasteWholeNote),
-                        Kind::Ghost,
-                        cx.listener(|root, _, _, cx| {
-                            if let Some(draft) = root.appointment_note_draft()
-                                && let Some(text) =
-                                    cx.read_from_clipboard().and_then(|item| item.text())
-                            {
-                                if text.encode_utf16().count() > ops::APPOINTMENT_NOTES_LIMIT {
-                                    draft.error = Some(Key::InternalNoteTooLong);
-                                } else {
-                                    draft.lines = text
-                                        .replace("\r\n", "\n")
-                                        .replace('\r', "\n")
-                                        .split('\n')
-                                        .map(|line| note_field(line, cx))
-                                        .collect();
-                                    draft.error = None;
-                                }
-                                cx.notify();
-                            }
-                        }),
-                    )),
-            )
+            .child(div().flex().flex_wrap().gap_2().child(self.button(
+                "add-appointment-note-line",
+                self.t(Key::AddNoteLine),
+                Kind::Ghost,
+                cx.listener(|root, _, window, cx| {
+                    if let Some(draft) = root.appointment_note_draft()
+                        && draft.lines.len() <= ops::APPOINTMENT_NOTES_LIMIT
+                    {
+                        let line = appointment_note_field("", cx);
+                        line.read(cx).focus(window);
+                        draft.lines.push(line);
+                        cx.notify();
+                    }
+                }),
+            )))
             .child(
                 div()
                     .flex()
@@ -439,9 +482,14 @@ mod tests {
         let edit = cx.debug_bounds("edit-appointment-note").unwrap();
         cx.simulate_click(edit.center(), Default::default());
         cx.run_until_parked();
+        root.update(cx, |_, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                "Desktop draft\nSecond line".into(),
+            ));
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        cx.run_until_parked();
         root.update(cx, |root, cx| {
-            root.appointment_note_draft().unwrap().lines[0]
-                .update(cx, |field, cx| field.set_text("Desktop draft", cx));
             let mut cloud = root.svc.store.appointment(&id).unwrap().unwrap();
             cloud.version += 1;
             cloud.notes = Some("Cloud note".into());
@@ -461,7 +509,7 @@ mod tests {
             root.reload(cx);
             assert_eq!(
                 root.appointment_note_draft().unwrap().text(cx),
-                "Desktop draft"
+                "Desktop draft\nSecond line"
             );
         });
         cx.run_until_parked();
@@ -480,7 +528,7 @@ mod tests {
             assert_eq!(jobs.len(), 1);
             assert_eq!(jobs[0].kind, ops::APPOINTMENT_NOTES_KIND);
             assert_eq!(jobs[0].payload["version"], 4);
-            assert_eq!(jobs[0].payload["notes"], "Desktop draft");
+            assert_eq!(jobs[0].payload["notes"], "Desktop draft\nSecond line");
             assert!(root.appointment_note_draft().is_none());
         });
     }

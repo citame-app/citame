@@ -4238,6 +4238,21 @@ impl Root {
                         .flex_wrap()
                         .gap_2()
                         .when(
+                            c.requires_restored_review()
+                                && self.appointment_note_conflict_access(c),
+                            |row| {
+                                let id = mid.clone();
+                                row.child(self.button(
+                                    ("copy-restored-appointment-note", i),
+                                    self.t(Key::CopyNoteDraft),
+                                    Kind::Ghost,
+                                    cx.listener(move |root, _, _, cx| {
+                                        root.copy_appointment_note_conflict(&id, cx)
+                                    }),
+                                ))
+                            },
+                        )
+                        .when(
                             c.kind == "settings.update"
                                 && c.payload.get("expectedRevision").is_some()
                                 && self.can_configure_salon(),

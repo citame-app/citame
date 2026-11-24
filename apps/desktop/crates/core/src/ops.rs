@@ -785,6 +785,11 @@ pub fn queue_appointment_notes(
                 "open appointment note conflict {mutation_id}"
             )));
         }
+        if let Some(mutation_id) = conflict_to_resolve
+            && !store.appointment_note_review_ready(mutation_id)?
+        {
+            return Err(CoreError::AppointmentNoteRefreshRequired);
+        }
         if notes != reviewed_notes {
             store.enqueue(
                 APPOINTMENT_NOTES_KIND,
