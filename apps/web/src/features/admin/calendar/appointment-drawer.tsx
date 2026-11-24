@@ -28,6 +28,12 @@ import { AppointmentActions } from "./appointment-actions";
 import { AppointmentContext } from "./appointment-context";
 import { invalidateCalendarData, mergeAppointment } from "./cache";
 import { availableActions } from "./logic";
+import {
+  calendarMoveKey,
+  persistCalendarMove,
+  startCalendarMove,
+  usePendingCalendarMoves,
+} from "./move-requests";
 import { StatusBadge } from "./status-badge";
 
 const PAGE = 10;
@@ -155,16 +161,12 @@ function DrawerBody({
   });
   const notesConflict = saveNotes.isError && describeProblem(saveNotes.error).recovery === "reload";
 
+  const movePending = usePendingCalendarMoves().some(
+    (request) => request.appointment.id === appointment.id,
+  );
   const move = useMutation({
-    mutationFn: () => {
-      if (!slot) throw new Error("no slot");
-      return api().appointments.update(appointment.id, {
-        version: appointment.version,
-        startsAt: slot.startsAt,
-        staffId: slot.staffId,
-        ...(override ? { override: true } : {}),
-      });
-    },
+    mutationKey: calendarMoveKey,
+    mutationFn: persistCalendarMove,
     onSuccess: (saved) => {
       setProblem(null);
       toast.success(t("calendar.toast.rescheduled"));
@@ -492,7 +494,7 @@ function DrawerBody({
           className="border-t border-line pt-5"
         >
           {!moving ? (
-            <Button variant="secondary" onClick={() => setMoving(true)}>
+            <Button variant="secondary" disabled={movePending} onClick={() => setMoving(true)}>
               {t("drawer.reschedule.open")}
             </Button>
           ) : !reschedulable ? (
@@ -533,7 +535,18 @@ function DrawerBody({
                 />
                 <span className="font-medium">{t("drawer.reschedule.override")}</span>
               </label>
-              <Button disabled={!slot} loading={move.isPending} onClick={() => move.mutate()}>
+              <Button
+                disabled={!slot || movePending}
+                loading={move.isPending}
+                onClick={() =>
+                  slot &&
+                  startCalendarMove(
+                    queryClient,
+                    { appointment, to: slot, override, includeStaff: true },
+                    move.mutate,
+                  )
+                }
+              >
                 {slot
                   ? t("drawer.reschedule.confirm", {
                       when: `${formatDateLong(localDateOf(slot.startsAt, tz), locale)}, ${formatTime(slot.startsAt, tz, locale)}`,

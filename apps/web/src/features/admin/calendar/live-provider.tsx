@@ -8,6 +8,7 @@ import { api } from "~/lib/api/instance";
 import { formatTime, localDateOf } from "~/lib/format";
 import { connectCalendarLive } from "./live-connection";
 import { liveQueryKeys } from "./live-queries";
+import { isLocalCalendarMove } from "./move-requests";
 
 const LiveContext = createContext<boolean | undefined>(undefined);
 const InventoryRevisionContext = createContext(0);
@@ -131,7 +132,7 @@ export function CalendarLiveProvider({
         )
           refreshSession();
         if (!changes.some(({ entity }) => entity === "appointment")) return;
-        // Current caches provide the previous state, including optimistic local changes.
+        // The query cache holds confirmed state. Local move acknowledgements are matched separately.
         for (const [, calendar] of queryClient.getQueriesData<CalendarResponse>({
           queryKey: ["admin", "calendar"],
         }))
@@ -158,7 +159,7 @@ export function CalendarLiveProvider({
                   : null;
           versions.set(appointment.id, appointment.version);
           known.set(appointment.id, appointment);
-          if (kind)
+          if (kind && !(kind === "rescheduled" && isLocalCalendarMove(queryClient, appointment)))
             setNotices((current) =>
               [
                 { key: `${appointment.id}:${appointment.version}`, kind, appointment },

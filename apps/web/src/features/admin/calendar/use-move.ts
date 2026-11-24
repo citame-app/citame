@@ -1,63 +1,39 @@
-import type { CalendarAppointment, CalendarResponse } from "@sob/contracts";
+import type { CalendarResponse } from "@sob/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
-import { api } from "~/lib/api/instance";
 import { describeProblem, type Problem } from "../problems";
-import { invalidateCalendarData, mergeAppointment, patchAppointment } from "./cache";
+import { invalidateCalendarData, mergeAppointment } from "./cache";
+import {
+  type CalendarMove,
+  calendarMoveKey,
+  persistCalendarMove,
+  startCalendarMove,
+  usePendingCalendarMoves,
+} from "./move-requests";
 
 export interface Conflict {
   appointmentId: string;
   problem: Problem;
 }
 
-/**
- * Moves an appointment (drag, keyboard or drawer). The block moves at once, and a failure puts
- * it back and records a conflict so the page can say what happened and how to recover.
- * Staff and owners move with `override` so a walk-in can be shifted close to now; hours, time off
- * and the horizon are still enforced by the API.
- */
+/** Projects reviewed moves over the latest calendar without rewriting the server cache. */
 export function useMoveAppointment() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const { t } = useI18n();
   const [conflict, setConflict] = useState<Conflict | null>(null);
+  const pendingMoves = usePendingCalendarMoves();
+  const pendingById = useMemo(
+    () => new Map(pendingMoves.map((move) => [move.appointment.id, move])),
+    [pendingMoves],
+  );
 
-  const mutation = useMutation({
-    mutationFn: ({
-      appointment,
-      to,
-    }: {
-      appointment: CalendarAppointment;
-      to: { staffId: string; startsAt: string };
-    }) =>
-      api().appointments.update(appointment.id, {
-        version: appointment.version,
-        startsAt: to.startsAt,
-        ...(to.staffId !== appointment.staffId ? { staffId: to.staffId } : {}),
-        override: true,
-      }),
-    onMutate: async ({ appointment, to }) => {
-      setConflict(null);
-      await queryClient.cancelQueries({ queryKey: ["admin", "calendar"] });
-      const previous = queryClient.getQueriesData<CalendarResponse>({
-        queryKey: ["admin", "calendar"],
-      });
-      const length = Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt);
-      queryClient.setQueriesData<CalendarResponse>({ queryKey: ["admin", "calendar"] }, (data) =>
-        data
-          ? patchAppointment(data, appointment.id, {
-              staffId: to.staffId,
-              startsAt: to.startsAt,
-              endsAt: new Date(Date.parse(to.startsAt) + length).toISOString(),
-            })
-          : data,
-      );
-      return { previous };
-    },
-    onError: (error, { appointment }, context) => {
-      for (const [key, data] of context?.previous ?? []) queryClient.setQueryData(key, data);
+  const { mutate } = useMutation({
+    mutationKey: calendarMoveKey,
+    mutationFn: persistCalendarMove,
+    onError: (error, { appointment }) => {
       setConflict({ appointmentId: appointment.id, problem: describeProblem(error) });
     },
     onSuccess: (saved) => {
@@ -66,13 +42,45 @@ export function useMoveAppointment() {
       );
       toast.success(t("calendar.toast.rescheduled"));
     },
-    onSettled: () => invalidateCalendarData(queryClient),
+    onSettled: () => {
+      void invalidateCalendarData(queryClient);
+    },
   });
 
+  const move = useCallback(
+    (proposal: Omit<CalendarMove, "override">) =>
+      startCalendarMove(queryClient, { ...proposal, override: true }, (command) => {
+        setConflict(null);
+        mutate(command);
+      }),
+    [mutate, queryClient],
+  );
+  const projectPendingMoves = useCallback(
+    (data: CalendarResponse | undefined) => {
+      if (!data || data.importSnapshot || pendingById.size === 0) return data;
+      return {
+        ...data,
+        appointments: data.appointments.map((appointment) => {
+          const pending = pendingById.get(appointment.id);
+          if (pending?.appointment.version !== appointment.version) return appointment;
+          const duration = Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt);
+          return {
+            ...appointment,
+            ...pending.to,
+            endsAt: new Date(Date.parse(pending.to.startsAt) + duration).toISOString(),
+          };
+        }),
+      };
+    },
+    [pendingById],
+  );
+
+  const isMovePending = useCallback((id: string) => pendingById.has(id), [pendingById]);
   return {
-    move: mutation.mutate,
+    move,
+    projectPendingMoves,
+    isMovePending,
     conflict,
     clearConflict: () => setConflict(null),
-    pending: mutation.isPending,
   };
 }
