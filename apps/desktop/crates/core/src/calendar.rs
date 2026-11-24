@@ -661,7 +661,6 @@ pub fn effective_time_off(
                 };
                 let expected = p.get("expectedUpdatedAt").and_then(parse_instant);
                 if expected.is_some_and(|version| version != row.updated_at) {
-                    unavailable.insert(entry.entity_id);
                     continue;
                 }
                 if entry.kind == "time_off.delete" {

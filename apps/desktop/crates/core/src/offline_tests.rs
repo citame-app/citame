@@ -643,6 +643,32 @@ fn a_rejected_block_edit_keeps_cloud_times_and_retries_only_reviewed_fields() {
     assert!(!current[0].pending);
     assert_eq!(current[0].time_off, block);
 
+    update_time_off(
+        &mut store,
+        &block,
+        block.starts_at,
+        block.ends_at,
+        "Fresh offline edit",
+    )
+    .unwrap();
+    let current = effective_time_off(&store, block.starts_at, block.ends_at).unwrap();
+    assert!(current[0].pending);
+    assert_eq!(
+        current[0].time_off.reason.as_deref(),
+        Some("Fresh offline edit")
+    );
+    let fresh = store.outbox(10).unwrap().remove(1);
+    store
+        .apply_push_results(
+            std::slice::from_ref(&fresh),
+            &[MutationResult::Applied {
+                mutation_id: fresh.mutation_id.clone(),
+                applied_seq: None,
+                replayed: false,
+            }],
+        )
+        .unwrap();
+
     let mutation_id = &sent[0].mutation_id;
     store
         .apply_push_results_in(
@@ -661,6 +687,7 @@ fn a_rejected_block_edit_keeps_cloud_times_and_retries_only_reviewed_fields() {
     store.apply_page(&[], 10).unwrap();
     let review = review_time_off_conflict(&store, mutation_id).unwrap();
     assert_eq!(review.saved, block);
+    assert!(!review.requires_field_selection);
     let proposed = review.proposal.unwrap();
     assert_eq!(proposed.starts_at, block.starts_at);
     assert_eq!(proposed.reason.as_deref(), Some("Offline reason"));

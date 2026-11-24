@@ -210,6 +210,7 @@ struct PullMetadata<'a> {
     generation: Option<&'a str>,
     catalogue_access: Option<bool>,
     calendar_edit_access: Option<bool>,
+    time_off_scope: Option<&'a str>,
     resource_pools: Option<&'a [crate::resource_pools::ManagedPool]>,
     combinations: Option<&'a [crate::combinations::ManagedCombination]>,
     booking_combinations: Option<&'a [crate::combinations::ManagedCombination]>,
@@ -1238,6 +1239,7 @@ impl Store {
                 generation: Some(generation),
                 catalogue_access: page.viewer_edit_catalogue,
                 calendar_edit_access: page.viewer_edit_calendar,
+                time_off_scope: page.time_off_scope.as_deref(),
                 resource_pools: page.resource_pools.as_deref(),
                 combinations: page.combinations.as_deref(),
                 booking_combinations: page.booking_combinations.as_deref(),
@@ -1288,6 +1290,11 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, metadata.generation)?;
+        if let Some(scope) = metadata.time_off_scope
+            && Self::meta_at(&tx, "time_off_scope")?.as_deref() != Some(scope)
+        {
+            Self::set_meta_at(&tx, "time_off_scope", scope)?;
+        }
         if let Some(allowed) = metadata.calendar_edit_access {
             let value = if allowed { "1" } else { "0" };
             if Self::meta_at(&tx, "viewer_edit_calendar")?.as_deref() != Some(value) {

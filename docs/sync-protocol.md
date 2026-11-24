@@ -20,7 +20,7 @@ Guarantee: if you have seen `seq = n`, you have seen every change that will ever
 1. **Write locally first.** Apply the user's action to local SQLite, append a mutation to the outbox, show the row as "pending sync".
 2. **Push** the outbox head (up to 100 mutations, in creation order) with `POST /sync/push`. Keep one request in flight. Wait for an applied receipt before sending another edit that depends on it for the same appointment.
 3. On `applied`, remove the mutation from the send queue. Desktop persists the receipt cursor and keeps the calendar projection for an accepted appointment, its new client or a time block until the ordered pull reaches that cursor. On `rejected`, move the mutation and any dependent appointment edits to the conflict inbox for review. On `retry`, keep the mutation and its dependents in the send queue for backoff.
-4. **Pull** with `GET /sync/pull?since=<cursor>`; apply the changes and store `nextCursor` in the same local transaction; repeat immediately while `hasMore` is true.
+4. **Pull** with `GET /sync/pull?since=<cursor>`; apply the changes and store `nextCursor` in the same local transaction; repeat immediately while `hasMore` is true. If the pulled revision already differs from a pending block update or removal, Desktop shows the saved block while the outbox retains the edit for reconciliation.
 5. Keep `GET /sync/stream` open; on every `change` event, pull. Also pull on startup, on reconnect, and every 60 s as a safety net.
 
 Order of work when coming online: push first, then pull (pull then shows the effect of your own mutations and of everyone else's).
@@ -92,7 +92,7 @@ Request:
 - `mutationId`: UUIDv7, generated once per mutation and reused on every resend.
 - `createdAt`: when the user made the edit (device clock). Used by last-writer-wins kinds; ignored by appointment kinds.
 - `client.update` can carry `payload.expectedUpdatedAt`, the revision the operator reviewed. The API compares it under the contact row lock. A stale edit becomes a sync conflict even if it was submitted with a later device clock.
-- `time_off.update` and `time_off.delete` can carry `payload.expectedUpdatedAt`, the block revision the device displayed. The API checks it under the same calendar lock as web schedule edits and returns `version_conflict` for a stale revision. The field is optional for existing API clients.
+- `time_off.update` and `time_off.delete` can carry `payload.expectedUpdatedAt`, the block revision the device displayed. The API checks it under the same calendar lock as web schedule edits and returns `version_conflict` for a stale revision. The field is optional for existing API clients. Desktop sends the fields edited by the operator and waits to pull through the rejection's sync head before offering review against the saved block. A retry uses the revision displayed during that review.
 
 Response `200`:
 
@@ -141,8 +141,8 @@ A malformed envelope (no `deviceId`, empty or more than 100 mutations, an elemen
 | `client.create`          | `id`, `name`, `phone?`, `email?`, `notes?`                                                                                                                  | owner, staff                 | LWW                  |
 | `client.update`          | `id`, any of `name`, `phone` (nullable), `notes` (nullable), or `emailChange: { email, expectedUpdatedAt }`, optional top-level `expectedUpdatedAt`                                                                      | users with client access     | revision or LWW                  |
 | `time_off.create`        | `id`, `staffId`, `startsAt`, `endsAt`, `reason?`                                                                                                            | owner; staff for self        | LWW                  |
-| `time_off.update`        | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason`                                                                                                      | same                         | LWW                  |
-| `time_off.delete`        | `id`, `staffId`                                                                                                                                             | same                         | LWW                  |
+| `time_off.update`        | `id`, `staffId`, any of `startsAt`, `endsAt`, `reason`, and optional `expectedUpdatedAt` | same                         | revision or LWW      |
+| `time_off.delete`        | `id`, `staffId`, optional `expectedUpdatedAt` | same                         | revision or LWW      |
 | `service.update`         | `id`, any catalog field or `active`                                                                                                                         | owner                        | LWW                  |
 | `service.configure`      | `id`, exact reviewed `version`, and at least one of a partial `service` update, an `assignment` with reviewed and proposed staff IDs, or a reviewed `catalog` update. The parts commit together. The device keeps the original values for conflict review. | owner or catalog manager | exact revision and reviewed team, idempotent |
 | `service.resources`      | `id`, exact resource `version`, `selectionMode` and the complete set of resource requirements and quantities. A reviewed snapshot is available from `GET /admin/services/:id/resources/reviewed`. | owner or catalog manager | exact revision, validates affected future allocations, idempotent |

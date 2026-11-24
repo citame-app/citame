@@ -176,6 +176,8 @@ fn queue_time_off_removal(store: &mut Store, expected: &TimeOff) -> Result<()> {
 pub struct TimeOffReview {
     pub saved: TimeOff,
     pub proposal: Option<TimeOff>,
+    /// Older clients sent all fields even if only one was changed.
+    pub requires_field_selection: bool,
 }
 
 pub fn review_time_off_conflict(store: &Store, mutation_id: &str) -> Result<TimeOffReview> {
@@ -185,13 +187,7 @@ pub fn review_time_off_conflict(store: &Store, mutation_id: &str) -> Result<Time
 fn current_time_off_review(store: &Store, mutation_id: &str) -> Result<TimeOffReview> {
     let conflict = store
         .conflict(mutation_id)?
-        .filter(|conflict| {
-            matches!(
-                conflict.kind.as_str(),
-                "time_off.update" | "time_off.delete"
-            ) && conflict.reason == "conflict"
-                && !conflict.requires_restored_review()
-        })
+        .filter(crate::model::Conflict::is_time_off_revision_conflict)
         .ok_or_else(|| CoreError::NotFound(format!("open time off conflict {mutation_id}")))?;
     let saved = store
         .time_off(&conflict.entity_id)?
@@ -229,7 +225,15 @@ fn current_time_off_review(store: &Store, mutation_id: &str) -> Result<TimeOffRe
     } else {
         None
     };
-    Ok(TimeOffReview { saved, proposal })
+    let requires_field_selection = proposal.is_some()
+        && ["startsAt", "endsAt", "reason"]
+            .into_iter()
+            .all(|field| payload.get(field).is_some());
+    Ok(TimeOffReview {
+        saved,
+        proposal,
+        requires_field_selection,
+    })
 }
 
 pub fn retry_reviewed_time_off(

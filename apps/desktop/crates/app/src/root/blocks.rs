@@ -16,6 +16,14 @@ pub(super) struct BlockForm {
 struct BlockReview {
     mutation_id: String,
     proposed_times: Option<(DateTime<Utc>, DateTime<Utc>)>,
+    unselected_proposal: Option<TimeOff>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum BlockField {
+    Start,
+    End,
+    Reason,
 }
 
 impl BlockForm {
@@ -235,9 +243,13 @@ impl Root {
         let review = ops::review_time_off_conflict(&self.svc.store, mutation_id);
         if let Ok(review) = review {
             let day = review.saved.starts_at.with_timezone(&self.tz).date_naive();
+            let saved_times = (review.saved.starts_at, review.saved.ends_at);
             self.open_block(Some(review.saved), day, cx);
             if let Overlay::Block(form) = &mut self.overlay {
-                let proposed_times = review.proposal.map(|proposal| {
+                let proposed_times = review.proposal.as_ref().map(|proposal| {
+                    if review.requires_field_selection {
+                        return saved_times;
+                    }
                     form.start.update(cx, |field, cx| {
                         field.set_text(&local_input(self.tz, proposal.starts_at), cx);
                     });
@@ -252,6 +264,9 @@ impl Root {
                 form.review = Some(BlockReview {
                     mutation_id: mutation_id.to_owned(),
                     proposed_times,
+                    unselected_proposal: review
+                        .proposal
+                        .filter(|_| review.requires_field_selection),
                 });
                 cx.notify();
                 return;
@@ -265,6 +280,37 @@ impl Root {
         cx.notify();
     }
 
+    pub(super) fn use_block_proposal_field(
+        &mut self,
+        selected: BlockField,
+        cx: &mut Context<Self>,
+    ) {
+        let Overlay::Block(form) = &mut self.overlay else {
+            return;
+        };
+        let Some(review) = &mut form.review else {
+            return;
+        };
+        let (Some(proposal), Some(times)) =
+            (&review.unselected_proposal, &mut review.proposed_times)
+        else {
+            return;
+        };
+        let (field, text) = match selected {
+            BlockField::Start => {
+                times.0 = proposal.starts_at;
+                (&form.start, local_input(self.tz, proposal.starts_at))
+            }
+            BlockField::End => {
+                times.1 = proposal.ends_at;
+                (&form.end, local_input(self.tz, proposal.ends_at))
+            }
+            BlockField::Reason => (&form.reason, proposal.reason.clone().unwrap_or_default()),
+        };
+        field.update(cx, |field, cx| field.set_text(&text, cx));
+        cx.notify();
+    }
+
     pub(super) fn close_block_form(&mut self, cx: &mut Context<Self>) {
         self.overlay = if matches!(&self.overlay, Overlay::Block(form) if form.review.is_some()) {
             Overlay::Conflicts {
@@ -275,6 +321,14 @@ impl Root {
             Overlay::None
         };
         cx.notify();
+    }
+
+    pub(super) fn refresh_block_write_scope(&mut self, cx: &mut Context<Self>) {
+        if matches!(&self.overlay, Overlay::Block(form)
+            if self.time_off_scope != "all" && self.time_off_scope != form.staff_id)
+        {
+            self.close_block_form(cx);
+        }
     }
 
     pub(super) fn open_selected_block(
@@ -332,6 +386,20 @@ impl Root {
         let reason = form.reason.read(cx).text();
         if reason.trim().encode_utf16().count() > 500 {
             form.error = Some(Key::TimeOffReasonLong);
+            cx.notify();
+            return;
+        }
+        if form
+            .review
+            .as_ref()
+            .is_some_and(|r| r.unselected_proposal.is_some())
+            && form.original.as_ref().is_some_and(|saved| {
+                start == saved.starts_at
+                    && end == saved.ends_at
+                    && reason.trim() == saved.reason.as_deref().unwrap_or("")
+            })
+        {
+            form.error = Some(Key::TimeOffChooseProposal);
             cx.notify();
             return;
         }
@@ -490,7 +558,12 @@ impl Root {
             .into_any_element()
     }
 
-    pub(super) fn render_block_form(&self, form: &BlockForm, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_block_form(
+        &self,
+        form: &BlockForm,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let staff = div().flex().flex_wrap().gap_2().children(
             self.staff
                 .iter()
@@ -510,128 +583,181 @@ impl Root {
                     )
                 }),
         );
-        self.modal(
-            div()
-                .child(div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                    if form.original.is_some() {
-                        Key::EditTimeOff
-                    } else {
-                        Key::BlockTime
-                    },
-                )))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::muted())
-                        .child(self.t(Key::TimeOffHint)),
-                )
-                .child(self.label(Key::Staff))
-                .when(form.original.is_none(), |d| d.child(staff))
-                .when(form.original.is_some(), |d| {
-                    d.child(self.staff_name(&form.staff_id))
-                })
-                .when_some(
-                    form.original.as_ref().filter(|_| form.review.is_some()),
-                    |d, saved| {
-                        d.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_1()
-                                .p_3()
-                                .rounded_md()
-                                .bg(theme::conflict_bg())
-                                .child(self.label(Key::TimeOffSaved))
-                                .child(div().text_sm().child(format!(
-                                    "{} – {}",
-                                    local_input(self.tz, saved.starts_at),
-                                    local_input(self.tz, saved.ends_at)
-                                )))
-                                .when_some(saved.reason.clone(), |panel, reason| {
-                                    panel.child(div().text_sm().child(reason))
-                                }),
-                        )
-                    },
-                )
-                .when(form.review.is_some() && !form.reviewing_removal(), |d| {
-                    d.child(self.label(Key::TimeOffProposed))
-                })
-                .when(!form.reviewing_removal(), |d| {
-                    d.child(self.label(Key::TimeOffStarts))
-                        .child(form.start.clone())
-                        .child(self.label(Key::TimeOffEnds))
-                        .child(form.end.clone())
-                        .child(self.button(
-                            "block-full-day",
-                            self.t(Key::TimeOffWholeDay),
-                            Kind::Ghost,
-                            cx.listener(|this, _, _, cx| {
-                                if let Overlay::Block(form) = &this.overlay {
-                                    let day = parse_wall_time(form.start.read(cx).text())
-                                        .map(|value| value.date())
-                                        .unwrap_or(form.day);
-                                    let (start, end) = calendar::local_day_range(this.tz, day);
-                                    form.start.update(cx, |f, cx| {
-                                        f.set_text(&local_input(this.tz, start), cx)
-                                    });
-                                    form.end.update(cx, |f, cx| {
-                                        f.set_text(&local_input(this.tz, end), cx)
-                                    });
-                                }
-                            }),
-                        ))
-                        .child(self.label(Key::TimeOffReason))
-                        .child(form.reason.clone())
-                })
-                .when_some(form.error, |d, key| {
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
+                if form.original.is_some() {
+                    Key::EditTimeOff
+                } else {
+                    Key::BlockTime
+                },
+            )))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::TimeOffHint)),
+            )
+            .child(self.label(Key::Staff))
+            .when(form.original.is_none(), |d| d.child(staff))
+            .when(form.original.is_some(), |d| {
+                d.child(self.staff_name(&form.staff_id))
+            })
+            .when_some(
+                form.original.as_ref().filter(|_| form.review.is_some()),
+                |d, saved| {
                     d.child(
                         div()
-                            .text_sm()
-                            .text_color(theme::conflict_fg())
-                            .child(self.t(key)),
-                    )
-                })
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap_2()
-                        .justify_end()
-                        .when(
-                            form.original.is_some()
-                                && (form.review.is_none() || form.reviewing_removal()),
-                            |d| {
-                                d.child(self.button(
-                                    "block-remove",
-                                    self.t(if form.confirm_remove {
-                                        Key::ConfirmDeleteTimeOff
-                                    } else {
-                                        Key::DeleteTimeOff
-                                    }),
-                                    Kind::Danger,
-                                    cx.listener(|this, _, _, cx| this.remove_block(cx)),
-                                ))
-                            },
-                        )
-                        .child(self.button(
-                            "block-close",
-                            self.t(if form.review.is_some() {
-                                Key::Back
-                            } else {
-                                Key::Close
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .p_3()
+                            .rounded_md()
+                            .bg(theme::conflict_bg())
+                            .child(self.label(Key::TimeOffSaved))
+                            .child(div().text_sm().child(format!(
+                                "{} – {}",
+                                local_input(self.tz, saved.starts_at),
+                                local_input(self.tz, saved.ends_at)
+                            )))
+                            .when_some(saved.reason.clone(), |panel, reason| {
+                                panel.child(div().text_sm().child(reason))
                             }),
-                            Kind::Ghost,
-                            cx.listener(|this, _, _, cx| this.close_block_form(cx)),
-                        ))
-                        .when(!form.reviewing_removal(), |actions| {
-                            actions.child(self.button(
-                                "block-save",
-                                self.t(Key::TimeOffSave),
-                                Kind::Primary,
-                                cx.listener(|this, _, _, cx| this.save_block(cx)),
-                            ))
+                    )
+                },
+            )
+            .when_some(
+                form.review
+                    .as_ref()
+                    .and_then(|review| review.unselected_proposal.as_ref()),
+                |d, proposal| {
+                    let choices = [
+                        (
+                            "block-use-start",
+                            BlockField::Start,
+                            Key::TimeOffStarts,
+                            local_input(self.tz, proposal.starts_at),
+                        ),
+                        (
+                            "block-use-end",
+                            BlockField::End,
+                            Key::TimeOffEnds,
+                            local_input(self.tz, proposal.ends_at),
+                        ),
+                        (
+                            "block-use-reason",
+                            BlockField::Reason,
+                            Key::TimeOffReason,
+                            proposal
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| self.t(Key::TimeOffNoReason).to_owned()),
+                        ),
+                    ];
+                    d.child(self.label(Key::TimeOffChooseProposal))
+                        .children(choices.map(|(id, field, label, value)| {
+                            self.button(
+                                id,
+                                format!("{}: {value}", self.t(label)),
+                                Kind::Ghost,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.use_block_proposal_field(field, cx)
+                                }),
+                            )
+                        }))
+                },
+            )
+            .when(form.review.is_some() && !form.reviewing_removal(), |d| {
+                d.child(self.label(Key::TimeOffProposed))
+            })
+            .when(!form.reviewing_removal(), |d| {
+                d.child(self.label(Key::TimeOffStarts))
+                    .child(form.start.clone())
+                    .child(self.label(Key::TimeOffEnds))
+                    .child(form.end.clone())
+                    .child(self.button(
+                        "block-full-day",
+                        self.t(Key::TimeOffWholeDay),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| {
+                            if let Overlay::Block(form) = &this.overlay {
+                                let day = parse_wall_time(form.start.read(cx).text())
+                                    .map(|value| value.date())
+                                    .unwrap_or(form.day);
+                                let (start, end) = calendar::local_day_range(this.tz, day);
+                                form.start.update(cx, |f, cx| {
+                                    f.set_text(&local_input(this.tz, start), cx)
+                                });
+                                form.end
+                                    .update(cx, |f, cx| f.set_text(&local_input(this.tz, end), cx));
+                            }
                         }),
-                ),
+                    ))
+                    .child(self.label(Key::TimeOffReason))
+                    .child(form.reason.clone())
+            })
+            .when_some(form.error, |d, key| {
+                d.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(key)),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .justify_end()
+                    .when(
+                        form.original.is_some()
+                            && (form.review.is_none() || form.reviewing_removal()),
+                        |d| {
+                            d.child(self.button(
+                                "block-remove",
+                                self.t(if form.confirm_remove {
+                                    Key::ConfirmDeleteTimeOff
+                                } else {
+                                    Key::DeleteTimeOff
+                                }),
+                                Kind::Danger,
+                                cx.listener(|this, _, _, cx| this.remove_block(cx)),
+                            ))
+                        },
+                    )
+                    .child(self.button(
+                        "block-close",
+                        self.t(if form.review.is_some() {
+                            Key::Back
+                        } else {
+                            Key::Close
+                        }),
+                        Kind::Ghost,
+                        cx.listener(|this, _, _, cx| this.close_block_form(cx)),
+                    ))
+                    .when(!form.reviewing_removal(), |actions| {
+                        actions.child(self.button(
+                            "block-save",
+                            self.t(Key::TimeOffSave),
+                            Kind::Primary,
+                            cx.listener(|this, _, _, cx| this.save_block(cx)),
+                        ))
+                    }),
+            );
+        self.modal_with_height(
+            div().child(
+                div()
+                    .id("block-form-scroll")
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(body),
+            ),
+            (viewport.width - px(24.)).clamp(px(240.), px(560.)),
+            (viewport.height - px(24.)).clamp(px(240.), px(720.)),
+            Some(cx),
         )
     }
 }

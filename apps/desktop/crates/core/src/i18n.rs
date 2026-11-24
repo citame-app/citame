@@ -2261,6 +2261,8 @@ keys! {
     TimeOffReviewUnavailable => ("Synchronize the calendar to review this block. You can keep the proposal in Conflicts until then.", "Sincroniza la agenda para revisar este bloqueo. Puedes conservar la propuesta en Conflictos mientras tanto."),
     TimeOffSaved => ("Current saved block", "Bloqueo guardado actualmente"),
     TimeOffProposed => ("Proposed changes", "Cambios propuestos"),
+    TimeOffChooseProposal => ("Choose which values to use from the offline edit", "Elige qué valores recuperar de la edición sin conexión"),
+    TimeOffNoReason => ("No reason", "Sin motivo"),
     Online => ("Online", "En línea"),
     Offline => ("Offline", "Sin conexión"),
     Connecting => ("Connecting...", "Conectando..."),
