@@ -1055,10 +1055,14 @@ for svc in api web worker; do
 done
 
 if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
-  step "the review invitation remains a single SMTP message after replay"
+  step "confirmations, reminders and review invitations remain single SMTP messages after replay"
   # The default worker polling interval is five seconds. Other smoke steps usually cover it.
   remaining=$((review_replayed_at + 6 - SECONDS))
   if [ "$remaining" -gt 0 ]; then sleep "$remaining"; fi
+  await_mail smoke-client@example.com 'Appointment confirmed:' 1 ||
+    fail "replaying the queue changed the delivered confirmation count"
+  await_mail smoke-client@example.com 'Reminder: your appointment is ' 0 ||
+    fail "replaying the queue changed the delivered reminder count"
   await_mail smoke-client@example.com 'How was your visit to ' 0 "$review_link" ||
     fail "replaying the review invitation changed the delivered message count"
 fi
