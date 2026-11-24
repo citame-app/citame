@@ -112,6 +112,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Desktop shows starting and pending prices, surcharges, and service instructions when reviewing a waitlist offer.
+
 - Reconciliation recognizes audited package content restored from the original inventory archive in a prepared local copy.
 
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
