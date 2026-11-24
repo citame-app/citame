@@ -1,5 +1,6 @@
 import { packageContentSchema } from "@sob/contracts";
 import {
+  auditLog,
   booksyDesktopTestDatabase,
   type Database,
   resourcePool,
@@ -7,14 +8,14 @@ import {
   stockMovement,
   stockReservation,
 } from "@sob/db";
-import { eq, getTableColumns, sql } from "drizzle-orm";
+import { and, eq, getTableColumns, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { packBooksyJson, unpackBooksyJson } from "./jsonb-codec";
 import { fingerprint, sourceUuid } from "./plan";
 import { type BooksySourceReadModel, booksyCents } from "./source-read-model";
 
 type ReadSourceDb = Pick<Database, "execute" | "select">;
-type SourceVerification = { exclusiveExtensions?: boolean };
+type SourceVerification = { exclusiveExtensions?: boolean; preparedCopy?: boolean };
 
 const { stockAllocated: _, ...sourceProductColumns } = getTableColumns(retailProduct);
 const {
@@ -39,6 +40,63 @@ const sourceStockColumns = {
   requestHash: stockMovement.requestHash,
   createdAt: stockMovement.createdAt,
 };
+
+function sourcePackageContent(capacity: unknown, unit: unknown) {
+  const volume = z.object({ symbol: z.string() }).safeParse(unit);
+  return packageContentSchema.safeParse({
+    quantity: typeof capacity === "number" ? String(capacity) : capacity,
+    unit: volume.data?.symbol,
+  }).data;
+}
+
+async function auditedPackageRepairs(db: ReadSourceDb) {
+  const metadata = JSON.stringify({ source: "booksy archive", fields: ["packageContent"] });
+  const rows = await db
+    .select({
+      id: auditLog.entityId,
+      at: sql<Date>`min(${auditLog.createdAt})`.mapWith(auditLog.createdAt),
+    })
+    .from(auditLog)
+    .where(
+      and(
+        isNull(auditLog.actorUserId),
+        eq(auditLog.action, "inventory.product_package_imported"),
+        eq(auditLog.entity, "retail_product"),
+        sql`${auditLog.metadata} = ${metadata}::jsonb`,
+      ),
+    )
+    .groupBy(auditLog.entityId)
+    .having(sql`count(*) = 1`);
+  return new Map(rows.map(({ id, at }) => [id, at]));
+}
+
+function reconstructPreRepairProduct<
+  T extends {
+    packageContentQuantity: string | null;
+    packageContentUnit: string | null;
+    version: number;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+>(stored: T, raw: Record<string, unknown>, auditAt: Date) {
+  const source = sourcePackageContent(raw.total_pack_capacity, raw.volume_unit);
+  if (
+    stored.version !== 2 ||
+    auditAt < stored.createdAt ||
+    stored.updatedAt < auditAt ||
+    !source ||
+    stored.packageContentQuantity !== source.quantity ||
+    stored.packageContentUnit !== source.unit
+  )
+    return stored;
+  return {
+    ...stored,
+    packageContentQuantity: null,
+    packageContentUnit: null,
+    version: 1,
+    updatedAt: stored.createdAt,
+  };
+}
 
 function matchesExtensionFingerprint(row: Record<string, unknown>, expected: string) {
   if (fingerprint(row) === expected) return true;
@@ -172,14 +230,7 @@ export async function storeBooksySourceModel(db: Database, model: BooksySourceRe
       const source = String(p.id),
         key = `booksy:${model.businessId}:${p.id}`,
         requestHash = fingerprint(raw);
-      const volumeUnit = z.object({ symbol: z.string() }).safeParse(p.volume_unit);
-      const content = packageContentSchema.safeParse({
-        quantity:
-          typeof p.total_pack_capacity === "number"
-            ? String(p.total_pack_capacity)
-            : p.total_pack_capacity,
-        unit: volumeUnit.data?.symbol,
-      });
+      const content = sourcePackageContent(p.total_pack_capacity, p.volume_unit);
       await put("sourceProducts", source, raw, retailProduct, {
         name: p.name,
         sku: `BOOKSY-${model.businessId}-${source}`.toUpperCase(),
@@ -199,8 +250,8 @@ export async function storeBooksySourceModel(db: Database, model: BooksySourceRe
         // The original null remains in source_entity.raw and the immutable source snapshot.
         taxBasisPoints: p.tax_rate_value === null ? 0 : booksyCents(p.tax_rate_value),
         unitLabel: "envase",
-        packageContentQuantity: content.data?.quantity ?? null,
-        packageContentUnit: content.data?.unit ?? null,
+        packageContentQuantity: content?.quantity ?? null,
+        packageContentUnit: content?.unit ?? null,
         active: !p.archived && p.tax_rate_value !== null,
         stockOnHand: p.full_packages_left,
         stockReserved: 0,
@@ -281,7 +332,7 @@ export async function verifyBooksySourceModel(
   }>(
     sql`select kind,source_id,target_id,target_hash,raw from booksy_rehearsal.source_entity where snapshot_hash=${hash}`,
   );
-  const expected = new Map<string, unknown>();
+  const expected = new Map<string, Record<string, unknown>>();
   for (const raw of model.inventory) {
     expected.set(`sourceProducts:${raw.id}`, raw);
     expected.set(`sourceStockOpening:${raw.id}`, raw);
@@ -295,13 +346,14 @@ export async function verifyBooksySourceModel(
     sourceResources: resourcePool,
   };
   let rootClassificationIds: Map<string, string> | null | undefined;
+  const packageRepairs = options.preparedCopy ? await auditedPackageRepairs(db) : undefined;
   for (const r of extensions) {
+    const archived = expected.get(`${r.kind}:${r.source_id}`);
     const table = tables[r.kind as keyof typeof tables];
     if (
       !table ||
-      !expected.has(`${r.kind}:${r.source_id}`) ||
-      fingerprint(unpackBooksyJson(r.raw)) !==
-        fingerprint(expected.get(`${r.kind}:${r.source_id}`)) ||
+      !archived ||
+      fingerprint(unpackBooksyJson(r.raw)) !== fingerprint(archived) ||
       r.target_id !== sourceUuid(model.businessId, r.kind, r.source_id)
     )
       throw new Error("Native source extension mapping differs");
@@ -312,6 +364,7 @@ export async function verifyBooksySourceModel(
         const [product] = await db
           .select({
             ...legacyProductColumns,
+            stockAllocated: sql<string | null>`to_jsonb(${retailProduct})->>'stock_allocated'`,
             packageContentQuantity: sql<
               string | null
             >`to_jsonb(${retailProduct})->>'package_content_quantity'`,
@@ -327,9 +380,18 @@ export async function verifyBooksySourceModel(
           .from(retailProduct)
           .where(eq(retailProduct.id, r.target_id));
         if (product) {
-          const { categoryLabel, brandLabel, ...stored } = product;
+          const { categoryLabel, brandLabel, stockAllocated, ...stored } = product;
+          if (options.exclusiveExtensions && stockAllocated !== null && stockAllocated !== "0")
+            throw new Error("Native product/resource fields changed");
           if (matchesExtensionFingerprint(stored, r.target_hash)) continue;
-          const { categoryId, subcategoryId, brandId, ...legacy } = stored;
+          // Match the business fields to the original hash and check the repair's version
+          // and timestamp separately. Legacy rows start at version 1 with equal timestamps.
+          const repairAt = packageRepairs?.get(r.target_id);
+          const baseline = repairAt
+            ? reconstructPreRepairProduct(stored, archived, repairAt)
+            : stored;
+          if (baseline !== stored && matchesExtensionFingerprint(baseline, r.target_hash)) continue;
+          const { categoryId, subcategoryId, brandId, ...legacy } = baseline;
           if (matchesExtensionFingerprint(legacy, r.target_hash)) {
             if (rootClassificationIds === undefined)
               rootClassificationIds = await rootClassificationIdsByLabel(db);

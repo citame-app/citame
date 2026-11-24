@@ -16,6 +16,7 @@ pub enum FieldEvent {
     Changed,
     PasteLines(Vec<String>),
     PasteTooLong,
+    InvalidPaste,
 }
 pub struct TextField {
     text: String,
@@ -31,6 +32,7 @@ pub struct TextField {
     selecting: bool,
     line_paste_limit: Option<usize>,
     paste_newlines_remaining: Option<Rc<Cell<usize>>>,
+    paste_validation: Option<fn(&str) -> bool>,
 }
 impl EventEmitter<FieldEvent> for TextField {}
 impl Focusable for TextField {
@@ -54,6 +56,7 @@ impl TextField {
             selecting: false,
             line_paste_limit: None,
             paste_newlines_remaining: None,
+            paste_validation: None,
         }
     }
     pub fn text(&self) -> &str {
@@ -67,6 +70,16 @@ impl TextField {
         self.line_paste_limit = Some(limit);
         self.paste_newlines_remaining = Some(remaining);
         self
+    }
+    pub fn with_validated_bounded_line_paste(
+        self,
+        limit: usize,
+        remaining: Rc<Cell<usize>>,
+        validate: fn(&str) -> bool,
+    ) -> Self {
+        let mut field = self.with_bounded_line_paste(limit, remaining);
+        field.paste_validation = Some(validate);
+        field
     }
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.text = text.to_owned();
@@ -175,6 +188,13 @@ impl TextField {
             return;
         };
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self
+            .paste_validation
+            .is_some_and(|validate| !validate(&text))
+        {
+            cx.emit(FieldEvent::InvalidPaste);
+            return;
+        }
         if text.encode_utf16().count() > limit {
             cx.emit(FieldEvent::PasteTooLong);
             return;

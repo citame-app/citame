@@ -236,7 +236,7 @@ fn answer_line(
                         );
                         form.confirmed = false;
                     }
-                    FieldEvent::PasteTooLong => {
+                    FieldEvent::PasteTooLong | FieldEvent::InvalidPaste => {
                         root.set_intake_editor_error(Key::IntakeInvalidAnswer)
                     }
                     FieldEvent::Submit => (),
