@@ -389,20 +389,6 @@ impl Root {
             cx.notify();
             return;
         }
-        if form
-            .review
-            .as_ref()
-            .is_some_and(|r| r.unselected_proposal.is_some())
-            && form.original.as_ref().is_some_and(|saved| {
-                start == saved.starts_at
-                    && end == saved.ends_at
-                    && reason.trim() == saved.reason.as_deref().unwrap_or("")
-            })
-        {
-            form.error = Some(Key::TimeOffChooseProposal);
-            cx.notify();
-            return;
-        }
         let result = match (&form.original, &form.review) {
             (Some(old), Some(review)) => ops::retry_reviewed_time_off(
                 &mut self.svc.store,
@@ -416,12 +402,20 @@ impl Root {
                     .map(|_| ())
             }
         };
-        if result.is_ok() {
-            self.close_block_form(cx);
-            self.edited(cx);
-        } else {
-            form.error = Some(Key::TimeOffConflict);
-            cx.notify();
+        match result {
+            Ok(()) => {
+                self.close_block_form(cx);
+                self.edited(cx);
+            }
+            Err(error) => {
+                form.error = Some(match error {
+                    sob_core::error::CoreError::TimeOffReviewNeedsChanges => {
+                        Key::TimeOffChooseProposal
+                    }
+                    _ => Key::TimeOffConflict,
+                });
+                cx.notify();
+            }
         }
     }
 

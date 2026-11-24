@@ -28,6 +28,8 @@ pub enum CoreError {
     StaffPortraitDraftBusy,
     #[error("this time overlaps a schedule block")]
     TimeOffOverlap,
+    #[error("choose which time block changes to keep")]
+    TimeOffReviewNeedsChanges,
     #[error("this time exceeds the professional's capacity")]
     StaffCapacityExceeded,
     #[error("this client has not finished syncing")]

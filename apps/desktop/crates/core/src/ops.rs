@@ -115,7 +115,9 @@ pub fn update_time_off(
     end: DateTime<Utc>,
     reason: &str,
 ) -> Result<()> {
-    store.write_transaction(|store| queue_time_off_update(store, expected, start, end, reason))
+    store.write_transaction(|store| {
+        queue_time_off_update(store, expected, start, end, reason).map(|_| ())
+    })
 }
 
 fn queue_time_off_update(
@@ -124,7 +126,7 @@ fn queue_time_off_update(
     start: DateTime<Utc>,
     end: DateTime<Utc>,
     reason: &str,
-) -> Result<()> {
+) -> Result<bool> {
     verify_block(store, expected)?;
     validate_block(store, &expected.staff_id, start, end, reason)?;
     let reason = (!reason.trim().is_empty()).then_some(reason.trim());
@@ -132,7 +134,7 @@ fn queue_time_off_update(
         && expected.ends_at == end
         && expected.reason.as_deref() == reason
     {
-        return Ok(());
+        return Ok(false);
     }
     let mut changes = json!({
         "id": expected.id, "staffId": expected.staff_id, "expectedUpdatedAt": iso(expected.updated_at)
@@ -152,7 +154,7 @@ fn queue_time_off_update(
         changes,
         expected.updated_at,
     )?;
-    Ok(())
+    Ok(true)
 }
 
 pub fn delete_time_off(store: &mut Store, expected: &TimeOff) -> Result<()> {
@@ -250,7 +252,10 @@ pub fn retry_reviewed_time_off(
             ));
         }
         if let Some((start, end, reason)) = changes {
-            queue_time_off_update(store, expected, start, end, reason)?;
+            let queued = queue_time_off_update(store, expected, start, end, reason)?;
+            if !queued && reviewed.requires_field_selection {
+                return Err(CoreError::TimeOffReviewNeedsChanges);
+            }
         } else {
             queue_time_off_removal(store, expected)?;
         }
