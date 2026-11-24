@@ -552,8 +552,11 @@ with open(sys.argv[1]) as source:
 assert any(row["entity"] == "appointment" and row["id"] == sys.argv[2]
            for row in response["changes"])
 PY
-status="$(curl -s -o /dev/null -w '%{http_code}' -b "$cjar" "$BASE/sync/pull?since=0&limit=1")"
-[ "$status" = 403 ] || fail "customer account was able to read the staff replica"
+# Web uses the API prefix; connected Desktop uses the same-origin passthrough.
+for sync_prefix in /api ''; do
+  status="$(curl -s -o /dev/null -w '%{http_code}' -b "$cjar" "$BASE$sync_prefix/sync/pull?since=0&limit=1")"
+  [ "$status" = 403 ] || fail "customer replica denial at $sync_prefix/sync/pull returned $status, expected 403"
+done
 step "the web gateway restarts cleanly with the staff stream open"
 curl -fsN --max-time 25 -b "$jar" "$BASE/api/sync/stream" > "$SMOKE_DIR/events" &
 stream_pid=$!
@@ -579,11 +582,15 @@ proxy_ready_start=$SECONDS
 await_http_status "$BASE/healthz" 200 5 ||
   fail "the proxy took too long to route to the healthy web gateway"
 echo "Proxy routed to the healthy web gateway after $((SECONDS - proxy_ready_start))s"
-stream_status=0
-curl -fsN --max-time 3 -b "$jar" "$BASE/sync/stream" > "$SMOKE_DIR/reconnected-events" ||
-  stream_status=$?
-[ "$stream_status" = 0 ] || [ "$stream_status" = 28 ] || fail "reconnecting the desktop stream failed"
-grep -q '^event: change' "$SMOKE_DIR/reconnected-events" || fail "no live event after reconnect"
+for sync_prefix in /api ''; do
+  stream_status=0
+  curl -fsN --max-time 3 -b "$jar" "$BASE$sync_prefix/sync/stream" > "$SMOKE_DIR/reconnected-events" ||
+    stream_status=$?
+  [ "$stream_status" = 0 ] || [ "$stream_status" = 28 ] ||
+    fail "reconnecting to $sync_prefix/sync/stream failed"
+  grep -q '^event: change' "$SMOKE_DIR/reconnected-events" ||
+    fail "no live event after reconnecting to $sync_prefix/sync/stream"
+done
 
 if [ "${SMOKE_DESKTOP:-0}" = 1 ]; then
   step "desktop offline replay against the production proxy"
