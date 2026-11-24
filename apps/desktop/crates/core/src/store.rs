@@ -41,7 +41,7 @@ const GENERATION_KEY: &str = "sync_generation";
 const REBUILD_KEY: &str = "sync_rebuilding";
 const CALENDAR_VISIBILITY_EPOCH: &str = "waitlist_visibility_epoch";
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CalendarCacheScope {
     generation: String,
     calendar: Option<String>,

@@ -18,6 +18,7 @@ pub struct WaitlistCount {
 
 pub struct CountRequest {
     pub range: WaitlistRange,
+    scope: CalendarCacheScope,
     identity: Arc<()>,
 }
 
@@ -68,7 +69,7 @@ impl WaitlistCount {
             self.pending = None;
             return (None, changed);
         }
-        let Some((range, _)) = &self.query else {
+        let Some((range, scope)) = &self.query else {
             return (None, changed);
         };
         let revision = store.live_view_revision("waitlist").ok();
@@ -87,6 +88,7 @@ impl WaitlistCount {
         (
             Some(CountRequest {
                 range: *range,
+                scope: scope.clone(),
                 identity,
             }),
             changed,
@@ -100,6 +102,17 @@ impl WaitlistCount {
         request: CountRequest,
         result: Result<u32, TransportError>,
     ) -> WaitlistCountUpdate {
+        let current_scope = store.calendar_cache_scope().ok();
+        // Access to the waitlist applies to every period. An older request from this same
+        // scope can report a denial after navigating or going offline.
+        if matches!(
+            &result,
+            Err(TransportError::Unauthorized | TransportError::Forbidden(_))
+        ) && current_scope.as_ref() == Some(&request.scope)
+        {
+            self.deny(store);
+            return WaitlistCountUpdate::AccessDenied;
+        }
         if !self
             .pending
             .as_ref()
@@ -108,22 +121,13 @@ impl WaitlistCount {
             return WaitlistCountUpdate::Unchanged;
         }
         self.pending = None;
-        if range != Some(request.range)
-            || self
-                .query
-                .as_ref()
-                .is_none_or(|(_, scope)| store.calendar_cache_scope().ok().as_ref() != Some(scope))
-        {
+        if range != Some(request.range) || current_scope.as_ref() != Some(&request.scope) {
             return WaitlistCountUpdate::Unchanged;
         }
         match result {
             Ok(total) if self.total != Some(total) => {
                 self.total = Some(total);
                 WaitlistCountUpdate::DisplayChanged
-            }
-            Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => {
-                self.deny(store);
-                WaitlistCountUpdate::AccessDenied
             }
             _ => WaitlistCountUpdate::Unchanged,
         }
@@ -219,11 +223,32 @@ mod tests {
             WaitlistCountUpdate::DisplayChanged
         );
         store.set_meta("live_view:waitlist", "1").unwrap();
+        let previous_period = count
+            .refresh(&store, Some(other), true, now + REFRESH_INTERVAL)
+            .0
+            .unwrap();
+        let scope = store.calendar_cache_scope().unwrap();
+        store
+            .cache_waitlist(&scope, WaitlistView::Calendar(first), &page)
+            .unwrap();
+        count.refresh(&store, Some(first), false, now + REFRESH_INTERVAL);
+        assert_eq!(count.total_for(first), Some(3));
+        assert_eq!(
+            count.apply(
+                &mut store,
+                Some(first),
+                previous_period,
+                Err(TransportError::Unauthorized)
+            ),
+            WaitlistCountUpdate::AccessDenied,
+        );
+        assert_eq!(count.total_for(first), None);
         assert!(
-            count
-                .refresh(&store, Some(other), true, now + REFRESH_INTERVAL)
-                .0
-                .is_some()
+            store
+                .waitlist_cache(WaitlistView::Calendar(first), 1)
+                .unwrap()
+                .current
+                .is_none()
         );
     }
 }
