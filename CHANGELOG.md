@@ -97,6 +97,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Reconciliation recognizes audited package content restored from the original inventory archive in a prepared local copy.
+
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
 - Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.

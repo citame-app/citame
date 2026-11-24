@@ -825,7 +825,10 @@ export async function inspectNativeBooksy(
 ) {
   return db.transaction(
     async (tx) => {
-      const model = await loadBooksySourceModel(tx, snapshotHash, { exclusiveExtensions: true });
+      const model = await loadBooksySourceModel(tx, snapshotHash, {
+        exclusiveExtensions: true,
+        preparedCopy: options.preparedCopy,
+      });
       const { start, end } = booksyLocalDayBounds(date, model.base.timezone);
       if (date < model.fromDate || date > model.throughDate)
         throw new Error("The requested day is outside the captured calendar");

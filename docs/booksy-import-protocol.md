@@ -569,6 +569,8 @@ bun --env-file=/ruta/privada/conexion-preparada.env src/scripts/booksy-candidate
 
 The report uses a read-only transaction to match bookings, services, staff, resources, notes and indicators against the archive. It counts local checkout records, payments, payment reviews, reminders and waitlist activity. It checks opening stock as part of the baseline. Extra stock movements or reservations, or changes to the projected records, require separate reconciliation before the baseline can match. The report keeps `canCutOver: false`.
 
+For a prepared local copy, the verifier also recognizes one audited restoration of an empty legacy quantity and unit from the verified product archive. It checks the exact archived content and reconstructs the original fingerprint at version 1. Changes to prices, stock, other product fields or the restored quantity remain reconciliation errors. The archive and its original fingerprints are retained.
+
 La sesión HTTP propietaria comprobó 47 líneas de 38 reservas, 49 servicios y siete profesionales. GPUI abrió el perfil de pruebas ya vinculado y alcanzó el último cursor del servidor con 787 líneas, 47 de ellas del día 20, y la cola de cambios y conflictos vacía. Esta copia sirve para probar la operación local. La autorización de corte sigue el procedimiento de la sección siguiente.
 
 El cotejo de Caja para el 20/11/2026 devolvió 44 líneas en **Por cobrar** y tres en **Citas por conciliar** por importe original desconocido. La ruta web y la de escritorio devolvieron los mismos datos y exigieron autenticación. El informe de la candidata verificó 1.053 originales e identificó 27 servicios de 23 reservas con el cobro bloqueado por importe desconocido en todo el horizonte. La última cita de origen sigue sin estar demostrada.
