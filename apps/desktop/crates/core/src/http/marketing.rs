@@ -376,9 +376,24 @@ impl Capabilities {
     }
 }
 
+#[derive(Clone, Copy)]
+pub enum TestChannel {
+    Email,
+    Sms,
+}
+
+#[derive(Clone, Copy)]
+pub enum TestTarget<'a> {
+    Email,
+    Sms {
+        review_token: &'a str,
+        replaces_request_id: Option<uuid::Uuid>,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum TestEmailStatus {
+pub enum TestDeliveryStatus {
     Accepted,
     Pending,
     Unconfirmed,
@@ -388,7 +403,7 @@ pub enum TestEmailStatus {
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TestEmailMode {
+pub enum TestDeliveryMode {
     Send,
     Check,
     ReplaceUnconfirmed,
@@ -396,8 +411,8 @@ pub enum TestEmailMode {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct TestEmailReceipt {
-    pub status: TestEmailStatus,
+pub struct TestDeliveryReceipt {
+    pub status: TestDeliveryStatus,
     pub request_id: uuid::Uuid,
 }
 
@@ -418,6 +433,16 @@ pub struct Preview {
     pub sms: u32,
     pub excluded: u32,
     pub sample: Vec<AudienceSample>,
+    pub sms_test: Option<SmsTestReview>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmsTestReview {
+    pub last_four: String,
+    pub message: String,
+    pub review_token: String,
+    pub generation: String,
 }
 
 #[derive(Clone)]
@@ -605,19 +630,34 @@ impl HttpTransport {
         self.send_campaign_write(req, &action.generation, body)
     }
 
-    pub fn send_campaign_test_email(
+    pub fn send_campaign_test(
         &self,
         campaign_id: &str,
         generation: &str,
         version: u32,
         request_id: uuid::Uuid,
-        mode: TestEmailMode,
-    ) -> Result<TestEmailReceipt, MutationError> {
+        mode: TestDeliveryMode,
+        target: TestTarget<'_>,
+    ) -> Result<TestDeliveryReceipt, MutationError> {
         let id = parse_id(campaign_id)?;
+        let mut body =
+            serde_json::json!({ "version": version, "requestId": request_id, "mode": mode });
+        let endpoint = match target {
+            TestTarget::Email => "test-email",
+            TestTarget::Sms {
+                review_token,
+                replaces_request_id,
+            } => {
+                body["reviewToken"] = serde_json::Value::String(review_token.to_owned());
+                if let Some(previous) = replaces_request_id {
+                    body["replacesRequestId"] = serde_json::json!(previous);
+                }
+                "test-sms"
+            }
+        };
         let req = self
             .agent
-            .post(&format!("{}{PATH}/{id}/test-email", self.base_url));
-        let body = serde_json::json!({ "version": version, "requestId": request_id, "mode": mode });
+            .post(&format!("{}{PATH}/{id}/{endpoint}", self.base_url));
         self.send_campaign_write(req, generation, body.to_string())
     }
 

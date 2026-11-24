@@ -67,6 +67,7 @@ describe("route mapping", () => {
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/queue",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/cancel",
       "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/test-email",
+      "/admin/marketing/campaigns/aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa/test-sms",
       "/admin/gift-cards?status=active",
       "/admin/gift-cards/check",
       "/admin/gift-cards/eligible-services",

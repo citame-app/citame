@@ -97,6 +97,10 @@ Texting people is regulated and the rules depend on where you and your clients a
 
 Use a sender on your own domain with SPF, DKIM and DMARC set up at your relay; without them reminders land in spam. Mailpit and `no-reply@localhost` are for development only.
 
+## Campaign SMS tests
+
+Set `NOTIFY_CAMPAIGN_TEST_SMS_TO` to a number controlled by the centre in E.164 format and configure Twilio with `NOTIFY_SMS_PROVIDER=twilio`. An owner with a verified account email can open a saved SMS or optimized draft in Web or Desktop, choose **Review recipients** and send one test. Citame shows the last four digits of the configured destination. The test goes directly through the provider and creates no audience deliveries. When the provider outcome is uncertain, check the displayed phone before explicitly sending a replacement.
+
 ## What is verified and what is not
 
 Verified by automated tests: scheduling and DST maths, transactional hooks (REST, sync push and service/MCP path), worker claims, retries, dead letter, crash recovery and many-workers-send-once against real Postgres with a fake provider, SMTP delivery against a real local SMTP server, Twilio request shape against a stub, templates, signed links, preferences, opt-out, and the web pages (unit tests, Playwright with axe at two viewports, light and dark). **Not verified:** delivery through a real relay or the real Twilio API.

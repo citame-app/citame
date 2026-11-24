@@ -2,7 +2,8 @@ import {
   type CampaignCreate,
   type CampaignQuery,
   type CampaignQueue,
-  type CampaignTestEmail,
+  type CampaignSmsTestReview,
+  type CampaignTestRequest,
   type CampaignUpdate,
   campaignCapabilitySchema,
   campaignComparisonSchema,
@@ -10,7 +11,7 @@ import {
   campaignListSchema,
   campaignPreviewSchema,
   campaignSchema,
-  campaignTestEmailReceiptSchema,
+  campaignTestReceiptSchema,
   type MarketingConsentInput,
   marketingConsentSchema,
 } from "@sob/contracts";
@@ -34,8 +35,19 @@ export function marketingEndpoints(client: ApiClient) {
     update: (id: string, input: CampaignUpdate) =>
       client.patch(`${base}/${id}`, input, campaignSchema),
     preview: (id: string) => client.get(`${base}/${id}/preview`, campaignPreviewSchema),
-    testEmail: (id: string, input: CampaignTestEmail) =>
-      client.post(`${base}/${id}/test-email`, input, campaignTestEmailReceiptSchema),
+    testDelivery: (
+      id: string,
+      input: CampaignTestRequest & { replacesRequestId?: string },
+      smsReview?: CampaignSmsTestReview,
+    ) =>
+      smsReview
+        ? client.post(
+            `${base}/${id}/test-sms`,
+            { ...input, reviewToken: smsReview.reviewToken },
+            campaignTestReceiptSchema,
+            { reviewedGeneration: smsReview.generation },
+          )
+        : client.post(`${base}/${id}/test-email`, input, campaignTestReceiptSchema),
     queue: (id: string, input: CampaignQueue) =>
       client.post(`${base}/${id}/queue`, input, campaignSchema),
     cancel: (id: string, version: number) =>

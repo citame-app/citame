@@ -3,7 +3,8 @@ import {
   type Campaign,
   type CampaignDraft,
   type CampaignQueue,
-  type CampaignTestEmail,
+  type CampaignSmsTestReview,
+  type CampaignTestRequest,
   campaignDraftSchema,
   campaignEmailHasBookingLink,
   campaignEmailLayoutSchema,
@@ -11,7 +12,7 @@ import {
   campaignStatusSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { TextField } from "~/components/ui/field";
@@ -830,6 +831,112 @@ export function campaignScheduledInstant(value: string, timeZone: string): strin
     throw Error("This local time does not exist");
   return instant;
 }
+function useCampaignDeliveryTest(campaign: Campaign) {
+  return useMutation({
+    mutationFn: ({
+      smsReview,
+      ...request
+    }: CampaignTestRequest & { smsReview?: CampaignSmsTestReview; replacesRequestId?: string }) =>
+      api().marketing.testDelivery(campaign.id, request, smsReview),
+  });
+}
+
+function CampaignTestButton({
+  test,
+  disabled,
+  smsReview,
+  version,
+}: {
+  test: ReturnType<typeof useCampaignDeliveryTest>;
+  disabled: boolean;
+  smsReview?: CampaignSmsTestReview;
+  version: number;
+}) {
+  const { t } = useI18n();
+  const targetId = useId();
+  const lastFour = smsReview?.lastFour;
+  const sameReview = !smsReview || test.variables?.smsReview?.reviewToken === smsReview.reviewToken;
+  const result = sameReview ? test.data : undefined;
+  const error = sameReview ? test.error : null;
+  const status = result?.status;
+  const retry = Boolean(error) || status === "pending";
+  const conflict =
+    error instanceof ApiError &&
+    (error.code === "version_conflict" || error.code === "sync_generation_changed");
+  const labels = lastFour
+    ? ({
+        send: "marketing.testSms",
+        check: "marketing.testSmsCheck",
+        again: "marketing.testSmsAgain",
+        accepted: "marketing.testSmsSent",
+        rejected: "marketing.testSmsRejected",
+        failed: "marketing.testSmsFailed",
+      } as const)
+    : ({
+        send: "marketing.testEmail",
+        check: "marketing.testEmailCheck",
+        again: "marketing.testEmailAgain",
+        accepted: "marketing.testEmailSent",
+        rejected: "marketing.testEmailRejected",
+        failed: "marketing.testEmailFailed",
+      } as const);
+  const request = () => {
+    const requestId = retry ? (result?.requestId ?? test.variables?.requestId) : undefined;
+    const mode = retry ? "check" : status === "unconfirmed" ? "replace_unconfirmed" : "send";
+    test.mutate({
+      version,
+      smsReview,
+      replacesRequestId:
+        smsReview && mode === "replace_unconfirmed" ? result?.requestId : undefined,
+      requestId: requestId ?? crypto.randomUUID(),
+      mode,
+    });
+  };
+  return (
+    <div className="space-y-2">
+      {lastFour && (
+        <p id={targetId} className="text-sm text-muted">
+          {t("marketing.testSmsTarget", { lastFour })}
+        </p>
+      )}
+      {smsReview && (
+        <div className="rounded-lg border border-line bg-sunken p-3 text-sm">
+          <p className="font-medium">{t("marketing.sms")}</p>
+          <p className="whitespace-pre-wrap break-words">{smsReview.message}</p>
+        </div>
+      )}
+      <Button
+        type="button"
+        variant="secondary"
+        aria-describedby={smsReview ? targetId : undefined}
+        loading={test.isPending}
+        disabled={disabled || conflict}
+        onClick={request}
+      >
+        {t(
+          retry && !conflict ? labels.check : status === "unconfirmed" ? labels.again : labels.send,
+        )}
+      </Button>
+      <p role="status" className="text-sm text-success-fg">
+        {status === "accepted" && t(labels.accepted)}
+        {status === "pending" && t("marketing.testEmailPending")}
+        {status === "not_requested" && t("marketing.testEmailNotRequested")}
+      </p>
+      {(error || status === "unconfirmed" || status === "rejected") && (
+        <p role="alert" className="text-sm text-danger-fg">
+          {t(
+            conflict
+              ? "marketing.testEmailChanged"
+              : status === "rejected"
+                ? labels.rejected
+                : labels.failed,
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function CampaignReview({
   campaign,
   viewerId,
@@ -858,23 +965,10 @@ function CampaignReview({
     queryKey: ["marketing", "capabilities", viewerId],
     queryFn: () => api().marketing.capabilities(),
   });
-  const testEmail = useMutation({
-    mutationFn: (request: CampaignTestEmail) => api().marketing.testEmail(campaign.id, request),
-  });
-  const testStatus = testEmail.data?.status;
-  const retryTest = testEmail.isError || testStatus === "pending";
-  const testConflict =
-    testEmail.error instanceof ApiError && testEmail.error.code === "version_conflict";
-  const requestTestEmail = () => {
-    const requestId = retryTest
-      ? (testEmail.data?.requestId ?? testEmail.variables?.requestId)
-      : undefined;
-    testEmail.mutate({
-      version: campaign.version,
-      requestId: requestId ?? crypto.randomUUID(),
-      mode: retryTest ? "check" : testStatus === "unconfirmed" ? "replace_unconfirmed" : "send",
-    });
-  };
+  const smsReview = audience.data?.smsTest;
+  const testEmail = useCampaignDeliveryTest(campaign);
+  const testSms = useCampaignDeliveryTest(campaign);
+  const testing = testEmail.isPending || testSms.isPending;
   const reviewMatches =
     audience.data?.campaignId === campaign.id && audience.data.version === campaign.version;
   let scheduledFor: string | null = null,
@@ -911,13 +1005,17 @@ function CampaignReview({
         ? capabilities.data.sms
         : capabilities.data.email || capabilities.data.sms);
   const close = () => {
-    if (queue.isPending || testEmail.isPending) return;
+    if (queue.isPending || testing) return;
     if (uncertain) setDiscard(true);
     else onClose();
   };
-  const accessError = [audience.error, capabilities.error, queue.error, testEmail.error].find(
-    lostMarketingAccess,
-  );
+  const accessError = [
+    audience.error,
+    capabilities.error,
+    queue.error,
+    testEmail.error,
+    testSms.error,
+  ].find(lostMarketingAccess);
   if (accessError) return <MarketingAccessError error={accessError} onClose={onClose} />;
   return (
     <>
@@ -929,11 +1027,7 @@ function CampaignReview({
         description={t("marketing.reviewHelp")}
         footer={
           <div className="flex flex-wrap justify-end gap-3">
-            <Button
-              variant="secondary"
-              onClick={close}
-              disabled={queue.isPending || testEmail.isPending}
-            >
+            <Button variant="secondary" onClick={close} disabled={queue.isPending || testing}>
               {t("admin.cancel")}
             </Button>
             <Button
@@ -941,7 +1035,7 @@ function CampaignReview({
               disabled={
                 !online ||
                 queue.isPending ||
-                testEmail.isPending ||
+                testing ||
                 (!uncertain &&
                   (!configured ||
                     !audience.data ||
@@ -998,52 +1092,25 @@ function CampaignReview({
           {campaign.trigger !== "manual" && (
             <p className="text-sm text-muted">{t("marketing.automaticHelp")}</p>
           )}
-          {isOwner &&
-            capabilities.data?.canTestEmail &&
-            campaign.channel !== "sms" &&
-            reviewMatches &&
-            !audience.isError && (
-              <div className="space-y-2">
-                <Button
-                  variant="secondary"
-                  loading={testEmail.isPending}
-                  disabled={
-                    !online ||
-                    audience.isFetching ||
-                    testEmail.isPending ||
-                    queue.isPending ||
-                    testConflict
-                  }
-                  onClick={requestTestEmail}
-                >
-                  {t(
-                    retryTest && !testConflict
-                      ? "marketing.testEmailCheck"
-                      : testStatus === "unconfirmed"
-                        ? "marketing.testEmailAgain"
-                        : "marketing.testEmail",
-                  )}
-                </Button>
-                <p role="status" className="text-sm text-success-fg">
-                  {testStatus === "accepted" && t("marketing.testEmailSent")}
-                  {testStatus === "pending" && t("marketing.testEmailPending")}
-                  {testStatus === "not_requested" && t("marketing.testEmailNotRequested")}
-                </p>
-                {(testEmail.isError ||
-                  testStatus === "unconfirmed" ||
-                  testStatus === "rejected") && (
-                  <p role="alert" className="text-sm text-danger-fg">
-                    {t(
-                      testConflict
-                        ? "marketing.testEmailChanged"
-                        : testStatus === "rejected"
-                          ? "marketing.testEmailRejected"
-                          : "marketing.testEmailFailed",
-                    )}
-                  </p>
-                )}
-              </div>
-            )}
+          {isOwner && reviewMatches && !audience.isError && (
+            <>
+              {capabilities.data?.canTestEmail && campaign.channel !== "sms" && (
+                <CampaignTestButton
+                  test={testEmail}
+                  version={campaign.version}
+                  disabled={!online || audience.isFetching || testing || queue.isPending}
+                />
+              )}
+              {smsReview && campaign.channel !== "email" && (
+                <CampaignTestButton
+                  test={testSms}
+                  version={campaign.version}
+                  disabled={!online || audience.isFetching || testing || queue.isPending}
+                  smsReview={smsReview}
+                />
+              )}
+            </>
+          )}
           {capabilities.isError ? (
             <ErrorState error={capabilities.error} />
           ) : (

@@ -17,11 +17,11 @@ import { getEmailDelivery, resolveNotificationEmail, updateEmailDelivery } from 
 import { createProviders } from "./providers";
 
 export function emailDeliveryRoutes(
-  { db, config, emailFetch, disableEmailDeliveryTest }: AppDeps,
+  { db, config, emailFetch, disableProviderTests }: AppDeps,
   limiter: RateLimiter,
 ) {
   async function sendTest(c: Context<AppEnv>, revision?: string | null) {
-    if (disableEmailDeliveryTest)
+    if (disableProviderTests)
       throw new DomainError("forbidden", "Los envíos están desactivados en las pruebas locales.");
     const { email, userId } = c.get("principal");
     const budget = await limiter.hit("email-delivery-test", userId, {

@@ -134,6 +134,13 @@ const envSchema = z.object({
   TWILIO_AUTH_TOKEN: z.string().optional(),
   /** Sender number or messaging service id, E.164 or `MG...`. */
   TWILIO_FROM: z.string().optional(),
+  NOTIFY_CAMPAIGN_TEST_SMS_TO: z.preprocess(
+    (value) => (value === "" ? undefined : value),
+    z
+      .string()
+      .regex(/^\+[1-9]\d{7,14}$/)
+      .optional(),
+  ),
   NOTIFY_POLL_INTERVAL_MS: positiveInt.default(5000),
   NOTIFY_BATCH_SIZE: positiveInt.default(10),
   /** How long a claimed job stays invisible to other workers before it is retried. */
@@ -174,6 +181,7 @@ export interface NotificationConfig {
   externalWorkerEnabled?: boolean;
   email: { provider: "none" | "smtp"; smtpUrl?: string; from: string };
   sms: { provider: "none" | "twilio"; accountSid?: string; authToken?: string; from?: string };
+  campaignTestSmsTo?: string;
   pollIntervalMs: number;
   batchSize: number;
   visibilityTimeoutSeconds: number;
@@ -429,6 +437,7 @@ export function loadConfig(input: Record<string, string | undefined> = process.e
         authToken: e.TWILIO_AUTH_TOKEN,
         from: e.TWILIO_FROM,
       },
+      campaignTestSmsTo: e.NOTIFY_CAMPAIGN_TEST_SMS_TO,
       pollIntervalMs: e.NOTIFY_POLL_INTERVAL_MS,
       batchSize: e.NOTIFY_BATCH_SIZE,
       visibilityTimeoutSeconds: e.NOTIFY_VISIBILITY_TIMEOUT_SECONDS,

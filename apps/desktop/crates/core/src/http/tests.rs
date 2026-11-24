@@ -71,7 +71,22 @@ fn signed_in(base: &str) -> HttpTransport {
 }
 
 #[test]
-fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation() {
+fn campaign_tests_replay_the_same_review_and_check_the_server_generation() {
+    for (target, endpoint) in [
+        (marketing::TestTarget::Email, "test-email"),
+        (
+            marketing::TestTarget::Sms {
+                review_token: "sms-review",
+                replaces_request_id: None,
+            },
+            "test-sms",
+        ),
+    ] {
+        check_campaign_test_replay(target, endpoint);
+    }
+}
+
+fn check_campaign_test_replay(target: marketing::TestTarget<'_>, endpoint: &str) {
     let id = "0198f5a0-7b1c-7000-8000-000000000210";
     let request_id = uuid::Uuid::now_v7();
     let (base, writes) = serve(vec![
@@ -88,26 +103,28 @@ fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation(
     ]);
     let desk = signed_in(&base);
     assert_eq!(
-        desk.send_campaign_test_email(
+        desk.send_campaign_test(
             id,
             "reviewed",
             3,
             request_id,
-            marketing::TestEmailMode::Send
+            marketing::TestDeliveryMode::Send,
+            target,
         )
         .unwrap(),
-        marketing::TestEmailReceipt {
-            status: marketing::TestEmailStatus::Accepted,
+        marketing::TestDeliveryReceipt {
+            status: marketing::TestDeliveryStatus::Accepted,
             request_id,
         },
     );
     assert!(matches!(
-        desk.send_campaign_test_email(
+        desk.send_campaign_test(
             id,
             "reviewed",
             3,
             request_id,
-            marketing::TestEmailMode::Check
+            marketing::TestDeliveryMode::Check,
+            target,
         ),
         Err(marketing::MutationError::Transport(
             TransportError::ReplicaGenerationChanged
@@ -117,7 +134,7 @@ fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation(
     assert_eq!(writes.len(), 2);
     let request = &writes[0];
     assert!(request.starts_with(&format!(
-        "POST /admin/marketing/campaigns/{id}/test-email HTTP/1.1"
+        "POST /admin/marketing/campaigns/{id}/{endpoint} HTTP/1.1"
     )));
     assert!(
         request
@@ -126,16 +143,15 @@ fn campaign_test_email_replays_the_same_review_and_checks_the_server_generation(
     );
     let body: serde_json::Value =
         serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(
-        body,
-        serde_json::json!({ "version": 3, "requestId": request_id, "mode": "send" })
-    );
+    let mut expected = serde_json::json!({ "version": 3, "requestId": request_id, "mode": "send" });
+    if let marketing::TestTarget::Sms { review_token, .. } = target {
+        expected["reviewToken"] = serde_json::json!(review_token);
+    }
+    assert_eq!(body, expected);
     let check: serde_json::Value =
         serde_json::from_str(writes[1].split_once("\r\n\r\n").unwrap().1).unwrap();
-    assert_eq!(
-        check,
-        serde_json::json!({ "version": 3, "requestId": request_id, "mode": "check" })
-    );
+    expected["mode"] = serde_json::json!("check");
+    assert_eq!(check, expected);
 }
 
 #[test]

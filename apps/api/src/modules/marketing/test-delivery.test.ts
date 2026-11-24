@@ -1,11 +1,26 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { type CampaignEmailLayout, campaignTestEmailReceiptSchema } from "@sob/contracts";
-import { auditLog, marketingCampaign, marketingDelivery, user } from "@sob/db";
+import {
+  type CampaignEmailLayout,
+  campaignPreviewSchema,
+  campaignTestReceiptSchema,
+  DESKTOP_CLIENT_ID,
+  DESKTOP_SIGN_IN_SCOPE,
+} from "@sob/contracts";
+import { auditLog, marketingCampaign, marketingDelivery, staffProfile, user } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
+import { Hono } from "hono";
 import { actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
+import { createAuth } from "../../auth/auth";
+import { type AppEnv, loadPrincipal, requireAuth } from "../../auth/principal";
+import { DomainError } from "../../errors";
+import { respondError } from "../../http";
+import type { McpIdentity } from "../../mcp/verify";
 
 const messages: { to: string; content: string }[] = [];
+const testPhone = "+15005550006";
+const smsMessages: URLSearchParams[] = [];
+let smsResult = 201;
 let smtpResult: "accept" | "reject" | "disconnect" = "accept";
 let smtpAcknowledgement: Promise<void> | null = null;
 const smtp = createServer((socket) => {
@@ -65,6 +80,20 @@ beforeAll(async () => {
       NOTIFY_WORKER_ENABLED: "false",
       NOTIFY_EMAIL_PROVIDER: "smtp",
       SMTP_URL: `smtp://127.0.0.1:${address.port}`,
+      NOTIFY_SMS_PROVIDER: "twilio",
+      TWILIO_ACCOUNT_SID: "AC-test-fixture",
+      TWILIO_AUTH_TOKEN: "test-fixture",
+      TWILIO_FROM: "+15005550007",
+      NOTIFY_CAMPAIGN_TEST_SMS_TO: testPhone,
+    },
+    deps: {
+      smsFetch: Object.assign(
+        async (_url: string | URL | Request, init?: RequestInit) => {
+          if (init?.body instanceof URLSearchParams) smsMessages.push(init.body);
+          return Response.json({ sid: "SM-test-fixture" }, { status: smsResult });
+        },
+        { preconnect: fetch.preconnect },
+      ),
     },
   });
 });
@@ -74,7 +103,7 @@ afterAll(async () => {
   await new Promise<void>((closed) => smtp.close(() => closed()));
 });
 
-async function prepareDraft(emailLayout?: CampaignEmailLayout) {
+async function prepareDraft(emailLayout?: CampaignEmailLayout, channel: "email" | "sms" = "email") {
   await t.reset();
   messages.length = 0;
   smtpResult = "accept";
@@ -86,12 +115,16 @@ async function prepareDraft(emailLayout?: CampaignEmailLayout) {
       staffProfileId: fixtures.anaId,
     }),
   ]);
-  return { owner, staff, id: await createDraft(owner.cookie, emailLayout), root };
+  return { owner, staff, id: await createDraft(owner.cookie, emailLayout, channel), root };
 }
 
 const root = "/admin/marketing/campaigns";
 
-async function createDraft(cookie: string, emailLayout?: CampaignEmailLayout) {
+async function createDraft(
+  cookie: string,
+  emailLayout?: CampaignEmailLayout,
+  channel: "email" | "sms" = "email",
+) {
   const id = crypto.randomUUID();
   const create = await json(
     t.app,
@@ -100,11 +133,11 @@ async function createDraft(cookie: string, emailLayout?: CampaignEmailLayout) {
     {
       id,
       name: "Preview fixture",
-      channel: "email",
-      subject: "Hello {{first_name}}",
-      emailBody: "Welcome to {{salon_name}}. {{booking_url}}",
+      channel,
+      subject: channel === "email" ? "Hello {{first_name}}" : "",
+      emailBody: channel === "email" ? "Welcome to {{salon_name}}. {{booking_url}}" : "",
       ...(emailLayout && { emailLayout }),
-      smsBody: "",
+      smsBody: channel === "sms" ? "Hello {{first_name}} from {{salon_name}}" : "",
       audience: {},
       trigger: "manual",
       delayMinutes: 0,
@@ -115,6 +148,143 @@ async function createDraft(cookie: string, emailLayout?: CampaignEmailLayout) {
   expect(create.status, await create.clone().text()).toBe(201);
   return id;
 }
+
+test("SMS tests only reach the configured number and do not replay uncertain sends", async () => {
+  const { owner, staff, id } = await prepareDraft(undefined, "sms");
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "manager" })
+    .where(eq(staffProfile.userId, staff.userId));
+  smsMessages.length = 0;
+  smsResult = 500;
+  const path = `${root}/${id}/test-sms`;
+  const preview = async (cookie: string) =>
+    campaignPreviewSchema.parse(
+      await (await json(t.app, `${root}/${id}/preview`, "GET", undefined, cookie)).json(),
+    );
+  const review = (await preview(owner.cookie)).smsTest;
+  if (!review) throw new Error("Expected a reviewed test SMS");
+  expect(review).toMatchObject({
+    lastFour: "0006",
+    message: "Hello {{first_name}} from {{salon_name}}",
+  });
+  expect(JSON.stringify(review)).not.toContain(testPhone);
+  expect((await preview(staff.cookie)).smsTest).toBeUndefined();
+  const packet = { version: 1, requestId: crypto.randomUUID(), reviewToken: review.reviewToken };
+  const send = (cookie: string, body: unknown = packet, generation = review.generation) =>
+    t.app.request(path, {
+      method: "POST",
+      headers: {
+        origin: "http://localhost:3000",
+        cookie,
+        "content-type": "application/json",
+        "x-citame-generation": generation,
+      },
+      body: JSON.stringify(body),
+    });
+  expect((await send(staff.cookie)).status).toBe(403);
+  expect((await send(owner.cookie, { ...packet, to: "+34600000000" })).status).toBe(400);
+  expect((await send(owner.cookie, { ...packet, version: 2 })).status).toBe(409);
+  expect((await send(owner.cookie, packet, "old-generation")).status).toBe(409);
+  expect((await json(t.app, path, "POST", packet, owner.cookie)).status).toBe(409);
+  t.config.notifications.campaignTestSmsTo = "+15005560006";
+  try {
+    expect((await send(owner.cookie)).status).toBe(409);
+  } finally {
+    t.config.notifications.campaignTestSmsTo = testPhone;
+  }
+  expect((await send(owner.cookie, { ...packet, mode: "check" })).status).toBe(200);
+  expect(smsMessages).toHaveLength(0);
+
+  const first = await send(owner.cookie);
+  expect(await first.json()).toEqual({ status: "unconfirmed", requestId: packet.requestId });
+  const replay = await send(owner.cookie, { ...packet, mode: "check" });
+  expect(await replay.json()).toEqual({ status: "unconfirmed", requestId: packet.requestId });
+  expect(smsMessages).toHaveLength(1);
+  expect(smsMessages[0]?.get("To")).toBe(testPhone);
+  expect(smsMessages[0]?.get("Body")).toContain(
+    "[Prueba / Test] Hello preview-owner from Test Salon",
+  );
+
+  smsResult = 201;
+  const rotatedPhone = "+15005550009";
+  t.config.notifications.campaignTestSmsTo = rotatedPhone;
+  try {
+    const rotated = (await preview(owner.cookie)).smsTest;
+    if (!rotated) throw new Error("Expected the review for the rotated number");
+    const requestId = crypto.randomUUID();
+    const sent = await send(owner.cookie, {
+      ...packet,
+      requestId,
+      reviewToken: rotated.reviewToken,
+    });
+    expect(await sent.json()).toEqual({ status: "accepted", requestId });
+    expect(smsMessages[1]?.get("To")).toBe(rotatedPhone);
+  } finally {
+    t.config.notifications.campaignTestSmsTo = testPhone;
+  }
+  const secondId = crypto.randomUUID();
+  const second = await send(owner.cookie, {
+    ...packet,
+    requestId: secondId,
+    mode: "replace_unconfirmed",
+    replacesRequestId: packet.requestId,
+  });
+  expect(await second.json()).toEqual({ status: "accepted", requestId: secondId });
+  const staleReplacement = await send(owner.cookie, {
+    ...packet,
+    requestId: crypto.randomUUID(),
+    mode: "replace_unconfirmed",
+    replacesRequestId: packet.requestId,
+  });
+  expect(await staleReplacement.json()).toEqual({ status: "accepted", requestId: secondId });
+  expect(smsMessages).toHaveLength(3);
+  expect((await send(owner.cookie, { ...packet, requestId: crypto.randomUUID() })).status).toBe(
+    429,
+  );
+  expect(smsMessages).toHaveLength(3);
+  const emailDraft = await createDraft(owner.cookie);
+  for (let i = 0; i < 3; i++) {
+    const email = await json(
+      t.app,
+      `${root}/${emailDraft}/test-email`,
+      "POST",
+      { version: 1, requestId: crypto.randomUUID() },
+      owner.cookie,
+    );
+    expect(await email.json()).toMatchObject({ status: "accepted" });
+  }
+  expect(messages).toHaveLength(3);
+  expect(await t.db.select().from(marketingDelivery)).toEqual([]);
+});
+
+test("the desktop scope admits the SMS mutation and fences other methods", async () => {
+  const { owner, id } = await prepareDraft(undefined, "sms");
+  const principal = await loadPrincipal(t.db, owner.userId);
+  if (!principal) throw new Error("Expected the test owner");
+  const auth = createAuth({ db: t.db, valkey: t.valkey.client, config: t.config });
+  const path = `${root}/${id}/test-sms`;
+  const verified: McpIdentity = {
+    principal,
+    clientId: DESKTOP_CLIENT_ID,
+    scopes: [DESKTOP_SIGN_IN_SCOPE],
+  };
+  const app = new Hono<AppEnv>();
+  app.onError((error, c) => {
+    if (error instanceof DomainError) return respondError(c, error);
+    throw error;
+  });
+  app.use("*", requireAuth(auth, t.db, { verify: async () => verified }));
+  app.all(path, (c) => c.json({ desktop: c.get("desktopRequest") }));
+  const options = { headers: { authorization: "Bearer synthetic-test-value" } };
+  expect(await (await app.request(path, { ...options, method: "POST" })).json()).toEqual({
+    desktop: true,
+  });
+  expect((await app.request(path, options)).status).toBe(403);
+  expect((await app.request(path, { ...options, method: "PATCH" })).status).toBe(403);
+  verified.scopes.length = 0;
+  expect((await app.request(path, { ...options, method: "POST" })).status).toBe(403);
+});
 
 test("only the verified owner receives a reviewed test, with a safe replay", async () => {
   const { owner, staff, id, root } = await prepareDraft({
@@ -148,7 +318,7 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   for (const response of await Promise.all([send(owner.cookie), send(owner.cookie)])) {
     expect(response.status).toBe(200);
     expect(["accepted", "pending"]).toContain(
-      campaignTestEmailReceiptSchema.parse(await response.json()).status,
+      campaignTestReceiptSchema.parse(await response.json()).status,
     );
   }
   const retry = await send(owner.cookie);
@@ -239,7 +409,7 @@ test("an SMTP rejection permits a fresh test and an ambiguous send requires anot
       owner.cookie,
     );
     expect(response.status, await response.clone().text()).toBe(200);
-    return campaignTestEmailReceiptSchema.parse(await response.json()).status;
+    return campaignTestReceiptSchema.parse(await response.json()).status;
   };
   smtpResult = "reject";
   const rejected = crypto.randomUUID();
@@ -274,7 +444,7 @@ test("a status check from another window never claims a new send", async () => {
       owner.cookie,
     );
     expect(response.status, await response.clone().text()).toBe(200);
-    return campaignTestEmailReceiptSchema.parse(await response.json());
+    return campaignTestReceiptSchema.parse(await response.json());
   };
   const first = crypto.randomUUID();
   const other = crypto.randomUUID();

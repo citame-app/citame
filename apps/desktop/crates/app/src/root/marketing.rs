@@ -2,8 +2,8 @@ use super::*;
 use chrono::{NaiveDateTime, TimeZone};
 use sob_core::http::marketing::{
     Campaign, CampaignAction, CampaignComparison, CampaignPage, Capabilities, Channel, Counts,
-    DeliveryPage, DeliveryStatus, LIVE_TOPIC, MutationError, Preview, Status, TestEmailMode,
-    TestEmailStatus, Trigger,
+    DeliveryPage, DeliveryStatus, LIVE_TOPIC, MutationError, Preview, Status, TestChannel,
+    TestDeliveryMode, TestDeliveryStatus, TestTarget, Trigger,
 };
 use sob_core::sync::TransportError;
 
@@ -34,7 +34,7 @@ pub(super) struct Desk {
     comparison: Option<CampaignComparison>,
     detail: Option<(Campaign, DeliveryPage)>,
     review: Option<(Preview, Capabilities)>,
-    test_email: Option<TestEmailResult>,
+    test_deliveries: TestDeliveries,
     search: Entity<TextField>,
     applied_search: String,
     schedule: Entity<TextField>,
@@ -54,13 +54,22 @@ pub(super) struct Desk {
 }
 
 impl Desk {
-    fn reviewed_email_test(&self) -> Option<(&Campaign, &str)> {
+    fn reviewed_delivery_test(&self, channel: TestChannel) -> Option<(&Campaign, &str)> {
         let (campaign, _) = self.detail.as_ref()?;
         let (preview, capability) = self.review.as_ref()?;
         let generation = self.generation.as_deref()?;
-        (capability.can_test_email
+        let allowed = match channel {
+            TestChannel::Email => capability.can_test_email && campaign.channel != Channel::Sms,
+            TestChannel::Sms => {
+                campaign.channel != Channel::Email
+                    && preview
+                        .sms_test
+                        .as_ref()
+                        .is_some_and(|test| test.generation == generation)
+            }
+        };
+        (allowed
             && campaign.status == Status::Draft
-            && campaign.channel != Channel::Sms
             && campaign.id == preview.campaign_id
             && campaign.version == preview.version)
             .then_some((campaign, generation))
@@ -105,7 +114,7 @@ impl Desk {
             })
         {
             self.review = None;
-            self.test_email = None;
+            self.test_deliveries = TestDeliveries::default();
             self.schedule.update(cx, |field, cx| field.set_text("", cx));
         }
         self.detail = Some((campaign, deliveries));
@@ -118,12 +127,14 @@ enum Request {
     Compare(Vec<String>),
     Detail(String, u32),
     Review(String),
-    TestEmail {
+    TestDelivery {
         campaign_id: String,
         generation: String,
         version: u32,
-        mode: TestEmailMode,
-        test: TestEmailResult,
+        mode: TestDeliveryMode,
+        sms_review_token: Option<String>,
+        replaces_request_id: Option<uuid::Uuid>,
+        test: TestDeliveryResult,
     },
     Write(CampaignAction),
     SaveDraft(sob_core::http::marketing::DraftWrite),
@@ -134,19 +145,60 @@ enum Loaded {
     Comparison(CampaignComparison),
     Detail(Campaign, DeliveryPage),
     Review(Preview, Capabilities),
-    TestEmail(TestEmailResult),
+    TestDelivery(TestDeliveryResult),
     Written(Campaign),
 }
 
 #[derive(Clone, Copy)]
-struct TestEmailResult {
+struct TestDeliveryResult {
+    channel: TestChannel,
     request_id: uuid::Uuid,
-    status: Option<TestEmailStatus>,
+    status: Option<TestDeliveryStatus>,
 }
 
-impl TestEmailResult {
-    fn for_retry(self) -> bool {
-        matches!(self.status, None | Some(TestEmailStatus::Pending))
+impl TestDeliveryResult {
+    fn mode(previous: Option<Self>) -> TestDeliveryMode {
+        match previous {
+            Some(Self {
+                status: None | Some(TestDeliveryStatus::Pending),
+                ..
+            }) => TestDeliveryMode::Check,
+            Some(Self {
+                status: Some(TestDeliveryStatus::Unconfirmed),
+                ..
+            }) => TestDeliveryMode::ReplaceUnconfirmed,
+            _ => TestDeliveryMode::Send,
+        }
+    }
+}
+
+#[derive(Default)]
+struct TestDeliveries {
+    email: Option<TestDeliveryResult>,
+    sms: Option<TestDeliveryResult>,
+    sms_review_token: Option<String>,
+}
+
+impl TestDeliveries {
+    fn update_sms_review(&mut self, token: Option<&str>) {
+        if self.sms_review_token.as_deref() != token {
+            self.sms = None;
+            self.sms_review_token = token.map(str::to_owned);
+        }
+    }
+
+    fn get(&self, channel: TestChannel) -> Option<TestDeliveryResult> {
+        match channel {
+            TestChannel::Email => self.email,
+            TestChannel::Sms => self.sms,
+        }
+    }
+
+    fn set(&mut self, test: TestDeliveryResult) {
+        match test.channel {
+            TestChannel::Email => self.email = Some(test),
+            TestChannel::Sms => self.sms = Some(test),
+        }
     }
 }
 
@@ -227,7 +279,7 @@ impl Root {
             comparison: None,
             detail: None,
             review: None,
-            test_email: None,
+            test_deliveries: TestDeliveries::default(),
             action: None,
             editor: None,
             links: None,
@@ -402,7 +454,7 @@ impl Root {
         let saving = matches!(request, Request::SaveDraft(_));
         let writing = saving || matches!(request, Request::Write(_));
         let test_request = match &request {
-            Request::TestEmail { test, .. } => Some(*test),
+            Request::TestDelivery { test, .. } => Some(*test),
             _ => None,
         };
         if matches!(request, Request::Review(_)) {
@@ -431,23 +483,34 @@ impl Root {
                             transport.marketing_preview(&id)?,
                             transport.marketing_capabilities()?,
                         ),
-                        Request::TestEmail {
+                        Request::TestDelivery {
                             campaign_id,
                             generation,
                             version,
                             mode,
+                            sms_review_token,
+                            replaces_request_id,
                             mut test,
                         } => {
-                            let receipt = transport.send_campaign_test_email(
+                            let receipt = transport.send_campaign_test(
                                 &campaign_id,
                                 &generation,
                                 version,
                                 test.request_id,
                                 mode,
+                                match test.channel {
+                                    TestChannel::Email => TestTarget::Email,
+                                    TestChannel::Sms => TestTarget::Sms {
+                                        replaces_request_id,
+                                        review_token: sms_review_token
+                                            .as_deref()
+                                            .ok_or(MutationError::Changed)?,
+                                    },
+                                },
                             )?;
                             test.status = Some(receipt.status);
                             test.request_id = receipt.request_id;
-                            Loaded::TestEmail(test)
+                            Loaded::TestDelivery(test)
                         }
                         Request::Write(action) => {
                             Loaded::Written(transport.act_on_campaign(&action)?)
@@ -496,7 +559,7 @@ impl Root {
                         desk.list = Some(list);
                         desk.detail = None;
                         desk.review = None;
-                        desk.test_email = None;
+                        desk.test_deliveries = TestDeliveries::default();
                         None
                     }
                     Ok(Loaded::Comparison(result)) => {
@@ -513,14 +576,20 @@ impl Root {
                                 && campaign.version == preview.version
                         }) && desk.generation == generation
                         {
+                            desk.test_deliveries.update_sms_review(
+                                preview
+                                    .sms_test
+                                    .as_ref()
+                                    .map(|review| review.review_token.as_str()),
+                            );
                             desk.review = Some((preview, capabilities));
                         } else {
                             desk.error = Some(Key::MarketingChanged);
                         }
                         None
                     }
-                    Ok(Loaded::TestEmail(test)) => {
-                        desk.test_email = Some(test);
+                    Ok(Loaded::TestDelivery(test)) => {
+                        desk.test_deliveries.set(test);
                         None
                     }
                     Err(error) if let Some(test) = test_request => {
@@ -532,10 +601,10 @@ impl Root {
                                 )
                         ) {
                             desk.review = None;
-                            desk.test_email = None;
+                            desk.test_deliveries = TestDeliveries::default();
                             desk.error = Some(Key::MarketingChanged);
                         } else {
-                            desk.test_email = Some(TestEmailResult {
+                            desk.test_deliveries.set(TestDeliveryResult {
                                 status: None,
                                 ..test
                             });
@@ -554,7 +623,7 @@ impl Root {
                         desk.action = None;
                         desk.uncertain = false;
                         desk.review = None;
-                        desk.test_email = None;
+                        desk.test_deliveries = TestDeliveries::default();
                         let id = campaign.id.clone();
                         desk.install_write_result(campaign, generation, cx);
                         Some(id)
@@ -651,29 +720,44 @@ impl Root {
         .detach();
     }
 
-    fn send_marketing_test_email(&mut self, cx: &mut Context<Self>) {
+    fn send_marketing_test(&mut self, channel: TestChannel, cx: &mut Context<Self>) {
         let Some(desk) = self
             .marketing_desk()
             .filter(|desk| !desk.busy && desk.action.is_none())
         else {
             return;
         };
-        let Some((campaign, generation)) = desk.reviewed_email_test() else {
+        let Some((campaign, generation)) = desk.reviewed_delivery_test(channel) else {
             return;
         };
-        let (request_id, mode) = match desk.test_email {
-            Some(previous) if previous.for_retry() => (previous.request_id, TestEmailMode::Check),
-            Some(previous) if previous.status == Some(TestEmailStatus::Unconfirmed) => {
-                (uuid::Uuid::now_v7(), TestEmailMode::ReplaceUnconfirmed)
-            }
-            _ => (uuid::Uuid::now_v7(), TestEmailMode::Send),
+        let previous = desk.test_deliveries.get(channel);
+        let mode = TestDeliveryResult::mode(previous);
+        let request_id = match (mode, previous) {
+            (TestDeliveryMode::Check, Some(previous)) => previous.request_id,
+            _ => uuid::Uuid::now_v7(),
         };
-        let request = Request::TestEmail {
+        let sms_review_token = if let TestChannel::Sms = channel {
+            desk.review
+                .as_ref()
+                .and_then(|(preview, _)| preview.sms_test.as_ref())
+                .map(|review| review.review_token.clone())
+        } else {
+            None
+        };
+        let request = Request::TestDelivery {
             campaign_id: campaign.id.clone(),
             generation: generation.to_owned(),
             version: campaign.version,
             mode,
-            test: TestEmailResult {
+            sms_review_token,
+            replaces_request_id: match (channel, mode, previous) {
+                (TestChannel::Sms, TestDeliveryMode::ReplaceUnconfirmed, Some(previous)) => {
+                    Some(previous.request_id)
+                }
+                _ => None,
+            },
+            test: TestDeliveryResult {
+                channel,
                 request_id,
                 status: None,
             },
@@ -1331,34 +1415,73 @@ impl Root {
                 .when(!capabilities.can_deliver(campaign.channel), |panel| {
                     panel.child(self.t(Key::MarketingDeliveryDisabled))
                 });
-            if desk.reviewed_email_test().is_some() {
+            for channel in [TestChannel::Email, TestChannel::Sms] {
+                if desk.reviewed_delivery_test(channel).is_none() {
+                    continue;
+                }
+                let (button, send, check, again, accepted, rejected, unconfirmed) = match channel {
+                    TestChannel::Email => (
+                        "send-marketing-test-email",
+                        Key::MarketingTestEmail,
+                        Key::MarketingTestEmailCheck,
+                        Key::MarketingTestEmailAgain,
+                        Key::MarketingTestEmailSent,
+                        Key::MarketingTestEmailRejected,
+                        Key::MarketingTestEmailFailed,
+                    ),
+                    TestChannel::Sms => (
+                        "send-marketing-test-sms",
+                        Key::MarketingTestSms,
+                        Key::MarketingTestSmsCheck,
+                        Key::MarketingTestSmsAgain,
+                        Key::MarketingTestSmsSent,
+                        Key::MarketingTestSmsRejected,
+                        Key::MarketingTestSmsFailed,
+                    ),
+                };
+                let result = desk.test_deliveries.get(channel);
+                if let TestChannel::Sms = channel
+                    && let Some(review) = &preview.sms_test
+                {
+                    body =
+                        body.child(div().text_sm().text_color(theme::muted()).child(i18n::fill(
+                            self.t(Key::MarketingTestSmsTarget),
+                            &[("lastFour", &review.last_four)],
+                        )));
+                    body = body.child(
+                        div()
+                            .rounded_md()
+                            .border_1()
+                            .border_color(theme::line())
+                            .p_3()
+                            .text_sm()
+                            .child(review.message.clone()),
+                    );
+                }
                 body = body
                     .when(ready && desk.action.is_none(), |panel| {
+                        let label = match TestDeliveryResult::mode(result) {
+                            TestDeliveryMode::Check => check,
+                            TestDeliveryMode::ReplaceUnconfirmed => again,
+                            TestDeliveryMode::Send => send,
+                        };
                         panel.child(self.marketing_button(
-                            "send-marketing-test-email",
-                            match desk.test_email {
-                                Some(test) if test.for_retry() => Key::MarketingTestEmailCheck,
-                                Some(test) if test.status == Some(TestEmailStatus::Unconfirmed) => {
-                                    Key::MarketingTestEmailAgain
-                                }
-                                _ => Key::MarketingTestEmail,
-                            },
+                            button,
+                            label,
                             Kind::Ghost,
-                            Root::send_marketing_test_email,
+                            move |root, cx| root.send_marketing_test(channel, cx),
                             cx,
                         ))
                     })
-                    .when_some(desk.test_email.as_ref(), |panel, result| {
+                    .when_some(result, |panel, result| {
                         panel.child(self.t(match result.status {
-                            Some(TestEmailStatus::Accepted) => Key::MarketingTestEmailSent,
-                            Some(TestEmailStatus::Pending) => Key::MarketingTestEmailPending,
-                            Some(TestEmailStatus::Rejected) => Key::MarketingTestEmailRejected,
-                            Some(TestEmailStatus::NotRequested) => {
+                            Some(TestDeliveryStatus::Accepted) => accepted,
+                            Some(TestDeliveryStatus::Pending) => Key::MarketingTestEmailPending,
+                            Some(TestDeliveryStatus::Rejected) => rejected,
+                            Some(TestDeliveryStatus::NotRequested) => {
                                 Key::MarketingTestEmailNotRequested
                             }
-                            Some(TestEmailStatus::Unconfirmed) | None => {
-                                Key::MarketingTestEmailFailed
-                            }
+                            Some(TestDeliveryStatus::Unconfirmed) | None => unconfirmed,
                         }))
                     });
             }
@@ -1549,6 +1672,24 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn changing_the_sms_review_clears_only_the_old_sms_outcome() {
+        let mut tests = TestDeliveries::default();
+        tests.update_sms_review(Some("initial"));
+        for channel in [TestChannel::Email, TestChannel::Sms] {
+            tests.set(TestDeliveryResult {
+                channel,
+                request_id: uuid::Uuid::now_v7(),
+                status: Some(TestDeliveryStatus::Unconfirmed),
+            });
+        }
+        tests.update_sms_review(Some("initial"));
+        assert!(tests.get(TestChannel::Sms).is_some());
+        tests.update_sms_review(Some("rotated"));
+        assert!(tests.get(TestChannel::Sms).is_none());
+        assert!(tests.get(TestChannel::Email).is_some());
+    }
+
     #[gpui::test]
     async fn comparison_clears_when_catalogue_access_is_revoked_without_a_marketing_event(
         cx: &mut gpui::TestAppContext,
@@ -1638,16 +1779,20 @@ mod tests {
             })).unwrap();
             let preview = serde_json::from_value(json!({
                 "campaignId":"synthetic","version":1,"audienceHash":"a".repeat(64),"eligible":1,
-                "email":1,"sms":0,"excluded":0,"sample":[]
+                "email":1,"sms":0,"excluded":0,"sample":[],
+                "smsTest": {"lastFour":"3210","message":"Example","reviewToken":"a".repeat(64),"generation":desk.generation}
             })).unwrap();
             desk.detail = Some((campaign, deliveries));
             desk.review = Some((preview, Capabilities { email:true, sms:false, worker:true, can_test_email: true }));
-            assert!(desk.reviewed_email_test().is_none());
+            assert!(desk.reviewed_delivery_test(TestChannel::Email).is_none());
             root.prepare_marketing_action(false, cx);
             let desk = root.marketing_desk().unwrap();
             assert!(desk.action.is_none());
             desk.review.as_mut().unwrap().0.version = 2;
-            assert!(desk.reviewed_email_test().is_some());
+            assert!(desk.reviewed_delivery_test(TestChannel::Email).is_some());
+            assert!(desk.reviewed_delivery_test(TestChannel::Sms).is_none());
+            desk.detail.as_mut().unwrap().0.channel = Channel::Optimized;
+            assert!(desk.reviewed_delivery_test(TestChannel::Sms).is_some());
             let first = format!("{} 10:00", (Utc::now() + Span::days(2)).with_timezone(&tz).date_naive());
             let second = format!("{} 10:00", (Utc::now() + Span::days(3)).with_timezone(&tz).date_naive());
             desk.schedule.update(cx, |field, cx| field.set_text(&first, cx));

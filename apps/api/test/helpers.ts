@@ -59,6 +59,7 @@ export interface SetupOptions {
       | "now"
       | "whatsappFetch"
       | "emailFetch"
+      | "smsFetch"
     >
   >;
 }

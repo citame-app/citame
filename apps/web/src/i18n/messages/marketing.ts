@@ -100,6 +100,14 @@ export const marketingEn = {
     "The email server rejected the test. Check its settings before trying again.",
   "marketing.testEmailFailed":
     "We couldn't confirm the test email. Check your inbox before retrying.",
+  "marketing.testSms": "Send test SMS",
+  "marketing.testSmsTarget": "Test SMS recipient ends in {lastFour}",
+  "marketing.testSmsCheck": "Check test SMS",
+  "marketing.testSmsAgain": "Send another test SMS",
+  "marketing.testSmsSent": "The SMS provider accepted the test. Check the test phone.",
+  "marketing.testSmsRejected":
+    "The SMS provider rejected the test. Check its settings before retrying.",
+  "marketing.testSmsFailed": "The test SMS is unconfirmed. Check the test phone before retrying.",
   "marketing.saveDraft": "Save draft",
   "marketing.leadDays": "Days before the birthday",
   "marketing.delay": "Delay after the visit (minutes)",
@@ -255,6 +263,15 @@ export const marketingEs: Record<keyof typeof marketingEn, string> = {
     "El servidor de correo rechazó la prueba. Revisa su configuración antes de reintentar.",
   "marketing.testEmailFailed":
     "No se pudo confirmar el envío de prueba. Revisa tu bandeja de entrada antes de reintentar.",
+  "marketing.testSms": "Enviar SMS de prueba",
+  "marketing.testSmsTarget": "El teléfono de prueba termina en {lastFour}",
+  "marketing.testSmsCheck": "Comprobar SMS de prueba",
+  "marketing.testSmsAgain": "Enviar otro SMS de prueba",
+  "marketing.testSmsSent": "El proveedor aceptó el SMS de prueba. Revisa el teléfono de prueba.",
+  "marketing.testSmsRejected":
+    "El proveedor rechazó el SMS. Revisa su configuración antes de reintentar.",
+  "marketing.testSmsFailed":
+    "El SMS de prueba está sin confirmar. Revisa el teléfono antes de reintentar.",
   "marketing.saveDraft": "Guardar borrador",
   "marketing.leadDays": "Días antes del cumpleaños",
   "marketing.delay": "Espera tras la visita (minutos)",

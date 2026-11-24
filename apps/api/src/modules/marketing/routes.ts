@@ -5,8 +5,9 @@ import {
   campaignDetailQuerySchema,
   campaignQuerySchema,
   campaignQueueSchema,
-  campaignTestEmailReceiptSchema,
-  campaignTestEmailSchema,
+  campaignTestReceiptSchema,
+  campaignTestRequestSchema,
+  campaignTestSmsSchema,
   campaignUpdateSchema,
   idSchema,
   marketingConsentInputSchema,
@@ -33,12 +34,12 @@ import {
   queueCampaign,
   updateCampaign,
 } from "./service";
-import { requestCampaignTestEmail, verifiedCampaignEmailRecipient } from "./test-email";
+import { canTestCampaignEmail, requestCampaignTest, reviewCampaignTestSms } from "./test-delivery";
 import { verifyMarketingOptOut } from "./tokens";
 
 const id = (value: string) => parseOrThrow(idSchema, value);
 
-export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {}) {
+export function marketingAdminRoutes(deps: AppDeps, { deliveryTests = false } = {}) {
   const now = deps.now ?? (() => new Date());
   const routes = new Hono<AppEnv>()
     .use("*", async (c, next) => {
@@ -46,7 +47,7 @@ export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {})
       const generation = c.req.header("x-citame-generation");
       if (
         c.req.method !== "GET" &&
-        (c.get("desktopRequest") || generation !== undefined) &&
+        (c.get("desktopRequest") || generation !== undefined || c.req.path.endsWith("/test-sms")) &&
         generation !== deps.config.syncReplicaGeneration
       )
         throw new DomainError(
@@ -58,16 +59,9 @@ export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {})
     })
     .get("/capabilities", async (c) => {
       const capabilities = marketingCapabilities(deps.config.notifications);
-      const principal = c.get("principal");
-      const canTestEmail =
-        emailTests &&
-        capabilities.email &&
-        !deps.disableEmailDeliveryTest &&
-        principal.role === "owner" &&
-        Boolean(await verifiedCampaignEmailRecipient(deps.db, principal.userId));
       return c.json({
         ...capabilities,
-        canTestEmail,
+        canTestEmail: deliveryTests && (await canTestCampaignEmail(deps, c.get("principal"))),
       });
     })
     .get("/campaigns", async (c) =>
@@ -114,17 +108,21 @@ export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {})
         ),
       ),
     )
-    .get("/campaigns/:id/preview", async (c) =>
-      c.json(
-        await previewCampaign(
-          deps.db,
-          id(c.req.param("id")),
-          c.get("principal"),
-          deps.config.notifications,
-          now(),
-        ),
-      ),
-    )
+    .get("/campaigns/:id/preview", async (c) => {
+      const campaignId = id(c.req.param("id"));
+      const principal = c.get("principal");
+      const preview = await previewCampaign(
+        deps.db,
+        campaignId,
+        principal,
+        deps.config.notifications,
+        now(),
+      );
+      const smsTest = deliveryTests
+        ? await reviewCampaignTestSms(deps, principal, campaignId, preview.version)
+        : undefined;
+      return c.json({ ...preview, smsTest });
+    })
     .post("/campaigns/:id/queue", async (c) =>
       c.json(
         await queueCampaign(
@@ -157,28 +155,37 @@ export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {})
         ),
       ),
     );
-  if (emailTests)
+  for (const channel of deliveryTests ? (["email", "sms"] as const) : []) {
     routes.post(
-      "/campaigns/:id/test-email",
+      `/campaigns/:id/test-${channel}`,
       bodyLimit({
         maxSize: 4096,
         onError: (c) =>
-          c.json(errorBody("validation_error", "Test email request is too large"), 413),
+          c.json(errorBody("validation_error", "Campaign test request is too large"), 413),
       }),
       async (c) => {
-        const result = await requestCampaignTestEmail(
+        const schema = channel === "sms" ? campaignTestSmsSchema : campaignTestRequestSchema;
+        const result = await requestCampaignTest(
           deps,
           c.get("principal"),
           id(c.req.param("id")),
-          parseOrThrow(campaignTestEmailSchema, await readJson(c)),
+          channel,
+          parseOrThrow(schema, await readJson(c)),
         );
         if ("retryAfterSeconds" in result) {
           c.header("Retry-After", String(result.retryAfterSeconds));
-          return c.json(errorBody("rate_limited", "Too many email tests; try again later"), 429);
+          return c.json(
+            errorBody(
+              "rate_limited",
+              `Too many ${channel === "email" ? "email" : "SMS"} tests; try again later`,
+            ),
+            429,
+          );
         }
-        return c.json(campaignTestEmailReceiptSchema.parse(result));
+        return c.json(campaignTestReceiptSchema.parse(result));
       },
     );
+  }
   return routes;
 }
 export function clientMarketingRoutes(deps: AppDeps) {

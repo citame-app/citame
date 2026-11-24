@@ -94,8 +94,9 @@ export interface AppDeps {
   paymentGateway?: PaymentGateway | null;
   whatsappFetch?: typeof fetch;
   emailFetch?: typeof fetch;
+  smsFetch?: typeof fetch;
   /** Disables manual provider tests in an isolated local instance. */
-  disableEmailDeliveryTest?: boolean;
+  disableProviderTests?: boolean;
   db: Database;
   valkey: RedisClient;
   config: AppConfig;
@@ -432,7 +433,7 @@ export function createApp(input: AppDeps): App {
   app.use("/admin/*", authenticated);
   app.route("/admin", adminRoutes(deps, auth));
   app.route("/admin/commerce", commerceAdminRoutes(deps));
-  app.route("/admin/marketing", marketingAdminRoutes(deps, { emailTests: true }));
+  app.route("/admin/marketing", marketingAdminRoutes(deps, { deliveryTests: true }));
   app.route("/admin/peak-prices", peakPriceAdminRoutes(deps));
   app.route("/admin/clients", clientMarketingRoutes(deps));
   app.route("/admin/inventory", inventoryRoutes(deps));

@@ -179,6 +179,13 @@ export const campaignCapabilitySchema = z.object({
   worker: z.boolean(),
   canTestEmail: z.boolean().optional(),
 });
+const campaignSmsTestReviewSchema = z.object({
+  lastFour: z.string().regex(/^\d{4}$/),
+  message: z.string(),
+  reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
+  generation: z.string().min(1),
+});
+export type CampaignSmsTestReview = z.infer<typeof campaignSmsTestReviewSchema>;
 export const campaignPreviewSchema = z.object({
   campaignId: idSchema,
   version: z.number().int().positive(),
@@ -187,6 +194,7 @@ export const campaignPreviewSchema = z.object({
   email: z.number().int().nonnegative(),
   sms: z.number().int().nonnegative(),
   excluded: z.number().int().nonnegative(),
+  smsTest: campaignSmsTestReviewSchema.optional(),
   sample: z
     .array(z.object({ clientId: idSchema, name: z.string(), channel: z.enum(["email", "sms"]) }))
     .max(BOOKING_INVITATION_MAX_CONTACTS),
@@ -199,17 +207,31 @@ export const campaignQueueSchema = z
   })
   .strict();
 export const campaignCancelSchema = z.object({ version: z.number().int().positive() }).strict();
-export const campaignTestEmailSchema = z.strictObject({
+export const campaignTestRequestSchema = z.strictObject({
   version: z.number().int().positive(),
   requestId: idSchema,
   mode: z.enum(["send", "check", "replace_unconfirmed"]).default("send"),
 });
-export const campaignTestEmailReceiptSchema = z.object({
+export const campaignTestReceiptSchema = z.object({
   status: z.enum(["accepted", "pending", "unconfirmed", "rejected", "not_requested"]),
   requestId: idSchema,
 });
-export type CampaignTestEmail = z.infer<typeof campaignTestEmailSchema>;
-export type CampaignTestEmailReceipt = z.infer<typeof campaignTestEmailReceiptSchema>;
+export const campaignTestSmsSchema = campaignTestRequestSchema
+  .extend({
+    reviewToken: campaignSmsTestReviewSchema.shape.reviewToken,
+    replacesRequestId: idSchema.optional(),
+  })
+  .refine(
+    ({ mode, replacesRequestId }) =>
+      (mode === "replace_unconfirmed") === Boolean(replacesRequestId),
+    {
+      path: ["replacesRequestId"],
+      message: "Identify the unconfirmed test when replacing it",
+    },
+  );
+export type CampaignTestRequest = z.infer<typeof campaignTestRequestSchema>;
+export type CampaignTestSms = z.infer<typeof campaignTestSmsSchema>;
+export type CampaignTestReceipt = z.infer<typeof campaignTestReceiptSchema>;
 export const marketingConsentSchema = z.object({
   clientId: idSchema,
   email: z.object({

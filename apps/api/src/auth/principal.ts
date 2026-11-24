@@ -139,7 +139,7 @@ export function requireAuth(
               /^\/admin\/accounting\/appointment-profitability\/[\da-f-]+\/costs$/.test(path));
       const campaignMutation =
         (method === "POST" &&
-          /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel|test-email))?$/.test(
+          /^\/admin\/marketing\/campaigns(?:\/[\da-f-]+\/(?:queue|cancel|test-(?:email|sms)))?$/.test(
             path,
           )) ||
         (method === "PATCH" && /^\/admin\/marketing\/campaigns\/[\da-f-]+$/.test(path));
@@ -175,7 +175,9 @@ export function requireAuth(
         (/^\/admin\/commerce\/checkouts\/[\da-f-]+\/reward(?:\/|$)/.test(path) &&
           method !== "POST") ||
         (path.startsWith("/admin/marketing/") &&
-          (method === "GET" ? /\/(?:queue|cancel|test-email)$/.test(path) : !campaignMutation)) ||
+          (method === "GET"
+            ? /\/(?:queue|cancel|test-(?:email|sms))$/.test(path)
+            : !campaignMutation)) ||
         ((path === "/admin/gift-cards" || path.startsWith("/admin/gift-cards/")) &&
           !giftCardMethod) ||
         (method !== "POST" &&

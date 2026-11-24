@@ -203,7 +203,7 @@ if (import.meta.main) {
       valkey,
       config,
       ...(desktopTest
-        ? { paymentGateway: null, disableEmailDeliveryTest: true }
+        ? { paymentGateway: null, disableProviderTests: true }
         : native
           ? {
               booksyNativePreview: {
