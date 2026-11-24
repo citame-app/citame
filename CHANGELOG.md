@@ -97,7 +97,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
-- Password reset and staff invitation submissions consume one email rate-limit attempt per request.
+- Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.
 
 - Production Compose waits for Caddy to load its listener configuration before reporting the gateway healthy.
 
