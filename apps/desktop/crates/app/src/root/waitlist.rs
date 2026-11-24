@@ -482,7 +482,10 @@ impl Root {
                         }
                         d.error = Some(message);
                     }
-                    _ => {}
+                    Some(ReloadNotice::ImportedRejected) => {
+                        d.error = Some(Key::WaitlistError);
+                    }
+                    None => {}
                 }
                 if changed {
                     d.clear_private_data();
@@ -494,7 +497,13 @@ impl Root {
                             Ok(WaitlistCacheWrite::Saved(pages)) => d.saved_pages = pages,
                             Ok(WaitlistCacheWrite::NewerRevision) => {
                                 // Acknowledgements stay visible while a new read replaces the stale page.
+                                let feedback = d.error;
                                 this.waitlist_request(Action::Read, cx);
+                                if let Some(feedback) = feedback
+                                    && let Overlay::Waitlist(desk) = &mut this.overlay
+                                {
+                                    desk.error = Some(feedback);
+                                }
                                 return;
                             }
                             Ok(WaitlistCacheWrite::AccessChanged) => {
@@ -502,7 +511,12 @@ impl Root {
                                 cx.notify();
                                 return;
                             }
-                            Err(_) => {}
+                            Err(_) => {
+                                d.error = d.error.or(Some(Key::WaitlistError));
+                                d.cached = d.data.is_some();
+                                cx.notify();
+                                return;
+                            }
                         }
                         d.page = data.page;
                         if d.expanded.as_ref().is_some_and(|id| !data.entries.iter().any(|entry| entry.id == *id)) {
@@ -515,9 +529,6 @@ impl Root {
                         }
                         d.data = Some(data);
                         d.cached = false;
-                        if matches!(notice, Some(ReloadNotice::ImportedRejected)) {
-                            d.error = Some(Key::WaitlistError);
-                        }
                     }
                     Err(_) => {
                         d.error = Some(Key::WaitlistError);
