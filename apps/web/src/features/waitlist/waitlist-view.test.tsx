@@ -238,3 +238,162 @@ test("a professional can read an unassigned request without being offered a forb
   expect(await screen.findByRole("heading", { name: "Unassigned haircut" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Cancel waitlist request" })).toBeNull();
 });
+
+test("an uncertain waitlist booking keeps the reviewed request through a list refresh", async () => {
+  const entryId = crypto.randomUUID();
+  const offerId = crypto.randomUUID();
+  const appointmentId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + 30000).toISOString();
+  const entry = {
+    id: entryId,
+    clientId,
+    clientName: "Synthetic guest",
+    serviceIds: [serviceId],
+    serviceNames: ["Haircut"],
+    staffId,
+    fromDate: now.slice(0, 10),
+    toDate: now.slice(0, 10),
+    fromTime: "10:00",
+    toTime: "12:00",
+    timezone: "America/Argentina/Buenos_Aires",
+    state: "offered",
+    version: 2,
+    createdAt: now,
+    canManage: true,
+    appointmentId: null,
+    offer: {
+      id: offerId,
+      staffId,
+      staffName: "Ana",
+      startsAt: now,
+      endsAt: expiresAt,
+      expiresAt,
+      priceCents: 2000,
+      currency: "EUR",
+      services: [
+        {
+          id: serviceId,
+          name: "Haircut",
+          durationMinutes: 45,
+          bufferMinutes: 15,
+          priceCents: 2000,
+          priceType: "from",
+          currency: "EUR",
+        },
+      ],
+      policy: {
+        enabled: true,
+        version: 1,
+        depositKind: "fixed",
+        depositValue: 500,
+        holdMinutes: 30,
+        cancellationWindowMinutes: 0,
+        lateCancellationBasisPoints: 0,
+        noShowBasisPoints: 0,
+        trustedExempt: false,
+      },
+    },
+  };
+  const defaultFetch = globalThis.fetch;
+  const attempts: string[] = [];
+  let listOffline = false;
+  globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/intake/requirements")
+      return json({ reviewHash: "b".repeat(64), forms: [], readyResponses: [] });
+    if (path === "/api/admin/waitlist") {
+      if (listOffline) throw new Error("Connection lost during list refresh");
+      return json({
+        entries: [entry],
+        policy: { enabled: true, offerMinutes: 30, version: 1 },
+        page: 1,
+        pageSize: 10,
+        total: 1,
+      });
+    }
+    if (path === `/api/admin/waitlist/${entryId}/accept`) {
+      attempts.push(String(init?.body));
+      if (attempts.length === 1)
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(
+                new TypeError("Connection closed while reading the acknowledgement"),
+              );
+            },
+          }),
+          { status: 201 },
+        );
+      if (attempts.length === 2)
+        return new Response(
+          JSON.stringify({ error: { code: "rate_limited", message: "Please wait" } }),
+          { status: 429, headers: { "retry-after": "1" } },
+        );
+      if (attempts.length === 3)
+        return json({ error: { code: "forbidden", message: "Temporarily unable to verify" } }, 403);
+      return json({
+        entry: { ...entry, state: "booked", offer: null, version: 3, appointmentId },
+        appointment: {
+          id: appointmentId,
+          staffId,
+          clientId,
+          startsAt: now,
+          endsAt: expiresAt,
+          status: "booked",
+          notes: null,
+          version: 1,
+          services: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+    }
+    return defaultFetch(input, init);
+  }) as unknown as typeof fetch;
+  const { queryClient } = renderApp(<WaitlistView mode="admin" role="owner" />);
+  expect(await screen.findByText(/^Services: From/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Review this offer" }));
+  const waiver = await screen.findByLabelText(/Deposit waiver reason/);
+  fireEvent.change(waiver, { target: { value: "Synthetic owner approved waiver" } });
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  expect(await screen.findByRole("button", { name: "Discard and leave" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+  expect(waiver).toHaveValue("Synthetic owner approved waiver");
+
+  const accept = screen.getByRole("button", { name: "Accept and book this time" });
+  await waitFor(() => expect(accept).toBeEnabled());
+  fireEvent.click(accept);
+  const retry = await screen.findByRole("button", { name: "Verify or retry booking" });
+  expect(waiver).toBeDisabled();
+  expect(JSON.parse(attempts[0] ?? "{}")).toMatchObject({
+    version: 2,
+    offerId,
+    protectionWaiverReason: "Synthetic owner approved waiver",
+    intakeReviewHash: "b".repeat(64),
+  });
+
+  listOffline = true;
+  await act(() => queryClient.invalidateQueries({ queryKey: ["waitlist"] }));
+  expect(retry).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Close panel" }));
+  expect(await screen.findByText(/The appointment may already be booked/)).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Keep editing" }));
+
+  listOffline = false;
+  fireEvent.click(retry);
+  await waitFor(() => expect(attempts).toHaveLength(2));
+  expect(retry).toBeDisabled();
+  await waitFor(() => expect(retry).toBeEnabled(), { timeout: 3000 });
+  expect(waiver).toBeDisabled();
+  fireEvent.click(retry);
+  await waitFor(() => {
+    expect(attempts).toHaveLength(3);
+    expect(retry).toBeEnabled();
+  });
+  expect(waiver).toBeDisabled();
+  fireEvent.click(retry);
+  expect(await screen.findAllByText("Your waitlist appointment is booked")).not.toHaveLength(0);
+  expect(attempts).toHaveLength(4);
+  expect(new Set(attempts).size).toBe(1);
+});

@@ -124,6 +124,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Screen readers can identify the appointment reschedule form once the form and its heading are visible.
 
+- Web keeps the reviewed waitlist booking request available for verification after an interrupted response, including a failed list refresh or a rate-limited retry. The offer list shows starting and variable prices consistently with the review.
+
 - Campaign email tests charge the owner’s quota only for committed send claims. Stale drafts, failed claims and replays preserve the available quota.
 
 - Signed-in customers can view and purchase available plans in their Packages and Memberships tabs.
