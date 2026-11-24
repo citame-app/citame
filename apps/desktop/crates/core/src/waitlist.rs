@@ -4,6 +4,9 @@ use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+mod count;
+pub use count::{WaitlistCount, WaitlistCountUpdate};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WaitlistRange {
     pub from: NaiveDate,

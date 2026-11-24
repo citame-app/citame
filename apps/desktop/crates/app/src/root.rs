@@ -430,7 +430,7 @@ pub struct Root {
     calendar_badge: inbox::CalendarBadge,
     reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
-    waitlist_count: waitlist::WaitlistCount,
+    waitlist_count: sob_core::waitlist::WaitlistCount,
     review_generation: u64,
     _subs: Vec<Subscription>,
 }
@@ -527,7 +527,7 @@ impl Root {
             calendar_badge: inbox::CalendarBadge::default(),
             reward_badge: inbox::RewardBadge::default(),
             waitlist_generation: 0,
-            waitlist_count: waitlist::WaitlistCount::default(),
+            waitlist_count: Default::default(),
             review_generation: 0,
             _subs: subs,
         };
@@ -762,7 +762,7 @@ impl Root {
     }
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
-        self.waitlist_count = waitlist::WaitlistCount::default();
+        self.waitlist_count = Default::default();
         self.calendar_badge = inbox::CalendarBadge::default();
         self.reward_badge = inbox::RewardBadge::default();
         self.pending_loyalty = None;

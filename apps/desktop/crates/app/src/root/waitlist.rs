@@ -3,25 +3,14 @@ use chrono::NaiveTime;
 use sob_core::store::CalendarCacheScope;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
-    AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistPage,
-    WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState, WaitlistView,
+    AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistCountUpdate,
+    WaitlistPage, WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState, WaitlistView,
 };
 use std::sync::Arc;
 
 mod review;
 #[cfg(test)]
 pub(super) use review::show_intake_test_offer;
-
-const COUNT_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
-
-#[derive(Default)]
-pub(super) struct WaitlistCount {
-    query: Option<(WaitlistRange, CalendarCacheScope)>,
-    total: Option<u32>,
-    revision: Option<i64>,
-    requested_at: Option<Instant>,
-    request: Option<Arc<()>>,
-}
 
 pub(super) struct Desk {
     view: WaitlistView,
@@ -165,12 +154,7 @@ impl Root {
 
     pub(super) fn waitlist_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let range = self.calendar_waitlist_range();
-        let total = self
-            .waitlist_count
-            .query
-            .as_ref()
-            .filter(|(shown, _)| *shown == range)
-            .and(self.waitlist_count.total);
+        let total = self.waitlist_count.total_for(range);
         let label = total.map_or_else(
             || self.t(Key::Waitlist).to_owned(),
             |total| {
@@ -191,85 +175,59 @@ impl Root {
     }
 
     pub(super) fn refresh_waitlist_count(&mut self, status: &SyncStatus, cx: &mut Context<Self>) {
-        let range = self.calendar_waitlist_range();
-        let query = self
+        let range = self
             .can_view_waitlist()
-            .then(|| self.svc.store.calendar_cache_scope().ok())
-            .flatten()
-            .map(|scope| (range, scope));
-        let count = &mut self.waitlist_count;
-        if count.query != query {
-            *count = WaitlistCount {
-                total: query.as_ref().and_then(|(_, scope)| {
-                    self.svc
-                        .store
-                        .waitlist_cache(WaitlistView::Calendar(range), 1)
-                        .ok()
-                        .filter(|saved| saved.scope.as_ref() == Some(scope))
-                        .and_then(|saved| saved.current.map(|page| page.total))
-                }),
-                query,
-                ..Default::default()
-            };
+            .then(|| self.calendar_waitlist_range());
+        let transport = self
+            .svc
+            .transport()
+            .filter(|_| status.connectivity == Connectivity::Online);
+        let (request, changed) = self.waitlist_count.refresh(
+            &self.svc.store,
+            range,
+            transport.is_some(),
+            Instant::now(),
+        );
+        if changed {
             cx.notify();
         }
-        if status.connectivity != Connectivity::Online {
-            count.revision = None;
-            return;
-        }
-        let Some(transport) = self.svc.transport().filter(|_| count.query.is_some()) else {
+        let (Some(request), Some(transport)) = (request, transport) else {
             return;
         };
-        let revision = self.svc.store.live_view_revision("waitlist").ok();
-        if count.request.is_some()
-            || (count.revision == revision
-                && count
-                    .requested_at
-                    .is_some_and(|last| last.elapsed() < COUNT_REFRESH_INTERVAL))
-        {
-            return;
-        }
-        let request = Arc::new(());
-        count.request = Some(request.clone());
-        count.revision = revision;
-        count.requested_at = Some(Instant::now());
         let session = self.svc.session.clone();
+        let requested = request.range;
         cx.spawn(async move |root, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { transport.waitlist_count(range) })
+                .spawn(async move { transport.waitlist_count(requested) })
                 .await;
             let _ = root.update(cx, |root, cx| {
-                if !Arc::ptr_eq(&session, &root.svc.session)
-                    || !root
-                        .waitlist_count
-                        .request
-                        .as_ref()
-                        .is_some_and(|pending| Arc::ptr_eq(pending, &request))
+                if !Arc::ptr_eq(&session, &root.svc.session) || root.svc.current_session().is_none()
                 {
                     return;
                 }
-                root.waitlist_count.request = None;
-                if !root.can_view_waitlist()
-                    || root.calendar_waitlist_range() != range
-                    || root.waitlist_count.query.as_ref().is_none_or(|(_, scope)| {
-                        root.svc.store.calendar_cache_scope().ok().as_ref() != Some(scope)
-                    })
+                let current = root
+                    .can_view_waitlist()
+                    .then(|| root.calendar_waitlist_range());
+                match root
+                    .waitlist_count
+                    .apply(&mut root.svc.store, current, request, result)
                 {
-                    return;
+                    WaitlistCountUpdate::AccessDenied => root.forget_waitlist_view(cx),
+                    WaitlistCountUpdate::DisplayChanged => cx.notify(),
+                    WaitlistCountUpdate::Unchanged => {}
                 }
-                match result {
-                    Ok(total) => root.waitlist_count.total = Some(total),
-                    Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => {
-                        root.waitlist_count.total = None;
-                        let _ = root.svc.store.clear_waitlist_cache();
-                    }
-                    Err(_) => {}
-                }
-                cx.notify();
             });
         })
         .detach();
+    }
+
+    fn forget_waitlist_view(&mut self, cx: &mut Context<Self>) {
+        self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
+        if let Overlay::Waitlist(desk) = &mut self.overlay {
+            desk.reject_scope();
+        }
+        cx.notify();
     }
 
     pub(super) fn refresh_open_waitlist_scope(&mut self) {
@@ -444,7 +402,9 @@ impl Root {
                     Err(TransportError::Unauthorized | TransportError::Forbidden(_))
                 );
                 if denied {
-                    let _ = this.svc.store.clear_waitlist_cache();
+                    this.waitlist_count.deny(&mut this.svc.store);
+                    this.forget_waitlist_view(cx);
+                    return;
                 }
                 if booked.is_some() {
                     this.svc.wake(Wake::Manual);
@@ -476,12 +436,9 @@ impl Root {
                     }
                     _ => {}
                 }
-                if changed || denied {
+                if changed {
                     d.clear_private_data();
                     d.booked = booked;
-                    if denied {
-                        d.saved_pages.clear();
-                    }
                 }
                 match result {
                     Ok(data) => {
@@ -952,6 +909,18 @@ impl Root {
                         }),
                 )
         };
+        let body =
+            if desk.form.is_some() || desk.offer_review.is_some() || desk.policy_review.is_some() {
+                div().min_h_0().flex().flex_col().child(
+                    div()
+                        .id("waitlist-editor-scroll")
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(body),
+                )
+            } else {
+                body
+            };
         self.modal_with_height(
             div()
                 .child(

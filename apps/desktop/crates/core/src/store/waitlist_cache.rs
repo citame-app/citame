@@ -6,6 +6,7 @@ use crate::waitlist::{WaitlistPage, WaitlistView};
 
 const LEGACY_FIRST_ACTIVE_PAGE: &str = "desk_waitlist";
 const RECENT_PAGES_PER_TAB: i64 = 7;
+const CALENDAR_PREFIX: &str = "desk_waitlist:calendar:";
 
 #[derive(Debug, Default)]
 pub struct SavedWaitlistPages {
@@ -19,7 +20,7 @@ fn prefix(view: WaitlistView) -> String {
         WaitlistView::Active => "desk_waitlist:active:".into(),
         WaitlistView::History => "desk_waitlist:history:".into(),
         WaitlistView::Calendar(range) => {
-            format!("desk_waitlist:calendar:{}:{}:", range.from, range.to)
+            format!("{CALENDAR_PREFIX}{}:{}:", range.from, range.to)
         }
     }
 }
@@ -122,10 +123,10 @@ impl Store {
         if view.range().is_some() {
             tx.execute(
                 "DELETE FROM meta WHERE key IN (
-                    SELECT key FROM meta WHERE key GLOB 'desk_waitlist:calendar:*'
-                    ORDER BY rowid DESC LIMIT -1 OFFSET ?1
+                    SELECT key FROM meta WHERE key GLOB ?1
+                    ORDER BY rowid DESC LIMIT -1 OFFSET ?2
                 )",
-                [RECENT_PAGES_PER_TAB + 1],
+                params![format!("{CALENDAR_PREFIX}*"), RECENT_PAGES_PER_TAB + 1],
             )?;
         } else {
             // Keep the entry point to the tab plus its last seven successful page reads.
@@ -142,8 +143,8 @@ impl Store {
         Ok(Some(pages))
     }
 
-    pub fn clear_waitlist_cache(&self) -> Result<()> {
-        clear(&self.conn)
+    pub fn invalidate_waitlist_access(&mut self) -> Result<()> {
+        self.write_transaction(|store| invalidate_visibility(&store.conn))
     }
 }
 
