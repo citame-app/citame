@@ -341,6 +341,19 @@ export const checkoutSchema = z.object({
   refunds: z.array(z.lazy(() => checkoutRefundSchema)).default([]),
   createdAt: instantSchema,
 });
+export const visitCheckoutSchema = z.object({
+  groupId: idSchema,
+  source: z.enum(["itinerary", "import"]),
+  appointments: z.array(
+    z.object({
+      appointmentId: idSchema,
+      staffId: idSchema,
+      startsAt: instantSchema,
+      receipt: checkoutSchema.nullable(),
+    }),
+  ),
+});
+export type VisitCheckout = z.infer<typeof visitCheckoutSchema>;
 const checkoutGroupTotalSchema = z.object({
   period: z.iso.date(),
   receipts: z.number().int().nonnegative(),

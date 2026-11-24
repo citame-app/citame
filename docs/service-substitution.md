@@ -34,6 +34,13 @@ Customers can select one common professional or qualified professionals per trea
 
 Each part has its own appointment, receipt, deposit and subsequent cancellation/rescheduling lifecycle. This is disclosed before confirmation and on the result page. There is no aggregate single payment or atomic post-booking cancellation/rescheduling of the entire visit.
 
+The staff commerce API can prepare the receipts for a complete visit through
+`POST /admin/commerce/visits/:appointmentId/checkouts`. It accepts an appointment from a native
+itinerary or a group preserved during import. The operation reuses existing receipts, keeps the
+professional and service amounts for each part, and prepares new receipts in one transaction.
+Cancelled parts remain visible with no new receipt. An unresolved imported charge requires review
+before the visit can be prepared. Accounts need access to every calendar and receipt in the group.
+
 ## Verification — 2026-11-17
 
 Development used Bun and Playwright TDD, as authorised for this web project. New price, catalogue, visit and footer regressions were observed failing before their corrections. Deterministic browser locators and response/state waits cover the real explored interactions.

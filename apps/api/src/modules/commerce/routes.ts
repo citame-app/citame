@@ -61,6 +61,7 @@ import {
   voidCheckout,
 } from "./service";
 import { unpaidAppointments } from "./unpaid";
+import { prepareVisitCheckouts } from "./visit-checkouts";
 
 const operator = createMiddleware<AppEnv>(async (c, next) => {
   requireOperator(c.get("principal"));
@@ -229,6 +230,25 @@ export function commerceAdminRoutes(deps: AppDeps) {
         { "Cache-Control": "private, no-store" },
       ),
     )
+    .post("/visits/:appointmentId/checkouts", async (c) => {
+      const principal = c.get("principal");
+      const visit = await prepareVisitCheckouts(
+        deps.db,
+        checkoutId(c.req.param("appointmentId")),
+        principal,
+      );
+      return c.json(
+        {
+          ...visit,
+          appointments: visit.appointments.map((item) => ({
+            ...item,
+            receipt: item.receipt && withActions(item.receipt, principal),
+          })),
+        },
+        200,
+        { "Cache-Control": "private, no-store" },
+      );
+    })
     .post("/checkouts", async (c) => {
       const principal = c.get("principal");
       const receipt = await createCheckout(
