@@ -5,6 +5,7 @@ import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
+import { desktopDevicesQuery } from "~/lib/oauth-account-queries";
 
 export function DesktopDevices({ userId }: { userId: string }) {
   const { t, locale } = useI18n();
@@ -12,17 +13,15 @@ export function DesktopDevices({ userId }: { userId: string }) {
   const toast = useToast();
   const title = useRef<HTMLHeadingElement>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
-  const queryKey = ["oauth", "desktop-devices", userId] as const;
-  const query = useQuery({
-    queryKey,
-    queryFn: ({ signal }) => api().desktopDevices.list(signal),
-    refetchInterval: 30_000,
-  });
+  const options = desktopDevicesQuery(userId);
+  const { queryKey } = options;
+  const query = useQuery(options);
   const revoke = useMutation({
     mutationFn: (id: string) => api().desktopDevices.revoke(id),
     onSuccess: async (_, id) => {
       title.current?.focus();
       setConfirm(null);
+      await cache.cancelQueries({ queryKey });
       cache.setQueryData(
         queryKey,
         (data: typeof query.data) =>

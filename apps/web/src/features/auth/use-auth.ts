@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { api } from "~/lib/api/instance";
 import { homeFor, safeRedirect } from "~/lib/auth/access";
+import { oauthAccountQueryKey } from "~/lib/oauth-account-queries";
 import { waitlistQueryKey } from "~/lib/waitlist-queries";
 import { bootstrapQuery } from "~/server/request";
 import type { SignInValues, SignUpValues } from "./validate";
@@ -94,6 +95,7 @@ export function useAuth() {
       await api().auth.signOut();
       queryClient.removeQueries({ queryKey: ["appointments"] });
       queryClient.removeQueries({ queryKey: waitlistQueryKey });
+      queryClient.removeQueries({ queryKey: oauthAccountQueryKey });
       queryClient.removeQueries({ queryKey: ["rewards", "stamps"] });
       queryClient.removeQueries({ queryKey: ["marketing"] });
       queryClient.removeQueries({ queryKey: ["admin", "clients", "booking-invitation"] });

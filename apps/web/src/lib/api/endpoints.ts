@@ -227,7 +227,8 @@ export function createEndpoints(client: ApiClient) {
       ),
     me: (signal?: AbortSignal) => client.get("/me", meResponseSchema, { signal }),
     oauthConnections: {
-      list: () => client.get("/me/connections", oauthConnectionsSchema),
+      list: (signal?: AbortSignal) =>
+        client.get("/me/connections", oauthConnectionsSchema, { signal }),
       revoke: (clientId: string) =>
         client.delete(`/me/connections/${encodeURIComponent(clientId)}`, z.null()),
     },

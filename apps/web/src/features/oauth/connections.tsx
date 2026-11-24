@@ -1,24 +1,44 @@
+import { DESKTOP_CLIENT_ID } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { ErrorState, Skeleton } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 
-const queryKey = ["oauth", "connections"] as const;
+import {
+  desktopDevicesQuery,
+  oauthAccountKey,
+  oauthConnectionsQuery,
+} from "~/lib/oauth-account-queries";
 
-export function OAuthConnections() {
+export function OAuthConnections({ userId }: { userId: string }) {
   const { t, locale } = useI18n();
   const queryClient = useQueryClient();
   const toast = useToast();
+  const title = useRef<HTMLHeadingElement>(null);
   const [confirm, setConfirm] = useState<string | null>(null);
-  const query = useQuery({ queryKey, queryFn: () => api().oauthConnections.list() });
+  const options = oauthConnectionsQuery(userId);
+  const query = useQuery(options);
   const revoke = useMutation({
     mutationFn: (clientId: string) => api().oauthConnections.revoke(clientId),
-    onSuccess: async () => {
+    onSuccess: async (_, clientId) => {
+      title.current?.focus();
       setConfirm(null);
-      await queryClient.invalidateQueries({ queryKey });
+      const disconnectsDesktop = clientId === DESKTOP_CLIENT_ID;
+      const filters = {
+        queryKey: disconnectsDesktop ? oauthAccountKey(userId) : options.queryKey,
+      };
+      await queryClient.cancelQueries(filters);
+      queryClient.setQueryData(
+        options.queryKey,
+        (data) =>
+          data && { connections: data.connections.filter((app) => app.clientId !== clientId) },
+      );
+      if (disconnectsDesktop)
+        queryClient.setQueryData(desktopDevicesQuery(userId).queryKey, { devices: [] });
+      await queryClient.invalidateQueries(filters);
       toast.success(t("oauth.connections.removed"));
     },
     onError: () => toast.error(t("oauth.connections.failed")),
@@ -26,7 +46,7 @@ export function OAuthConnections() {
 
   return (
     <section aria-labelledby="connected-apps-title" className="space-y-3">
-      <h2 id="connected-apps-title" className="text-heading">
+      <h2 ref={title} tabIndex={-1} id="connected-apps-title" className="text-heading">
         {t("oauth.connections.title")}
       </h2>
       <p className="text-sm text-muted">{t("oauth.connections.lead")}</p>
@@ -51,8 +71,18 @@ export function OAuthConnections() {
                 <li key={scope}>{t(`oauth.scope.${scope}`)}</li>
               ))}
             </ul>
+            {confirm === clientId && clientId === DESKTOP_CLIENT_ID && (
+              <p id="desktop-revoke-description" className="text-sm text-muted">
+                {t("oauth.connections.confirmDesktop")}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
+                aria-describedby={
+                  confirm === clientId && clientId === DESKTOP_CLIENT_ID
+                    ? "desktop-revoke-description"
+                    : undefined
+                }
                 variant={confirm === clientId ? "danger" : "secondary"}
                 disabled={revoke.isPending && revoke.variables !== clientId}
                 loading={revoke.isPending && revoke.variables === clientId}

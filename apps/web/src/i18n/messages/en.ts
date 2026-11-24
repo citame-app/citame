@@ -193,6 +193,8 @@ export const en = {
   "oauth.connections.unnamed": "Unnamed app",
   "oauth.connections.revoke": "Remove access",
   "oauth.connections.confirm": "Confirm removal",
+  "oauth.connections.confirmDesktop":
+    "This disconnects every Desktop device linked to your account.",
   "oauth.connections.removed": "Access removed",
   "oauth.connections.failed": "Could not remove access",
   "oauth.scope.mcp:read": "View services, availability and the appointments you can see",

@@ -197,6 +197,8 @@ export const esAR: Record<MessageKey, string> = {
   "oauth.connections.unnamed": "Aplicación sin nombre",
   "oauth.connections.revoke": "Revocar acceso",
   "oauth.connections.confirm": "Confirmar revocación",
+  "oauth.connections.confirmDesktop":
+    "Esto desconecta todos los dispositivos de escritorio vinculados a tu cuenta.",
   "oauth.connections.removed": "Acceso revocado",
   "oauth.connections.failed": "No se pudo revocar el acceso",
   "oauth.scope.mcp:read": "Ver servicios, disponibilidad y los turnos que puedes ver",

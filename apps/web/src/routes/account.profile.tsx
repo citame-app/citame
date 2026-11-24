@@ -34,9 +34,11 @@ function ProfilePage() {
           void router.invalidate();
         }}
       />
-      {session.user.role !== "client" && <DesktopDevices userId={session.user.id} />}
+      {session.user.role !== "client" && (
+        <DesktopDevices key={session.user.id} userId={session.user.id} />
+      )}
       <div className="mt-8" id="connected-apps">
-        <OAuthConnections />
+        <OAuthConnections key={session.user.id} userId={session.user.id} />
       </div>
       {session.user.role === "client" && session.clientId && (
         <div className="mt-8">
