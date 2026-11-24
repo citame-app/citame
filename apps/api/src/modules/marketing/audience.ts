@@ -44,7 +44,10 @@ const validEmail = z.email();
 const normalizedPhone = (value: string | null) => value?.replace(/[\s().-]/g, "") ?? "";
 export async function campaignAudience(
   db: Connection,
-  campaign: CampaignDraft & { id: string; version: number; activatedAt?: Date | null },
+  campaign: Pick<
+    CampaignDraft,
+    "audience" | "channel" | "trigger" | "delayMinutes" | "birthdayLeadDays"
+  > & { id: string; version: number; activatedAt?: Date | null },
   capabilities: ReturnType<typeof marketingCapabilities>,
   now: Date,
 ) {

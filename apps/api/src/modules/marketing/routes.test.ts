@@ -88,6 +88,95 @@ const worker = (id: string = crypto.randomUUID()) =>
     now: () => clock,
     workerId: id,
   });
+
+const emailLayout = {
+  heading: "A welcome for {{first_name}}",
+  preheader: "Our upcoming appointments",
+  blocks: [
+    { kind: "heading", text: "New services" },
+    { kind: "paragraph", text: "Hello <script> again", emphasis: "strong" },
+    { kind: "booking", label: "Book at {{salon_name}}" },
+  ],
+};
+
+test("formatted campaigns keep a plain fallback and survive a legacy metadata edit", async () => {
+  const campaign = await create({ emailLayout, emailBody: "obsolete fallback" });
+  const path = `/admin/marketing/campaigns/${campaign.id}`;
+  expect(await (await call(owner, `${path}?emailLayout=1`)).json()).toMatchObject({ emailLayout });
+  const legacy = (await (await call(owner, path)).json()) as Record<string, unknown>;
+  expect(legacy).not.toHaveProperty("emailLayout");
+  expect(legacy.emailBody).toContain("Book at {{salon_name}}: {{booking_url}}");
+  const { id: _id, ...payload } = draft({
+    emailBody: legacy.emailBody,
+    name: "Updated campaign name",
+    version: 1,
+  });
+  expect((await call(owner, path, "PATCH", payload)).status).toBe(200);
+  expect(await (await call(owner, `${path}?emailLayout=1`)).json()).toMatchObject({ emailLayout });
+  expect(
+    (await call(owner, path, "PATCH", { ...payload, version: 2, emailBody: "replace" })).status,
+  ).toBe(409);
+  const response = await call(owner, path, "PATCH", {
+    ...payload,
+    version: 2,
+    emailBody: "Plain",
+    emailLayout: null,
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ emailBody: "Plain", emailLayout: null });
+});
+
+test("the delivery worker renders a safe heading, booking button and plain-text fallback", async () => {
+  if (!client.clientId) throw new Error("Expected a seeded client");
+  await allow();
+  await t.db
+    .update(clientProfile)
+    .set({ name: "<script>guest</script>" })
+    .where(eq(clientProfile.id, client.clientId));
+  const campaign = await create({ emailLayout });
+  await queue(campaign);
+  await worker().runOnce();
+  expect(email.calls).toHaveLength(1);
+  const [message] = email.calls;
+  if (!message) throw new Error("Expected a delivered email");
+  expect(message.html).toContain("Our upcoming appointments");
+  expect(message.html).toContain("<h1");
+  expect(message.html).toContain("&lt;script&gt;");
+  expect(message.html).not.toContain("<script>");
+  expect(message.html).toContain("Book at Test Salon");
+  expect(message.text).toContain(`Book at Test Salon: ${t.config.notifications.publicUrl}/book`);
+  expect(message.text).toContain("/marketing/opt-out?token=");
+});
+
+test("a campaign cannot contain caller-supplied HTML blocks or booking URLs", async () => {
+  for (const block of [
+    { kind: "html", text: "<iframe src=unsafe>" },
+    { kind: "booking", label: "Invalid", href: "javascript:alert(1)" },
+  ]) {
+    const input = draft({ emailLayout: { ...emailLayout, blocks: [block] } });
+    expect((await call(owner, "/admin/marketing/campaigns", "POST", input)).status).toBe(400);
+  }
+});
+test("an invitation must show its booking link in the email body", async () => {
+  if (!client.clientId) throw new Error("Expected a seeded client");
+  const campaign = await create({
+    audience: {
+      tags: [],
+      inactiveDays: null,
+      noFutureAppointments: false,
+      selectedClientIds: [client.clientId],
+    },
+    emailLayout: {
+      heading: "Find a time for your next visit",
+      preheader: "{{booking_url}}",
+      blocks: [{ kind: "paragraph", text: "See you soon!", emphasis: "none" }],
+    },
+  });
+  const response = await call(owner, `/admin/marketing/campaigns/${campaign.id}/preview`);
+  expect(response.status).toBe(400);
+  expect(await response.text()).toContain("Include the booking link");
+});
+
 beforeAll(async () => {
   t = await setupApiTest({
     dbSuffix: "marketing",

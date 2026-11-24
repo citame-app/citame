@@ -24,7 +24,12 @@ export function marketingEndpoints(client: ApiClient) {
     list: (query: Partial<CampaignQuery> = {}) => client.get(base, campaignListSchema, { query }),
     compare: (ids: string[]) =>
       client.get(`${base}/comparison`, campaignComparisonSchema, { query: { ids: ids.join(",") } }),
-    get: (id: string) => client.get(`${base}/${id}`, campaignSchema),
+    get: (id: string, includeLayout = false) =>
+      client.get(
+        `${base}/${id}`,
+        campaignSchema,
+        includeLayout ? { query: { emailLayout: "1" } } : undefined,
+      ),
     create: (input: CampaignCreate) => client.post(base, input, campaignSchema),
     update: (id: string, input: CampaignUpdate) =>
       client.patch(`${base}/${id}`, input, campaignSchema),

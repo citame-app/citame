@@ -10,6 +10,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Campañas de correo con cabecera, texto para la bandeja de entrada, bloques reordenables y botón de reserva en Citame Web. Citame genera una versión de texto plano para cada mensaje.
+
 - The commerce API prepares the individual receipts for native and imported multi-professional visits in one transaction, including existing collections and cancelled parts.
 - The commerce API can record one reviewed cash or external-terminal payment across the payable receipts of a visit, with atomic allocation and safe retries.
 - Web calendar details show the grouped payment review and distinguish a confirmed payment, a changed balance and an uncertain result that can be retried.
