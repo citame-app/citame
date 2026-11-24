@@ -698,6 +698,11 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
     let retry = store.outbox(10).unwrap().remove(0);
     assert_ne!(retry.mutation_id, *id);
     assert_eq!(retry.payload["version"], 4);
+    assert!(
+        !store
+            .appointment_note_review_ready(&sent[1].mutation_id, EXISTING)
+            .unwrap()
+    );
 
     store.set_meta("calendar_scope", BEA).unwrap();
     assert!(queue_appointment_notes(&mut store, EXISTING, "Offline draft", "", None).is_err());

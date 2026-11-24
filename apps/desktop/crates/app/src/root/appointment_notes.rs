@@ -150,13 +150,16 @@ impl Root {
         if !self
             .svc
             .store
-            .appointment_note_review_ready(&conflict.mutation_id)
+            .appointment_note_review_ready(&conflict.mutation_id, &conflict.entity_id)
             .unwrap_or(false)
         {
             self.explain_note_review_wait(cx);
             return;
         }
-        let current = calendar::effective_appointment(&self.svc.store, &conflict.entity_id)
+        let current = self
+            .svc
+            .store
+            .appointment(&conflict.entity_id)
             .ok()
             .flatten()
             .filter(|appointment| self.can_edit_staff_calendar(&appointment.staff_id));

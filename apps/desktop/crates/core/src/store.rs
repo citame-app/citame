@@ -2065,12 +2065,17 @@ impl Store {
     }
 
     /// A rejected note is reviewable once the replica has seen the server head from its rejection.
-    pub fn appointment_note_review_ready(&self, mutation_id: &str) -> Result<bool> {
+    pub fn appointment_note_review_ready(
+        &self,
+        mutation_id: &str,
+        appointment_id: &str,
+    ) -> Result<bool> {
         let required = self
             .get_meta(&format!("note_review_head:{mutation_id}"))?
             .and_then(|value| value.parse::<i64>().ok())
             .unwrap_or_default();
-        Ok(self.cursor()? >= required)
+        Ok(self.cursor()? >= required
+            && self.appointment_edit_sync(appointment_id)? != AppointmentEditSync::Pending)
     }
 
     pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {

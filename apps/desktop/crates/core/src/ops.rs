@@ -786,7 +786,7 @@ pub fn queue_appointment_notes(
             )));
         }
         if let Some(mutation_id) = conflict_to_resolve
-            && !store.appointment_note_review_ready(mutation_id)?
+            && !store.appointment_note_review_ready(mutation_id, id)?
         {
             return Err(CoreError::AppointmentNoteRefreshRequired);
         }
