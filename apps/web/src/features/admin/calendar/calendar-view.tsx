@@ -30,6 +30,7 @@ import { zonedInstant } from "~/lib/zoned";
 import { ConflictList } from "../staff/conflict-list";
 import { useNow } from "../use-now";
 import { AppointmentDrawer } from "./appointment-drawer";
+import type { MoveRequest } from "./appointment-writes";
 import { BooksyContextImport } from "./booksy-context-import";
 import { CalendarGrid, type GridColumn } from "./calendar-grid";
 import { CalendarInbox } from "./inbox";
@@ -43,7 +44,6 @@ import {
   type CalendarView as ViewName,
 } from "./logic";
 import { MiniCalendar } from "./mini-calendar";
-import type { MoveRequest } from "./move-requests";
 import { type NewAppointmentInitial, NewAppointmentSheet } from "./new-appointment";
 import { CalendarOverview } from "./overview";
 import { indexCalendar, personInitials, serviceHue } from "./presentation";
@@ -51,7 +51,7 @@ import { ResourceCalendar } from "./resource-calendar";
 import { type CalendarSearch, shiftDate } from "./search";
 import { ShortcutsHelp } from "./shortcuts-help";
 import { CalendarTimeOff } from "./time-off";
-import { useMoveAppointment } from "./use-move";
+import { useCalendarWrites } from "./use-calendar-writes";
 import { CalendarWaitlist } from "./waitlist";
 
 function isTyping(target: EventTarget | null): boolean {
@@ -111,11 +111,11 @@ export function CalendarView({
     }),
     ...(live ? { refetchInterval: false } : {}),
   });
-  const { move, projectPendingMoves, isMovePending, conflict, clearConflict } =
-    useMoveAppointment();
+  const { move, projectPendingWrites, isWritePending, conflict, clearConflict } =
+    useCalendarWrites();
   const calendar = useMemo(
-    () => projectPendingMoves(query.data),
-    [projectPendingMoves, query.data],
+    () => projectPendingWrites(query.data),
+    [projectPendingWrites, query.data],
   );
   const [lastConsultation, setLastConsultation] = useState(Boolean(calendar?.importSnapshot));
   const consultation = calendar ? Boolean(calendar.importSnapshot) : lastConsultation;
@@ -243,8 +243,8 @@ export function CalendarView({
   );
   const canMove = useCallback(
     (a: CalendarAppointment) =>
-      !isMovePending(a.id) && availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
-    [isMovePending, role, now, ownStaffId, readOnly],
+      !isWritePending(a.id) && availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
+    [isWritePending, role, now, ownStaffId, readOnly],
   );
   const go = useCallback(
     (patch: Partial<CalendarSearch>) => onSearchChange({ ...search, ...patch }),

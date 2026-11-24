@@ -16,6 +16,7 @@ import { formatTime, localDateOf } from "~/lib/format";
 import { processingRanges } from "~/lib/processing";
 import { zonedInstant } from "~/lib/zoned";
 import { AppointmentBadges } from "./appointment-badges";
+import type { MoveRequest } from "./appointment-writes";
 import { type ColumnRect, dropTarget, exceedsDragThreshold } from "./drag";
 import { keyboardMove } from "./keys";
 import {
@@ -25,7 +26,6 @@ import {
   offsetToSnappedMinutes,
   statusAppearance,
 } from "./logic";
-import type { MoveRequest } from "./move-requests";
 import {
   type CalendarEntry,
   indexCalendar,

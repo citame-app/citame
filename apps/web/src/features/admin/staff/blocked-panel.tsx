@@ -1,4 +1,4 @@
-import type { AdminStaff, CalendarAppointment } from "@sob/contracts";
+import type { AdminStaff, CalendarAppointment, CalendarResponse } from "@sob/contracts";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -13,6 +13,13 @@ import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
 import { useStatusChange } from "../calendar/appointment-actions";
+import {
+  type CalendarMove,
+  calendarWriteKey,
+  startCalendarWrite,
+  usePendingCalendarWrites,
+} from "../calendar/appointment-writes";
+import { mergeAppointment } from "../calendar/cache";
 import { describeProblem } from "../problems";
 import { chunkWindows, eligibleTargets } from "./blocking";
 
@@ -60,15 +67,24 @@ export function BlockedPanel({
   const [targets, setTargets] = useState<Record<string, string>>({});
   const [cancelling, setCancelling] = useState<CalendarAppointment | null>(null);
   const cancel = useStatusChange();
+  const pendingWrites = usePendingCalendarWrites();
+  const reviewedCancellation =
+    cancelling && blocking.some((a) => a.id === cancelling.id && a.version === cancelling.version)
+      ? cancelling
+      : null;
 
   const move = useMutation({
-    mutationFn: ({ appointment, staffId }: { appointment: CalendarAppointment; staffId: string }) =>
+    mutationKey: calendarWriteKey,
+    mutationFn: ({ appointment, to }: CalendarMove) =>
       api().appointments.update(appointment.id, {
         version: appointment.version,
-        staffId,
+        staffId: to.staffId,
         override: true,
       }),
-    onSuccess: () => {
+    onSuccess: (saved) => {
+      queryClient.setQueriesData<CalendarResponse>({ queryKey: ["admin", "calendar"] }, (data) =>
+        data ? mergeAppointment(data, saved) : data,
+      );
       toast.success(t("blocked.moved"));
       void queryClient.invalidateQueries({ queryKey: ["admin"] });
     },
@@ -126,15 +142,29 @@ export function BlockedPanel({
                     />
                     <Button
                       variant="secondary"
-                      disabled={!chosen}
+                      disabled={!chosen || pendingWrites.has(a.id)}
                       loading={move.isPending && move.variables?.appointment.id === a.id}
-                      onClick={() => move.mutate({ appointment: a, staffId: chosen })}
+                      onClick={() =>
+                        startCalendarWrite(
+                          queryClient,
+                          {
+                            appointment: a,
+                            to: { staffId: chosen, startsAt: a.startsAt },
+                            override: true,
+                          },
+                          move.mutate,
+                        )
+                      }
                     >
                       {t("blocked.reassign.action")}
                     </Button>
                   </div>
                 )}
-                <Button variant="secondary" onClick={() => setCancelling(a)}>
+                <Button
+                  variant="secondary"
+                  disabled={pendingWrites.has(a.id)}
+                  onClick={() => setCancelling(a)}
+                >
                   {t("blocked.cancel")}
                 </Button>
               </li>
@@ -147,6 +177,7 @@ export function BlockedPanel({
         onOpenChange={(open) => !open && setCancelling(null)}
         destructive
         pending={cancel.isPending}
+        confirmDisabled={!reviewedCancellation || pendingWrites.has(reviewedCancellation.id)}
         title={t("calendar.cancel.title")}
         description={
           cancelling
@@ -159,16 +190,22 @@ export function BlockedPanel({
         confirmLabel={t("calendar.cancel.confirm")}
         cancelLabel={t("calendar.cancel.keep")}
         onConfirm={() =>
-          cancelling &&
+          reviewedCancellation &&
           cancel.mutate(
-            { appointment: cancelling, status: "cancelled" },
+            { appointment: reviewedCancellation, status: "cancelled" },
             {
               onSettled: () => setCancelling(null),
               onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["admin"] }),
             },
           )
         }
-      />
+      >
+        {cancelling && !reviewedCancellation && (
+          <p role="status" className="mt-3 text-sm text-danger-fg">
+            {t("problem.versionConflict")}
+          </p>
+        )}
+      </ConfirmDialog>
     </Sheet>
   );
 }

@@ -6,9 +6,9 @@ import { BellIcon, CloseIcon } from "~/components/ui/icons";
 import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatTime, localDateOf } from "~/lib/format";
+import { isLocalCalendarWrite } from "./appointment-writes";
 import { connectCalendarLive } from "./live-connection";
 import { liveQueryKeys } from "./live-queries";
-import { isLocalCalendarMove } from "./move-requests";
 
 const LiveContext = createContext<boolean | undefined>(undefined);
 const InventoryRevisionContext = createContext(0);
@@ -159,7 +159,7 @@ export function CalendarLiveProvider({
                   : null;
           versions.set(appointment.id, appointment.version);
           known.set(appointment.id, appointment);
-          if (kind && !(kind === "rescheduled" && isLocalCalendarMove(queryClient, appointment)))
+          if (kind && (kind === "new" || !isLocalCalendarWrite(queryClient, appointment, kind)))
             setNotices((current) =>
               [
                 { key: `${appointment.id}:${appointment.version}`, kind, appointment },

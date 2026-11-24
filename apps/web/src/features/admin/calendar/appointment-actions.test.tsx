@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { CalendarAppointment, CalendarResponse } from "@sob/contracts";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../../test/render";
 import { AppointmentActions } from "./appointment-actions";
+import { isLocalCalendarWrite } from "./appointment-writes";
 
 const STAFF = "0198f5a0-7b1c-7000-8000-000000000201";
 const ID = "0198f5a0-7b1c-7000-8000-0000000000a1";
@@ -36,15 +38,18 @@ const calendar: CalendarResponse = {
 
 let calls: { method: string; body: unknown }[];
 let reply: { status: number; body: unknown };
+let responseGate: Promise<void> | undefined;
 
 beforeEach(() => {
   calls = [];
+  responseGate = undefined;
   reply = { status: 200, body: { ...appointment, status: "completed", version: 4 } };
   globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
     calls.push({
       method: init?.method ?? "GET",
       body: init?.body ? JSON.parse(String(init.body)) : undefined,
     });
+    await responseGate;
     return new Response(JSON.stringify(reply.body), {
       status: reply.status,
       headers: { "content-type": "application/json" },
@@ -68,6 +73,16 @@ const setup = (props: Partial<Parameters<typeof AppointmentActions>[0]> = {}) =>
   view.queryClient.setQueryData(["admin", "calendar", "k"], calendar);
   return view;
 };
+
+function ChangingAppointment({
+  subscribe,
+}: {
+  subscribe: (publish: (a: CalendarAppointment) => void) => void;
+}) {
+  const [current, setCurrent] = useState(appointment);
+  subscribe(setCurrent);
+  return <AppointmentActions appointment={current} role="staff" ownStaffId={STAFF} now={NOW} />;
+}
 
 describe("AppointmentActions", () => {
   test("a started booked appointment offers complete, no-show and cancel", () => {
@@ -112,15 +127,69 @@ describe("AppointmentActions", () => {
     ).toBe("booked");
   });
 
-  test("cancelling needs a confirmation", async () => {
-    reply = { status: 200, body: { ...appointment, status: "cancelled", version: 4 } };
-    setup();
+  test("a rejected attendance change preserves the latest calendar rows", async () => {
+    const gate = Promise.withResolvers<void>();
+    responseGate = gate.promise;
+    reply = { status: 409, body: { error: { code: "version_conflict", message: "stale" } } };
+    const { queryClient } = setup();
+    const key = ["admin", "calendar", "k"];
+    const live = {
+      ...calendar,
+      appointments: [
+        { ...appointment, version: 4, status: "cancelled" as const },
+        { ...appointment, id: crypto.randomUUID(), clientName: "Added in Desktop" },
+      ],
+    };
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Mark no-show" }));
+      await waitFor(() => expect(calls).toHaveLength(1));
+      act(() => queryClient.setQueryData(key, live));
+      gate.resolve();
+      await screen.findByText(/changed by someone else/);
+      expect(queryClient.getQueryData(key)).toEqual(live);
+    } finally {
+      gate.resolve();
+    }
+  });
+
+  test("cancelling needs a confirmation and a remote cancellation stays observable until success", async () => {
+    const saved = { ...appointment, status: "cancelled" as const, version: 4 };
+    const gate = Promise.withResolvers<void>();
+    reply = { status: 200, body: saved };
+    responseGate = gate.promise;
+    const { queryClient } = setup();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
+      await screen.findByRole("dialog");
+      expect(calls).toHaveLength(0);
+      fireEvent.click(screen.getByRole("button", { name: "Yes, cancel it" }));
+      await waitFor(() => expect(calls[0]?.body).toEqual({ version: 3, status: "cancelled" }));
+      expect(isLocalCalendarWrite(queryClient, saved, "cancelled")).toBe(false);
+      gate.resolve();
+      await screen.findByText("Appointment cancelled");
+      expect(isLocalCalendarWrite(queryClient, saved, "cancelled")).toBe(true);
+    } finally {
+      gate.resolve();
+    }
+  });
+
+  test("a live revision requires a fresh cancellation review", async () => {
+    let publish: ((a: CalendarAppointment) => void) | undefined;
+    renderApp(
+      <ChangingAppointment
+        subscribe={(update) => {
+          publish = update;
+        }}
+      />,
+    );
     fireEvent.click(screen.getByRole("button", { name: "Cancel appointment" }));
-    const dialog = await screen.findByRole("dialog");
+    const confirm = await screen.findByRole("button", { name: "Yes, cancel it" });
+    expect(confirm).toBeEnabled();
+    act(() => publish?.({ ...appointment, version: 4, startsAt: "2026-03-09T14:30:00.000Z" }));
+    expect(confirm).toBeDisabled();
+    fireEvent.click(confirm);
     expect(calls).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Yes, cancel it" }));
-    await waitFor(() => expect(calls[0]?.body).toEqual({ version: 3, status: "cancelled" }));
-    expect(dialog).toBeDefined();
+    expect(screen.getByRole("status")).toHaveTextContent(/changed by someone else/);
   });
 
   test("staff see nothing on another calendar", () => {
