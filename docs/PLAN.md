@@ -97,12 +97,11 @@ Not in 0.1.0, roughly in the order we would tackle them:
 
 - **Multi-factor authentication** and account lockout beyond rate limiting (ADR 0003, 0011).
 - **OpenTelemetry tracing.** Logs carry a request id and metrics are Prometheus-only.
-- **Desktop OAuth login.** The first-party `sob-desktop` OAuth client is seeded, but `/sync/*` accepts session cookies only. Needed: a bearer branch in `requireAuth` for a `sync` resource and scope, token storage and refresh in `sob-core`, a loopback listener plus browser step in the GPUI login. This is a future authentication mechanism; the Linux v1 session flow is implemented and covered by real-API tests (ADR 0009).
 - **Desktop platform extras.** OS keyring for the session, auto-update and Windows builds. Linux ships an archive with a per-user installer. macOS has native Intel and Apple Silicon ZIPs for macOS 15 and later. See [ADR 0020](adr/0020-desktop-release-platforms.md).
 - **Tombstone purge.** Deleted rows stay in the sync log forever so that a long-offline device cannot resurrect them; a safe purge needs per-device cursors (ADR 0007).
 - **Multi-location.** The schema keeps `location_id` but nothing builds on it.
 - **Online payments and deposits**, guest booking, loyalty and marketing campaigns (non-goals for v1).
-- **OAuth extras**: an account screen to list and revoke grants, verified client identity (CIMD), DPoP (ADR 0009).
+- **OAuth extras** include verified client identity (CIMD) and DPoP for MCP (ADR 0009).
 - **External release execution** requires a release tag and signing credentials. CI must qualify the Linux x86_64, macOS Intel and macOS Apple Silicon artifacts before publication. See [release.md](release.md).
 
 ## Open risks

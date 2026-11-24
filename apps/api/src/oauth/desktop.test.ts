@@ -1611,4 +1611,27 @@ test("linked devices renew independently and can be revoked from either client",
   expect((await endpoint("revoke", second.proof("revoke"))).status).toBe(404);
   expect((await request("/sync/pull", secondToken)).status).toBe(401);
   expect(await (await list()).json()).toEqual({ devices: [] });
+
+  const allDevices = [await connect("Recepción de prueba"), await connect("Despacho de prueba")];
+  const activeTokens = await Promise.all(
+    allDevices.map(async (device) => {
+      const response = await endpoint("token", device.proof("token"));
+      expect(response.status).toBe(200);
+      const { access_token } = (await response.json()) as { access_token: string };
+      expect((await request("/sync/pull", access_token)).status).toBe(200);
+      return access_token;
+    }),
+  );
+  expect(
+    (
+      await t.app.request(`/me/connections/${DESKTOP_CLIENT_ID}`, {
+        method: "DELETE",
+        headers: webHeaders,
+      })
+    ).status,
+  ).toBe(204);
+  for (const token of activeTokens) expect((await request("/sync/pull", token)).status).toBe(401);
+  for (const device of allDevices)
+    expect((await endpoint("token", device.proof("token"))).status).toBe(404);
+  expect(await (await list()).json()).toEqual({ devices: [] });
 });

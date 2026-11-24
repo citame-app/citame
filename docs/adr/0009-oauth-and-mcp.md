@@ -69,7 +69,11 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 ### First-party desktop client
 
-`sob-desktop` is seeded at API start as a native public client with PKCE S256, a loopback redirect on an ephemeral port and explicit consent. It requests `desktop:sign-in offline_access` for the separate `/api/auth/desktop` audience. The system browser prompts for the account credentials. The native client uses a bearer token for the routes it needs, renews it with a first-party rotating refresh token and keeps the current owner or staff permissions. The web app and older desktop sessions still use session cookies. Existing MCP tokens cannot authorize sync and desktop tokens cannot call MCP.
+`sob-desktop` is seeded at API start as a native public client. To link a device, the system browser prompts for the account credentials and consent. The app uses PKCE S256, a loopback callback on an ephemeral port and the `desktop:sign-in` scope for the separate `/api/auth/desktop` audience. The authorization code exchange issues a token for enrolling the device key.
+
+A linked device signs a fresh proof with its private key to obtain a short-lived sync token. The server checks the device link and the current account permissions when it authorizes requests. **My account → Profile → Desktop devices** lists the linked devices and disconnects one at a time. Desktop can disconnect itself when online. Revoking the Desktop connection in the account's connections list disconnects all linked devices for that account.
+
+To open the agenda in the browser, the linked device requests a single-use ticket for the selected date, view and professionals. The server redeems it into a browser session for the same account. Browser and older desktop sessions can still use cookies. Older Desktop clients can also use the previous OAuth refresh flow. MCP and Desktop have separate audiences, scopes and route permissions.
 
 ### MCP server
 
@@ -113,5 +117,5 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 - Verified: OAuth flow tests, 34 MCP tests (authorization matrix, booking rules, concurrency), an end-to-end test with the official TypeScript SDK client (discovery, registration, PKCE, tools, refresh, concurrency) and a Playwright suite for sign-in and consent (both viewports, axe, es-AR).
 - Not verified: behaviour against real Claude Desktop or other hosts; the consent screen on a browser other than Chromium; TLS and a real public hostname (tests use `http://localhost`).
-- Follow-ups: desktop swap (above), DPoP, CIMD for verified clients and per-user MCP limits.
+- Follow-ups include DPoP for MCP tokens, CIMD for verified clients and per-user MCP limits.
 - Environment keys are listed in [the environment reference](../env-reference.md).
