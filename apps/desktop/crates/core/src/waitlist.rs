@@ -1,4 +1,5 @@
 use crate::intake::{IntakeResponse, IntakeSelection};
+use crate::model::CatalogPrice;
 use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
@@ -80,12 +81,35 @@ pub struct WaitlistOffer {
     pub policy: OfferProtection,
 }
 
+impl WaitlistOffer {
+    pub fn total_price_type(&self) -> CatalogPrice {
+        if self
+            .services
+            .iter()
+            .any(|service| service.price_type == CatalogPrice::Variable)
+        {
+            CatalogPrice::Variable
+        } else if self
+            .services
+            .iter()
+            .any(|service| service.price_type == CatalogPrice::From)
+        {
+            CatalogPrice::From
+        } else {
+            CatalogPrice::Fixed
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct OfferedService {
     pub name: String,
     pub price_cents: u32,
     pub peak_surcharge_cents: Option<u32>,
+    #[serde(default)]
+    pub price_type: CatalogPrice,
+    pub client_instructions: Option<String>,
     pub currency: String,
 }
 
@@ -189,5 +213,56 @@ pub struct WaitlistRequest {
 impl WaitlistRequest {
     pub fn new_key() -> String {
         uuid::Uuid::now_v7().to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn legacy_cached_offer_has_fixed_prices_and_no_instructions() {
+        let service: OfferedService = serde_json::from_value(json!({
+            "name": "Legacy treatment",
+            "priceCents": 2000,
+            "currency": "EUR"
+        }))
+        .unwrap();
+        assert_eq!(service.price_type, CatalogPrice::Fixed);
+        assert_eq!(service.client_instructions, None);
+    }
+
+    #[test]
+    fn offers_keep_service_terms_and_promote_any_variable_price_to_pending() {
+        let mut offer: WaitlistOffer = serde_json::from_value(json!({
+            "id": "offer",
+            "staffId": "staff",
+            "startsAt": "2026-11-24T12:00:00Z",
+            "endsAt": "2026-11-24T13:00:00Z",
+            "expiresAt": "2026-11-24T11:45:00Z",
+            "priceCents": 3200,
+            "currency": "EUR",
+            "services": [
+                { "name": "Treatment", "priceCents": 3200, "currency": "EUR", "priceType": "from",
+                  "peakSurchargeCents": 200, "clientInstructions": "Arrive ten minutes early.\nBring the intake form." },
+                { "name": "Consultation", "priceCents": 0, "currency": "EUR", "priceType": "variable" }
+            ],
+            "policy": { "enabled": false }
+        }))
+        .unwrap();
+        assert_eq!(offer.total_price_type(), CatalogPrice::Variable);
+        assert_eq!(
+            offer.services[0].client_instructions.as_deref(),
+            Some("Arrive ten minutes early.\nBring the intake form.")
+        );
+        assert_eq!(offer.services[0].peak_surcharge_cents, Some(200));
+        let round_trip: WaitlistOffer =
+            serde_json::from_str(&serde_json::to_string(&offer).unwrap()).unwrap();
+        assert_eq!(round_trip, offer);
+        offer.services.pop();
+        assert_eq!(offer.total_price_type(), CatalogPrice::From);
+        offer.services[0].price_type = CatalogPrice::Hidden;
+        assert_eq!(offer.total_price_type(), CatalogPrice::Fixed);
     }
 }

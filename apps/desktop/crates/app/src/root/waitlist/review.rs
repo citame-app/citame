@@ -1,6 +1,7 @@
 use super::super::intake_editor::{self, IntakeDraft};
 use super::*;
 use sob_core::intake::IntakeSelection;
+use sob_core::model::CatalogPrice;
 use sob_core::waitlist::WaitlistEntry;
 
 pub(super) struct OfferReview {
@@ -57,6 +58,18 @@ impl OfferReview {
                         .as_ref()
                         .is_some_and(|prior| prior.id == offer.id)
             })
+    }
+}
+
+fn offer_price_label(locale: i18n::Locale, price_type: CatalogPrice, amount: String) -> String {
+    match price_type {
+        CatalogPrice::From => i18n::fill(
+            i18n::t(locale, Key::WaitlistOfferPriceFrom),
+            &[("price", &amount)],
+        ),
+        CatalogPrice::Variable => i18n::t(locale, Key::WaitlistServicePriceVariable).to_owned(),
+        CatalogPrice::Free => i18n::t(locale, Key::CatalogFree).to_owned(),
+        CatalogPrice::Fixed | CatalogPrice::Hidden => amount,
     }
 }
 
@@ -260,6 +273,14 @@ impl Root {
                 .reviewable_offer(Utc::now(), review.can_waive, review.waiver.read(cx).text())
                 .is_some()
             && review.intake_selection(cx).is_some();
+        let offer_total = match offer.total_price_type() {
+            CatalogPrice::Variable => self.t(Key::WaitlistOfferPriceFinal).to_owned(),
+            price_type => offer_price_label(
+                self.locale,
+                price_type,
+                self.amount_label(i64::from(offer.price_cents), &offer.currency),
+            ),
+        };
         let mut body = div()
             .flex()
             .flex_col()
@@ -280,29 +301,60 @@ impl Root {
                     .clone()
                     .unwrap_or_else(|| self.staff_name(&offer.staff_id)),
             ))
-            .children(offer.services.iter().map(|service| {
+            .children(offer.services.iter().enumerate().map(|(index, service)| {
                 div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
                     .text_sm()
                     .child(SharedString::from(format!(
                         "{} · {}",
                         service.name,
-                        self.amount_label(i64::from(service.price_cents), &service.currency)
+                        offer_price_label(
+                            self.locale,
+                            service.price_type,
+                            self.amount_label(i64::from(service.price_cents), &service.currency),
+                        )
                     )))
                     .when_some(service.peak_surcharge_cents, |row, surcharge| {
                         let amount = self.amount_label(i64::from(surcharge), &service.currency);
-                        row.child(div().text_color(theme::muted()).child(i18n::fill(
-                            self.t(Key::PeakPriceSurcharge),
-                            &[("amount", &amount)],
-                        )))
+                        row.child(
+                            div()
+                                .debug_selector(move || format!("waitlist-offer-surcharge-{index}"))
+                                .text_color(theme::muted())
+                                .child(i18n::fill(
+                                    self.t(Key::PeakPriceSurcharge),
+                                    &[("amount", &amount)],
+                                )),
+                        )
                     })
+                    .when_some(
+                        service
+                            .client_instructions
+                            .as_deref()
+                            .filter(|text| !text.trim().is_empty()),
+                        |row, instructions| {
+                            row.child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("waitlist-offer-instructions-{index}")
+                                    })
+                                    .text_sm()
+                                    .text_color(theme::muted())
+                                    .child(instructions.to_owned()),
+                            )
+                        },
+                    )
             }))
-            .child(SharedString::from(i18n::fill(
-                self.t(Key::WaitlistOfferTotal),
-                &[(
-                    "amount",
-                    &self.amount_label(i64::from(offer.price_cents), &offer.currency),
-                )],
-            )))
+            .child(
+                div()
+                    .debug_selector(|| "waitlist-offer-total".into())
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(i18n::fill(
+                        self.t(Key::WaitlistOfferTotal),
+                        &[("amount", &offer_total)],
+                    )),
+            )
             .child(
                 div()
                     .text_sm()
@@ -588,6 +640,60 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_review_distinguishes_starting_pending_and_hidden_staff_prices() {
+        let locale = i18n::Locale::EsAr;
+        let price = |kind| offer_price_label(locale, kind, "15,00 €".to_owned());
+        assert_eq!(price(CatalogPrice::From), "Desde 15,00 €");
+        assert_eq!(price(CatalogPrice::Variable), "Precio variable");
+        assert_eq!(price(CatalogPrice::Free), "Gratis");
+        assert_eq!(price(CatalogPrice::Hidden), "15,00 €");
+        assert_eq!(price(CatalogPrice::Fixed), "15,00 €");
+    }
+
+    #[gpui::test]
+    async fn the_offer_places_its_instructions_between_the_surcharge_and_total(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use sob_core::waitlist::OfferedService;
+        let (_dir, config) = super::super::super::tests::desk();
+        let (_root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            show_intake_test_offer(&mut root, cx);
+            let Overlay::Waitlist(desk) = &mut root.overlay else {
+                panic!("missing waitlist");
+            };
+            let offer = desk
+                .offer_review
+                .as_mut()
+                .unwrap()
+                .entry
+                .offer
+                .as_mut()
+                .unwrap();
+            offer.services.push(OfferedService {
+                name: "Consultation".into(),
+                price_cents: 1500,
+                peak_surcharge_cents: Some(200),
+                price_type: CatalogPrice::From,
+                client_instructions: Some(
+                    "Arrive ten minutes early.\nBring the intake form.".into(),
+                ),
+                currency: "EUR".into(),
+            });
+            root
+        });
+        cx.simulate_resize(gpui::size(px(830.), px(620.)));
+        cx.run_until_parked();
+        let surcharge = cx.debug_bounds("waitlist-offer-surcharge-0").unwrap();
+        let instructions = cx.debug_bounds("waitlist-offer-instructions-0").unwrap();
+        let total = cx.debug_bounds("waitlist-offer-total").unwrap();
+        assert!(surcharge.bottom() <= instructions.top());
+        assert!(instructions.size.height > surcharge.size.height);
+        assert!(instructions.bottom() <= total.top());
+    }
 
     #[gpui::test]
     async fn an_uncertain_acceptance_can_retry_the_frozen_request_on_a_saved_page(

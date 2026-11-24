@@ -6850,6 +6850,8 @@ fn native_imported_waitlist_follows_the_web_policy_through_the_proxy() {
 #[test]
 #[ignore = "needs the real waitlist worker (see README)"]
 fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
+    use sob_core::model::CatalogPrice;
+
     let mut desk = Device::sign_in();
     desk.sync();
     let catalog = catalog(&desk);
@@ -6859,6 +6861,7 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
         json!({
             "name": "Synthetic waitlist service with intake", "durationMinutes": 30,
             "priceCents": 1500, "currency": "EUR", "staffIds": [catalog.staff],
+            "priceType": "from", "clientInstructions": "Please arrive ten minutes early.",
         }),
     );
     let service_id = service["id"].as_str().unwrap();
@@ -6950,6 +6953,12 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
     let (requirements, _) = transport.waitlist_offer_requirements(accepted).unwrap();
     let form = &requirements.forms[0];
     let offer = accepted.offer.as_ref().unwrap();
+    assert_eq!(offer.total_price_type(), CatalogPrice::From);
+    assert_eq!(offer.services[0].price_type, CatalogPrice::From);
+    assert_eq!(
+        offer.services[0].client_instructions.as_deref(),
+        Some("Please arrive ten minutes early.")
+    );
     let input = AcceptOffer {
         version: accepted.version,
         offer_id: offer.id.clone(),
