@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+The import reconciliation command identifies an incompatible migration ledger without printing private database errors. It directs operators to upgrade a separate restoration before retrying.
+
 WhatsApp Embedded Signup rejects malformed phone and account selections and lets the owner retry when the Meta sign-in window closes early.
 
 Appointment reminders use the centre’s local date and time in the subject and avoid relative labels that could become misleading around midnight or after delivery delays.

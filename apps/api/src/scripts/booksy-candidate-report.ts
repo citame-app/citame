@@ -1,6 +1,12 @@
 import { realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { booksyDesktopTestDatabase, connectToNamedDatabase, NO_DB_TIMEOUTS } from "@sob/db";
+import {
+  booksyDesktopTestDatabase,
+  connectToNamedDatabase,
+  MigrationLedgerError,
+  NO_DB_TIMEOUTS,
+  verifyMigrationLedger,
+} from "@sob/db";
 import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
 import { fingerprint } from "../modules/booksy-transfer/plan";
 import {
@@ -82,7 +88,11 @@ if (import.meta.main) {
           preparedCopy,
           billingReview: reviewBilling,
         },
-      );
+      ).catch(async (error: unknown) => {
+        // An older schema can fail before the business data can be compared.
+        await verifyMigrationLedger(db, { allowNewer: true });
+        throw error;
+      });
       if (directory && bookingLinks) {
         await privateWriteVerified(
           join(directory, `native-booking-links-${hash}.json`),
@@ -152,10 +162,12 @@ if (import.meta.main) {
     } finally {
       await close();
     }
-  } catch {
+  } catch (error) {
     // Database and parser errors can include original notes, references or connection information.
     console.error(
-      "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.",
+      error instanceof MigrationLedgerError
+        ? "The isolated copy has a different migration ledger. Reconcile an upgraded, separate restoration."
+        : "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.",
     );
     process.exitCode = 1;
   }
