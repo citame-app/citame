@@ -231,6 +231,60 @@ test("four calendar views, local filters and reservation details across screen s
   void datePicker;
 });
 
+test("an external reschedule keeps the open note draft across dates", async ({
+  page,
+  baseURL,
+}, info) => {
+  const day = "2026-12-07";
+  const nextDay = "2026-12-08";
+  const headers = { origin: baseURL ?? "http://localhost:4273" };
+  const hour = info.project.name === "desktop" ? "09" : "11";
+  const name = `Live note review ${info.project.name}`;
+  await signInThroughUi(page, fixture.ownerEmail, `/admin/calendar?date=${day}`);
+  await expect(page.getByRole("img", { name: "Live updates connected" })).toBeVisible();
+  const created = await page.request.post("/api/appointments", {
+    headers,
+    data: {
+      staffId,
+      serviceIds: [fixture.haircut],
+      startsAt: `${day}T${hour}:30:00Z`,
+      client: { name },
+      override: true,
+    },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  const appointment = await created.json();
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  const dialog = page.getByRole("dialog", { name });
+  const notes = dialog.getByLabel("Appointment notes", { exact: true });
+  await notes.fill("My Web draft");
+  const endpoint = `/api/appointments/${appointment.id}`;
+  const remote = await page.request.patch(endpoint, {
+    headers,
+    data: {
+      version: appointment.version,
+      startsAt: `${nextDay}T${hour}:30:00Z`,
+      notes: "New note from another session",
+      override: true,
+    },
+  });
+  expect(remote.ok(), await remote.text()).toBe(true);
+  await expect(dialog.getByText("New note from another session")).toBeVisible();
+  await expect(notes).toHaveValue("My Web draft");
+  const save = dialog.getByRole("button", { name: "Save notes", exact: true });
+  await expect(save).toBeDisabled();
+  await dialog.getByRole("button", { name: "Keep my draft" }).click();
+  await save.click();
+  await expect(page.getByText("Notes saved", { exact: true })).toBeVisible();
+  const latest = await page.request.get(`${endpoint}/calendar-entry`);
+  expect(latest.ok(), await latest.text()).toBe(true);
+  expect(await latest.json()).toMatchObject({
+    notes: "My Web draft",
+    startsAt: `${nextDay}T${hour}:30:00.000Z`,
+    version: appointment.version + 2,
+  });
+});
+
 test("SSE announces a remote booking, opens its date and recovers after a disconnection", async ({
   page,
   browser,

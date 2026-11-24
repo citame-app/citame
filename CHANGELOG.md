@@ -117,7 +117,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
 - A rejected move, cancellation or attendance change clears its local calendar preview while preserving newer revisions and other changes received live.
-- Web retains a draft appointment note when another client edits the same note. The calendar shows the latest saved text and asks for review before saving the draft.
+- Web retains a draft appointment note when another client edits the same note. The calendar shows the latest saved text and asks for review before saving the draft. The open detail follows a reschedule outside the visible date or staff filter while the account retains access.
 
 - Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.
 

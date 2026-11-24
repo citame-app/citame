@@ -192,7 +192,7 @@ describe("AppointmentDrawer", () => {
     );
   });
 
-  test("rescheduling waits for the pending note save", async () => {
+  test("rescheduling and service annotation saves wait for the pending note save", async () => {
     const { promise, resolve } = Promise.withResolvers<void>();
     pendingPatch = promise;
     try {
@@ -200,12 +200,25 @@ describe("AppointmentDrawer", () => {
       fireEvent.change(await screen.findByLabelText("Appointment notes"), {
         target: { value: "Prefers fragrance-free products" },
       });
+      fireEvent.change(await screen.findByLabelText("Internal notes"), {
+        target: { value: "Confirm preferred styling" },
+      });
+      const serviceSave = () =>
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save service details" });
+      expect(serviceSave().disabled).toBe(false);
       fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
-      const move = screen.getByRole("button", { name: "Reschedule" });
-      await waitFor(() => expect(move).toBeDisabled());
+      const move = () => screen.getByRole<HTMLButtonElement>("button", { name: "Reschedule" });
+      await waitFor(() => {
+        expect(move().disabled).toBe(true);
+        expect(serviceSave().disabled).toBe(true);
+      });
       expect(patches).toEqual([{ version: 3, notes: "Prefers fragrance-free products" }]);
       resolve();
-      await waitFor(() => expect(move).toBeEnabled());
+      await waitFor(() => {
+        expect(move().disabled).toBe(false);
+        expect(serviceSave().disabled).toBe(false);
+      });
+      expect(screen.getByLabelText("Internal notes")).toHaveValue("Confirm preferred styling");
     } finally {
       resolve();
     }
@@ -221,6 +234,20 @@ describe("AppointmentDrawer", () => {
     expect(alert).toHaveTextContent("Someone changed this appointment");
     fireEvent.click(within(alert).getByRole("button", { name: "Reload latest" }));
     expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  test("a fresh revision clears the reload prompt while preserving notes", async () => {
+    patchReply = { status: 409, body: { error: { code: "version_conflict", message: "stale" } } };
+    renderApp(<LiveUpdateHarness />);
+    const notes = await screen.findByLabelText("Appointment notes");
+    fireEvent.change(notes, { target: { value: "Draft after conflict" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("button", { name: "Reload latest" })).toBeVisible();
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(notes).toHaveValue("Draft after conflict");
+    expect(screen.getByRole("button", { name: "Save notes" })).toBeEnabled();
   });
 
   test("an unrelated live update keeps the draft and allows it to save on the latest revision", async () => {

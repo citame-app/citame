@@ -1,4 +1,4 @@
-import type { CalendarQuery, CalendarResponse } from "@sob/contracts";
+import type { CalendarAppointment, CalendarQuery, CalendarResponse } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
@@ -10,7 +10,7 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, eq, getTableColumns, gt, inArray, isNull, lt } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, gt, inArray, isNull, lt, type SQL } from "drizzle-orm";
 import type { VisitCheckoutScope } from "../../auth/policy";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
@@ -101,25 +101,15 @@ export async function getCalendar(
   }
 
   const [rows, offs, hours, dated] = await Promise.all([
-    db
-      .select({
-        row: appointment,
-        clientName: clientProfile.name,
-        itineraryId: appointmentVisitPart.visitId,
-        hasVisitCheckout: groupedCheckout(db, scope.visitCheckoutScope),
-      })
-      .from(appointment)
-      .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
-      .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
-      .where(
-        and(
-          inArray(appointment.staffId, staffIds),
-          isNull(appointment.deletedAt),
-          lt(appointment.startsAt, to),
-          gt(appointment.endsAt, from),
-        ),
-      )
-      .orderBy(asc(appointment.startsAt), asc(appointment.id)),
+    calendarRows(
+      db,
+      scope,
+      and(
+        inArray(appointment.staffId, staffIds),
+        lt(appointment.startsAt, to),
+        gt(appointment.endsAt, from),
+      ),
+    ),
     db
       .select()
       .from(timeOff)
@@ -150,6 +140,82 @@ export async function getCalendar(
     ),
   ]);
 
+  return {
+    timezone: settings.timezone,
+    from: query.from,
+    to: query.to,
+    staff: columns,
+    appointments: await hydrateCalendarRows(db, rows, scope),
+    timeOff: offs.map((o) => ({
+      id: o.id,
+      staffId: o.staffId,
+      startsAt: o.startsAt.toISOString(),
+      endsAt: o.endsAt.toISOString(),
+      reason: o.reason,
+    })),
+    workingWindows: workingWindows({
+      from,
+      to,
+      timeZone: settings.timezone,
+      staff: staffIds.map((staffId) => ({
+        staffId,
+        datedWorkingHours: asDatedHours(dated, staffId),
+        workingHours: hours
+          .filter((h) => h.staffId === staffId)
+          .map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),
+      })),
+    }).map((w) => ({
+      staffId: w.staffId,
+      startsAt: w.startsAt.toISOString(),
+      endsAt: w.endsAt.toISOString(),
+    })),
+  };
+}
+
+function calendarRows(db: Database | Tx, scope: CalendarScope, selection: SQL | undefined) {
+  return db
+    .select({
+      row: appointment,
+      clientName: clientProfile.name,
+      itineraryId: appointmentVisitPart.visitId,
+      hasVisitCheckout: groupedCheckout(db, scope.visitCheckoutScope),
+    })
+    .from(appointment)
+    .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
+    .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
+    .where(and(isNull(appointment.deletedAt), selection))
+    .orderBy(asc(appointment.startsAt), asc(appointment.id));
+}
+
+export async function getCalendarAppointment(
+  db: Database,
+  id: string,
+  scope: CalendarScope,
+): Promise<CalendarAppointment> {
+  return db.transaction(
+    async (tx) => {
+      const rows = await calendarRows(
+        tx,
+        scope,
+        and(
+          eq(appointment.id, id),
+          scope.staffIds ? inArray(appointment.staffId, scope.staffIds) : undefined,
+        ),
+      );
+      if (!rows.length) throw new DomainError("not_found", "Appointment not found");
+      const [entry] = await hydrateCalendarRows(tx, rows, scope);
+      if (!entry) throw new DomainError("not_found", "Appointment not found");
+      return entry;
+    },
+    { isolationLevel: "repeatable read", accessMode: "read only" },
+  );
+}
+
+async function hydrateCalendarRows(
+  db: Database | Tx,
+  rows: Awaited<ReturnType<typeof calendarRows>>,
+  scope: CalendarScope,
+): Promise<CalendarAppointment[]> {
   const snapshots = rows.length
     ? await db
         .select({ ...getTableColumns(appointmentService), color: service.color })
@@ -182,94 +248,65 @@ export async function getCalendar(
     own.push(snapshot);
     serviceSnapshots.set(snapshot.appointmentId, own);
   }
-  return {
-    timezone: settings.timezone,
-    from: query.from,
-    to: query.to,
-    staff: columns,
-    appointments: rows.map(({ row, clientName, itineraryId, hasVisitCheckout }) => {
-      const own = (serviceSnapshots.get(row.id) ?? []).sort((a, b) => a.position - b.position);
-      const context = badges.get(row.id);
-      const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
-      return {
-        ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
-        ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
-        ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
-        ...(itineraryId ? { itineraryId } : {}),
-        ...(hasVisitCheckout ? { hasVisitCheckout: true as const } : {}),
-        ...(row.combinationId ? { combinationId: row.combinationId } : {}),
-        id: row.id,
-        staffId: row.staffId,
-        clientId: row.clientId,
-        startsAt: row.startsAt.toISOString(),
-        endsAt: row.endsAt.toISOString(),
-        status: row.status,
-        notes: row.notes,
-        version: row.version,
-        ...(row.workWindows ? { workWindows: row.workWindows } : {}),
-        services: own.map((s) => ({
-          serviceId: s.serviceId,
-          name: s.name,
-          durationMinutes: s.durationMinutes,
-          bufferMinutes: s.bufferMinutes,
-          ...(s.processingStartMinutes !== null && s.processingMinutes !== null
-            ? {
-                processing: {
-                  startsAfterMinutes: s.processingStartMinutes,
-                  minutes: s.processingMinutes,
-                },
-              }
-            : {}),
-          priceCents: s.reviewedPriceCents ?? s.priceCents,
-          ...(s.peakSurchargeCents ? { peakSurchargeCents: s.peakSurchargeCents } : {}),
-          ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
-          ...(s.sourceUnpriced && s.reviewedPriceCents === null
-            ? { sourceUnpriced: true as const }
-            : {}),
-          currency: s.currency,
-        })),
-        createdAt: row.createdAt.toISOString(),
-        updatedAt: row.updatedAt.toISOString(),
-        protection: protections.get(row.id) ?? null,
-        resources: resources.get(row.id) ?? [],
-        clientName,
-        serviceBadges: context?.badges ?? [],
-        ...(context?.reasons.length ? { billingReviewReasons: context.reasons } : {}),
-        ...(context?.externallySettled ? { externallySettled: true as const } : {}),
-        ...(context?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
-        ...(context?.booksyUnpaidConfirmed ? { booksyUnpaidConfirmed: true as const } : {}),
-        ...(context?.externalBalance ? { externalBalance: context.externalBalance } : {}),
-        ...(scope.includeBilling && unresolved.length && own.every((s) => s.currency === "EUR")
-          ? { unpricedServices: unresolved.map(({ id, name }) => ({ id, name })) }
+  return rows.map(({ row, clientName, itineraryId, hasVisitCheckout }) => {
+    const own = (serviceSnapshots.get(row.id) ?? []).sort((a, b) => a.position - b.position);
+    const context = badges.get(row.id);
+    const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
+    return {
+      ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
+      ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
+      ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
+      ...(itineraryId ? { itineraryId } : {}),
+      ...(hasVisitCheckout ? { hasVisitCheckout: true as const } : {}),
+      ...(row.combinationId ? { combinationId: row.combinationId } : {}),
+      id: row.id,
+      staffId: row.staffId,
+      clientId: row.clientId,
+      startsAt: row.startsAt.toISOString(),
+      endsAt: row.endsAt.toISOString(),
+      status: row.status,
+      notes: row.notes,
+      version: row.version,
+      ...(row.workWindows ? { workWindows: row.workWindows } : {}),
+      services: own.map((s) => ({
+        serviceId: s.serviceId,
+        name: s.name,
+        durationMinutes: s.durationMinutes,
+        bufferMinutes: s.bufferMinutes,
+        ...(s.processingStartMinutes !== null && s.processingMinutes !== null
+          ? {
+              processing: {
+                startsAfterMinutes: s.processingStartMinutes,
+                minutes: s.processingMinutes,
+              },
+            }
           : {}),
-        serviceNames: own.map((s) => s.name),
-        serviceColors: Object.fromEntries(
-          own.flatMap((s) => (s.serviceId && s.color ? [[s.serviceId, s.color]] : [])),
-        ),
-      };
-    }),
-    timeOff: offs.map((o) => ({
-      id: o.id,
-      staffId: o.staffId,
-      startsAt: o.startsAt.toISOString(),
-      endsAt: o.endsAt.toISOString(),
-      reason: o.reason,
-    })),
-    workingWindows: workingWindows({
-      from,
-      to,
-      timeZone: settings.timezone,
-      staff: staffIds.map((staffId) => ({
-        staffId,
-        datedWorkingHours: asDatedHours(dated, staffId),
-        workingHours: hours
-          .filter((h) => h.staffId === staffId)
-          .map((h) => ({ weekday: h.weekday, start: h.startTime, end: h.endTime })),
+        priceCents: s.reviewedPriceCents ?? s.priceCents,
+        ...(s.peakSurchargeCents ? { peakSurchargeCents: s.peakSurchargeCents } : {}),
+        ...(s.priceType !== "fixed" ? { priceType: s.priceType } : {}),
+        ...(s.sourceUnpriced && s.reviewedPriceCents === null
+          ? { sourceUnpriced: true as const }
+          : {}),
+        currency: s.currency,
       })),
-    }).map((w) => ({
-      staffId: w.staffId,
-      startsAt: w.startsAt.toISOString(),
-      endsAt: w.endsAt.toISOString(),
-    })),
-  };
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      protection: protections.get(row.id) ?? null,
+      resources: resources.get(row.id) ?? [],
+      clientName,
+      serviceBadges: context?.badges ?? [],
+      ...(context?.reasons.length ? { billingReviewReasons: context.reasons } : {}),
+      ...(context?.externallySettled ? { externallySettled: true as const } : {}),
+      ...(context?.importedFromBooksy ? { importedFromBooksy: true as const } : {}),
+      ...(context?.booksyUnpaidConfirmed ? { booksyUnpaidConfirmed: true as const } : {}),
+      ...(context?.externalBalance ? { externalBalance: context.externalBalance } : {}),
+      ...(scope.includeBilling && unresolved.length && own.every((s) => s.currency === "EUR")
+        ? { unpricedServices: unresolved.map(({ id, name }) => ({ id, name })) }
+        : {}),
+      serviceNames: own.map((s) => s.name),
+      serviceColors: Object.fromEntries(
+        own.flatMap((s) => (s.serviceId && s.color ? [[s.serviceId, s.color]] : [])),
+      ),
+    };
+  });
 }

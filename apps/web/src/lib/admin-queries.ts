@@ -48,6 +48,16 @@ export const calendarQuery = (params: CalendarParams, endpoints = api) =>
     refetchOnWindowFocus: true,
   });
 
+export const calendarEntryQueryKey = (id?: string) =>
+  id ? (["admin", "calendar-entry", id] as const) : (["admin", "calendar-entry"] as const);
+
+export const calendarEntryQuery = (id: string, accessScope?: string) =>
+  queryOptions({
+    queryKey: [...calendarEntryQueryKey(id), accessScope],
+    queryFn: ({ signal }) => api().appointments.calendarEntry(id, signal),
+    refetchInterval: CALENDAR_POLL_MS,
+  });
+
 export const staffQuery = (endpoints = api) =>
   queryOptions({
     queryKey: ["admin", "staff"],

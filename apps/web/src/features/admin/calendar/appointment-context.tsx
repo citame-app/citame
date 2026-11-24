@@ -7,6 +7,12 @@ import { useI18n } from "~/i18n/react";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { AppointmentBadges } from "./appointment-badges";
+import {
+  type CalendarServiceContextChange,
+  calendarWriteKey,
+  startCalendarWrite,
+  usePendingCalendarWrites,
+} from "./appointment-writes";
 import { invalidateCalendarData } from "./cache";
 
 const contextKey = (id: string) => ["admin", "appointment-context", id] as const;
@@ -28,6 +34,7 @@ export function AppointmentContext({
     queryFn: () => api().appointments.context(appointment.id),
   });
   const details = context.data;
+  const writePending = usePendingCalendarWrites().has(appointment.id);
   return (
     <section className="space-y-4" aria-label={t("badge.details")}>
       <h3 className="font-semibold">{t("badge.details")}</h3>
@@ -62,6 +69,7 @@ export function AppointmentContext({
             name={service.name}
             row={details.rows.find((r) => r.servicePosition === index)}
             readOnly={readOnly}
+            writePending={writePending}
           />
         ))
       )}
@@ -75,6 +83,7 @@ function ServiceContext({
   name,
   row,
   readOnly = false,
+  writePending,
 }: {
   appointment: CalendarAppointment;
   appointmentVersion: number;
@@ -82,6 +91,7 @@ function ServiceContext({
   name: string;
   row?: AppointmentContextRow;
   readOnly?: boolean;
+  writePending: boolean;
 }) {
   const { t } = useI18n();
   const queries = useQueryClient();
@@ -95,13 +105,11 @@ function ServiceContext({
   const [draft, setDraft] = useState<NoteDraft | null>(null);
   const values = draft ?? latest;
   const save = useMutation({
-    mutationFn: ({ baseline, requested, note }: NoteDraft) =>
+    mutationKey: calendarWriteKey,
+    mutationFn: ({ appointment, context }: CalendarServiceContextChange) =>
       api().appointments.updateContext(appointment.id, {
-        appointmentVersion: baseline.appointmentVersion,
-        servicePosition: position,
-        version: baseline.version,
-        ...(requested !== baseline.requested ? { requested } : {}),
-        internalNote: note,
+        ...context,
+        appointmentVersion: appointment.version,
       }),
     onSuccess: (saved) => {
       queries.setQueryData<typeof saved>(contextKey(appointment.id), (current) => {
@@ -164,8 +172,31 @@ function ServiceContext({
         <Button
           variant="secondary"
           loading={save.isPending}
-          disabled={!draft || conflicted}
-          onClick={() => draft && save.mutate(draft)}
+          disabled={!draft || conflicted || writePending}
+          onClick={() => {
+            if (!draft || conflicted) return;
+            const { baseline, requested, note } = draft;
+            const unchanged =
+              latest.version === baseline.version &&
+              latest.note === baseline.note &&
+              latest.requested === baseline.requested;
+            startCalendarWrite(
+              queries,
+              {
+                appointment: {
+                  id: appointment.id,
+                  version: unchanged ? latest.appointmentVersion : baseline.appointmentVersion,
+                },
+                context: {
+                  servicePosition: position,
+                  version: baseline.version,
+                  ...(requested !== baseline.requested ? { requested } : {}),
+                  internalNote: note,
+                },
+              },
+              save.mutate,
+            );
+          }}
         >
           {t("badge.save")}
         </Button>

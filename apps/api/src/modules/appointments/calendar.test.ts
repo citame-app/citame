@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { appointmentSchema, calendarResponseSchema, errorResponseSchema } from "@sob/contracts";
+import {
+  appointmentSchema,
+  calendarAppointmentSchema,
+  calendarResponseSchema,
+  errorResponseSchema,
+} from "@sob/contracts";
 import { appointment, staffProfile, timeOff } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -63,6 +68,43 @@ describe("access control", () => {
     const res = await call(client);
     expect(res.status).toBe(403);
     expect(errorResponseSchema.parse(await res.json()).error.code).toBe("forbidden");
+  });
+
+  test("one calendar entry follows an appointment across calendar ranges and respects its assigned staff", async () => {
+    const booked = await book(f.anaId, MONDAY_0900);
+    const path = `/appointments/${booked.id}/calendar-entry`;
+    const entry = (who: Actor) => json(t.app, path, "GET", undefined, who.cookie);
+    const first = await entry(ana);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, no-store");
+    expect((await calendar(ana)).appointments[0]).toEqual(
+      calendarAppointmentSchema.parse(await first.json()),
+    );
+    const moved = await json(
+      t.app,
+      `/appointments/${booked.id}`,
+      "PATCH",
+      {
+        staffId: f.beaId,
+        startsAt: "2026-03-16T12:00:00Z",
+        version: booked.version,
+        notes: "Review on arrival",
+      },
+      owner.cookie,
+    );
+    expect(moved.status).toBe(200);
+    expect((await calendar(owner)).appointments).toHaveLength(0);
+    expect((await entry(ana)).status).toBe(404);
+    expect((await entry(client)).status).toBe(403);
+    const updated = await entry(owner);
+    expect(updated.status).toBe(200);
+    expect(calendarAppointmentSchema.parse(await updated.json())).toMatchObject({
+      id: booked.id,
+      staffId: f.beaId,
+      startsAt: "2026-03-16T12:00:00.000Z",
+      notes: "Review on arrival",
+      version: booked.version + 1,
+    });
   });
 
   test("staff get only their own calendar and cannot request a colleague's", async () => {

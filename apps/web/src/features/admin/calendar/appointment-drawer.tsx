@@ -13,7 +13,7 @@ import { SeriesVisits } from "~/features/booking/series-visits";
 import { priceLabel, totalPriceLabel } from "~/features/booking/service-price";
 import { SlotPicker } from "~/features/booking/slot-picker";
 import { useI18n } from "~/i18n/react";
-import { clientDetailQuery } from "~/lib/admin-queries";
+import { calendarEntryQueryKey, clientDetailQuery } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatDuration, formatMoney, formatTime, localDateOf } from "~/lib/format";
 import { processingRanges } from "~/lib/processing";
@@ -142,6 +142,11 @@ function DrawerBody({
       { queryKey: ["admin", "calendar"] },
       (data) => (data ? mergeAppointment(data, saved) : data),
     );
+    queryClient.setQueriesData<CalendarAppointment>(
+      { queryKey: calendarEntryQueryKey(saved.id) },
+      (current) =>
+        current && current.version <= saved.version ? { ...current, ...saved } : current,
+    );
     void invalidateCalendarData(queryClient);
   };
 
@@ -156,14 +161,18 @@ function DrawerBody({
       toast.success(t("calendar.toast.notesSaved"));
       afterSave(saved);
     },
-    onError: (error) => setProblem(describeProblem(error)),
   });
   const noteChanged = notesDraft !== null && notesDraft.notes !== savedNotes;
   const notesNeedReview = noteChanged && notesDraft.original !== savedNotes;
+  const noteProblem = saveNotes.isError ? describeProblem(saveNotes.error) : null;
   const noteNeedsRefresh =
     saveNotes.isError &&
-    describeProblem(saveNotes.error).recovery === "reload" &&
+    noteProblem?.recovery === "reload" &&
     appointment.version <= saveNotes.variables.appointment.version;
+  const visibleProblem =
+    (noteProblem?.recovery === "reload" && !noteNeedsRefresh ? null : noteProblem) ?? problem;
+  const canSaveNotes =
+    !readOnly && !writePending && noteChanged && !notesNeedReview && !noteNeedsRefresh;
 
   const move = useMutation({
     mutationKey: calendarWriteKey,
@@ -208,15 +217,15 @@ function DrawerBody({
         <StatusBadge status={appointment.status} />
       </div>
 
-      {problem && (
+      {visibleProblem && (
         <div
           role="alert"
           className="rounded-lg border border-danger-fg/40 bg-danger-soft p-4 text-danger-fg"
         >
-          {problem.recovery === "reload" ? (
+          {visibleProblem.recovery === "reload" ? (
             <>
               <p className="font-medium">{t("drawer.conflict.title")}</p>
-              <p className="mt-1 text-sm">{t(problem.messageKey)}</p>
+              <p className="mt-1 text-sm">{t(visibleProblem.messageKey)}</p>
               <Button
                 variant="secondary"
                 className="mt-3"
@@ -230,7 +239,7 @@ function DrawerBody({
               </Button>
             </>
           ) : (
-            <p className="font-medium">{t(problem.messageKey)}</p>
+            <p className="font-medium">{t(visibleProblem.messageKey)}</p>
           )}
         </div>
       )}
@@ -346,10 +355,9 @@ function DrawerBody({
         <Button
           variant="secondary"
           loading={saveNotes.isPending}
-          disabled={readOnly || writePending || !noteChanged || notesNeedReview || noteNeedsRefresh}
+          disabled={!canSaveNotes}
           onClick={() => {
-            if (!notesDraft || !noteChanged || notesNeedReview || noteNeedsRefresh || readOnly)
-              return;
+            if (!notesDraft || !canSaveNotes) return;
             startCalendarWrite(
               queryClient,
               { appointment, notes: notesDraft.notes },
@@ -372,7 +380,6 @@ function DrawerBody({
               onClick={() => {
                 setNotesDraft((draft) => draft && { ...draft, original: savedNotes });
                 saveNotes.reset();
-                setProblem(null);
               }}
             >
               {t("drawer.notes.keepDraft")}
@@ -386,7 +393,6 @@ function DrawerBody({
             onClick={() => {
               setNotesDraft(null);
               saveNotes.reset();
-              setProblem(null);
               if (noteNeedsRefresh) {
                 onReload?.();
                 void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
