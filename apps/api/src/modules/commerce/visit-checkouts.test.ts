@@ -1,12 +1,15 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { checkoutSchema, visitCheckoutSchema } from "@sob/contracts";
+import { checkoutSchema, visitCheckoutSchema, visitPaymentSchema } from "@sob/contracts";
 import {
   appointment,
   appointmentContext,
   appointmentService,
   appointmentVisit,
   appointmentVisitPart,
+  cashMovement,
   checkout,
+  checkoutPayment,
+  visitPayment,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -85,6 +88,106 @@ async function group(source: "itinerary" | "import") {
 function prepare(id: string, who = owner) {
   return json(t.app, `/admin/commerce/visits/${id}/checkouts`, "POST", undefined, who.cookie);
 }
+
+function collect(id: string, body: object, who = owner) {
+  return json(t.app, `/admin/commerce/visits/${id}/payments`, "POST", body, who.cookie);
+}
+
+async function paymentReview(id: string) {
+  const result = await prepare(id);
+  expect(result.status, await result.clone().text()).toBe(200);
+  const body = visitCheckoutSchema.parse(await result.json());
+  expect(body.paymentReview?.totalCents).toBe(3100);
+  if (!body.paymentReview) throw new Error("Missing payment review");
+  return body.paymentReview.token;
+}
+
+test("one cash payment records both receipt allocations and replays from either appointment", async () => {
+  const { first, second } = await group("itinerary");
+  const reviewToken = await paymentReview(first);
+  const opened = await json(
+    t.app,
+    "/admin/commerce/cash-sessions",
+    "POST",
+    {
+      openingCents: 0,
+      sessionId: crypto.randomUUID(),
+    },
+    owner.cookie,
+  );
+  expect(opened.status, await opened.clone().text()).toBe(201);
+  const input = { method: "cash", idempotencyKey: crypto.randomUUID(), reviewToken };
+  const results = await Promise.all([collect(first, input), collect(second, input)]);
+  for (const result of results) expect(result.status, await result.clone().text()).toBe(201);
+  const [original, replay] = await Promise.all(
+    results.map(async (result) => visitPaymentSchema.parse(await result.json())),
+  );
+  expect(original).toEqual(replay);
+  expect(original?.totalCents).toBe(3100);
+  const payments = await t.db.select().from(checkoutPayment);
+  expect(payments.map((p) => p.amountCents).sort((a, b) => a - b)).toEqual([1200, 1900]);
+  expect(await t.db.select().from(cashMovement)).toHaveLength(2);
+  expect((await collect(first, { ...input, method: "external_card" })).status).toBe(409);
+  expect((await t.db.select().from(checkoutPayment)).length).toBe(2);
+});
+
+test("a failure on the last cash allocation rolls back all payments and register movements", async () => {
+  const { first } = await group("itinerary");
+  const reviewToken = await paymentReview(first);
+  const opened = await json(
+    t.app,
+    "/admin/commerce/cash-sessions",
+    "POST",
+    { openingCents: 999_998_000, sessionId: crypto.randomUUID() },
+    owner.cookie,
+  );
+  expect(opened.status).toBe(201);
+  const input = { method: "cash", idempotencyKey: crypto.randomUUID(), reviewToken };
+  const result = await collect(first, input);
+  expect(result.status).toBe(409);
+  expect(await result.text()).toContain("cash limit");
+  expect(await t.db.select().from(visitPayment)).toHaveLength(0);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  expect(await t.db.select().from(cashMovement)).toHaveLength(0);
+});
+
+test("separate simultaneous confirmations cannot record the same visit twice", async () => {
+  const { first, second } = await group("import");
+  const reviewToken = await paymentReview(first);
+  const results = await Promise.all(
+    [first, second].map((id) =>
+      collect(id, { method: "external_card", idempotencyKey: crypto.randomUUID(), reviewToken }),
+    ),
+  );
+  expect(results.map(({ status }) => status).sort()).toEqual([201, 409]);
+  expect(await t.db.select().from(visitPayment)).toHaveLength(1);
+  expect(await t.db.select().from(checkoutPayment)).toHaveLength(2);
+});
+
+test("a balance changed after review prevents all visit payments", async () => {
+  const { first, second } = await group("import");
+  const reviewToken = await paymentReview(first);
+  const prepared = visitCheckoutSchema.parse(await (await prepare(first)).json());
+  const receipt = prepared.appointments.find((part) => part.appointmentId === second)?.receipt;
+  if (!receipt) throw new Error("Missing second receipt");
+  const individual = await json(
+    t.app,
+    `/admin/commerce/checkouts/${receipt.id}/payments`,
+    "POST",
+    {
+      method: "external_card",
+      amountCents: 400,
+      idempotencyKey: crypto.randomUUID(),
+    },
+    owner.cookie,
+  );
+  expect(individual.status).toBe(201);
+  const input = { method: "external_card", idempotencyKey: crypto.randomUUID(), reviewToken };
+  expect((await collect(first, input)).status).toBe(409);
+  expect((await collect(first, input, staff)).status).toBe(404);
+  const payments = await t.db.select().from(checkoutPayment);
+  expect(payments.map((p) => p.amountCents)).toEqual([400]);
+});
 
 test.each(["itinerary", "import"] as const)(
   "the %s group prepares one frozen receipt per professional",

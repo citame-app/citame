@@ -345,6 +345,12 @@ export const checkoutSchema = z.object({
 export const visitCheckoutSchema = z.object({
   groupId: idSchema,
   source: z.enum(["itinerary", "import"]),
+  paymentReview: z
+    .object({
+      token: z.string().regex(/^[a-f0-9]{64}$/),
+      totalCents: z.number().int().positive(),
+    })
+    .nullable(),
   appointments: z.array(
     z.object({
       appointmentId: idSchema,
@@ -357,6 +363,26 @@ export const visitCheckoutSchema = z.object({
   ),
 });
 export type VisitCheckout = z.infer<typeof visitCheckoutSchema>;
+const visitPaymentMethodSchema = z.enum(["cash", "external_card"]);
+export const visitPaymentInputSchema = z.strictObject({
+  method: visitPaymentMethodSchema,
+  reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
+  idempotencyKey: idempotencyKeySchema,
+});
+export type VisitPaymentInput = z.infer<typeof visitPaymentInputSchema>;
+export const visitPaymentSchema = z.object({
+  id: idSchema,
+  method: visitPaymentMethodSchema,
+  totalCents: z.number().int().positive(),
+  allocations: z.array(
+    z.object({
+      paymentId: idSchema,
+      receiptId: idSchema,
+      amountCents: moneyCentsSchema,
+    }),
+  ),
+});
+export type VisitPayment = z.infer<typeof visitPaymentSchema>;
 const checkoutGroupTotalSchema = z.object({
   period: z.iso.date(),
   receipts: z.number().int().nonnegative(),

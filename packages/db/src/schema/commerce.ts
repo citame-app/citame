@@ -147,6 +147,24 @@ export const cashSession = pgTable(
     ),
   ],
 );
+export const visitPayment = pgTable(
+  "visit_payment",
+  {
+    id: primaryId(),
+    actorUserId: text().references(() => user.id, { onDelete: "set null" }),
+    groupId: uuid().notNull(),
+    groupSource: text().notNull(),
+    method: paymentMethod().notNull(),
+    idempotencyKey: text().notNull(),
+    requestHash: text().notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    unique("visit_payment_actor_idempotency_unique").on(t.actorUserId, t.idempotencyKey),
+    check("visit_payment_group_source_valid", sql`${t.groupSource} in ('itinerary', 'import')`),
+    check("visit_payment_manual_tender", sql`${t.method} in ('cash', 'external_card')`),
+  ],
+);
 export const checkoutPayment = pgTable(
   "checkout_payment",
   {
@@ -154,6 +172,7 @@ export const checkoutPayment = pgTable(
     checkoutId: uuid()
       .notNull()
       .references(() => checkout.id),
+    visitPaymentId: uuid().references(() => visitPayment.id),
     method: paymentMethod().notNull(),
     status: paymentStatus().notNull().default("pending"),
     amountCents: integer().notNull(),
@@ -174,6 +193,7 @@ export const checkoutPayment = pgTable(
   },
   (t) => [
     unique("checkout_payment_idempotency_unique").on(t.checkoutId, t.idempotencyKey),
+    unique("checkout_payment_visit_receipt_unique").on(t.visitPaymentId, t.checkoutId),
     index("checkout_payment_checkout_idx").on(t.checkoutId),
     check(
       "checkout_payment_money_valid",

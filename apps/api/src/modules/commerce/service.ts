@@ -449,19 +449,24 @@ async function linkedAppointmentCheckout(db: Connection, appointmentId: string) 
   return linked?.receipt;
 }
 
-export async function readAppointmentCheckout(tx: Tx, id: string, principal: Principal) {
+export async function readAppointmentCheckout(
+  tx: Tx,
+  id: string,
+  principal: Principal,
+  now?: Date,
+) {
   requireOperator(principal);
   const receipt = await linkedAppointmentCheckout(tx, id);
   if (!receipt) return null;
   assertSaleAccess(principal, receipt);
-  return snapshot(tx, receipt);
+  return snapshot(tx, receipt, now);
 }
 
 export async function createCheckoutInTransaction(
   tx: Tx,
   input: CreateCheckoutInput,
   principal: Principal,
-  options: { giftPurchase?: { priceCents: number } } = {},
+  options: { giftPurchase?: { priceCents: number }; now?: Date } = {},
 ) {
   const giftPurchase =
     options.giftPurchase !== undefined &&
@@ -510,7 +515,7 @@ export async function createCheckoutInTransaction(
   if (existing) {
     assertSaleAccess(principal, existing);
     checkReplay(existing, requestHash);
-    return snapshot(tx, existing);
+    return snapshot(tx, existing, options.now);
   }
   let clientId = input.clientId ?? null;
   let staffId = input.staffId ?? (principal.role === "staff" ? principal.staffId : null);
@@ -582,7 +587,7 @@ export async function createCheckoutInTransaction(
       assertSaleAccess(principal, previous);
       if (input.lines.length || input.discountCents || input.tipCents || input.clientId)
         checkReplay(previous, requestHash);
-      return snapshot(tx, previous);
+      return snapshot(tx, previous, options.now);
     }
     await assertAppointmentBillable(tx, booking.id);
     const booked = await tx
@@ -789,7 +794,7 @@ export async function createCheckoutInTransaction(
       ...(catalogPriceReviews.length > 0 && { catalogPriceReviews }),
     },
   });
-  return snapshot(tx, row);
+  return snapshot(tx, row, options.now);
 }
 async function lockCashRegister(tx: Tx) {
   await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.cash-session', 0))`);
@@ -833,136 +838,152 @@ export async function startPayment(
   const bank = input.method === "redsys_card" || input.method === "redsys_bizum";
   if (bank && (!gateway || (input.method === "redsys_bizum" && !bizumEnabled)))
     throw new DomainError("payment_unavailable", "This online payment method is not configured");
-  return db.transaction(async (tx) => {
-    const sale = await saleRow(tx, id, principal, true);
-    const requestHash = idemHash(input);
-    const [previous] = await tx
-      .select()
-      .from(checkoutPayment)
-      .where(
-        and(
-          eq(checkoutPayment.checkoutId, id),
-          eq(checkoutPayment.idempotencyKey, input.idempotencyKey),
-        ),
+  return db.transaction(async (tx) =>
+    startPaymentInTransaction(tx, await saleRow(tx, id, principal, true), input, principal, {
+      now,
+      gateway,
+      bizumEnabled,
+      recurring,
+    }),
+  );
+}
+
+/** The caller has authorized and locked the receipt before taking the scheduling lock. */
+export async function startPaymentInTransaction(
+  tx: Tx,
+  sale: typeof checkout.$inferSelect,
+  input: StartPaymentInput,
+  principal: Principal,
+  {
+    now,
+    gateway = null,
+    bizumEnabled = false,
+    recurring = null,
+    visitPaymentId,
+  }: {
+    now: Date;
+    gateway?: PaymentGateway | null;
+    bizumEnabled?: boolean;
+    recurring?: RecurringPaymentSettings | null;
+    visitPaymentId?: string;
+  },
+) {
+  const id = sale.id;
+  const bank = input.method === "redsys_card" || input.method === "redsys_bizum";
+  const requestHash = idemHash(input);
+  const [previous] = await tx
+    .select()
+    .from(checkoutPayment)
+    .where(
+      and(
+        eq(checkoutPayment.checkoutId, id),
+        eq(checkoutPayment.idempotencyKey, input.idempotencyKey),
+      ),
+    );
+  if (sale.appointmentId && !previous) await assertAppointmentBillable(tx, sale.appointmentId);
+  let payment = previous;
+  if (previous) checkReplay(previous, requestHash);
+  else {
+    const view = await snapshot(tx, sale);
+    if (
+      view.externalBalance &&
+      (!["cash", "external_card", "redsys_card", "redsys_bizum"].includes(input.method) ||
+        view.totalCents !== view.externalBalance.dueInCitameCents)
+    )
+      throw new DomainError("invalid_state", "Collect only the verified Booksy balance in money");
+    if (view.lines.some((line) => line.pricePending) && view.protection?.state !== "pending")
+      throw new DomainError(
+        "invalid_state",
+        "The salon must set the final service price before payment",
       );
-    if (sale.appointmentId && !previous) await assertAppointmentBillable(tx, sale.appointmentId);
-    let payment = previous;
-    if (previous) checkReplay(previous, requestHash);
-    else {
-      const view = await snapshot(tx, sale);
-      if (
-        view.externalBalance &&
-        (!["cash", "external_card", "redsys_card", "redsys_bizum"].includes(input.method) ||
-          view.totalCents !== view.externalBalance.dueInCitameCents)
-      )
-        throw new DomainError("invalid_state", "Collect only the verified Booksy balance in money");
-      if (view.lines.some((line) => line.pricePending) && view.protection?.state !== "pending")
-        throw new DomainError(
-          "invalid_state",
-          "The salon must set the final service price before payment",
-        );
-      await assertRewardPayment(tx, sale, input.method);
-      await assertProtectedPayment(
-        tx,
-        sale,
-        input.amountCents,
-        input.method,
-        view.balanceCents,
-        now,
+    await assertRewardPayment(tx, sale, input.method);
+    await assertProtectedPayment(tx, sale, input.amountCents, input.method, view.balanceCents, now);
+    if (
+      sale.status !== "open" ||
+      input.amountCents > view.balanceCents ||
+      view.payments.some((p) => p.status === "pending" || p.status === "reconciliation")
+    )
+      throw new DomainError(
+        "invalid_state",
+        "Payment exceeds the balance or another payment is unresolved",
       );
-      if (
-        sale.status !== "open" ||
-        input.amountCents > view.balanceCents ||
-        view.payments.some((p) => p.status === "pending" || p.status === "reconciliation")
-      )
-        throw new DomainError(
-          "invalid_state",
-          "Payment exceeds the balance or another payment is unresolved",
-        );
-      const session = input.method === "cash" ? await openSession(tx) : null;
-      if (session && (await cashView(tx, session)).expectedCents + input.amountCents > 999999999)
-        throw new DomainError(
-          "invalid_state",
-          "The register balance exceeds its supported cash limit",
-        );
-      const mandateRequested = Boolean(
-        recurring &&
-          input.method === "redsys_card" &&
-          (await needsCardMandate(tx, sale, input.amountCents, principal)),
+    const session = input.method === "cash" ? await openSession(tx) : null;
+    if (session && (await cashView(tx, session)).expectedCents + input.amountCents > 999999999)
+      throw new DomainError(
+        "invalid_state",
+        "The register balance exceeds its supported cash limit",
       );
-      for (let attempt = 0; attempt < 3; attempt++) {
-        const order = bank ? `${randomInt(1000, 10000)}${randomBytes(4).toString("hex")}` : null;
-        [payment] = await tx
-          .insert(checkoutPayment)
-          .values({
-            checkoutId: id,
-            method: input.method,
-            mandateRequested,
-            amountCents: input.amountCents,
-            status: bank ? "pending" : "succeeded",
-            bankOrder: order,
-            idempotencyKey: input.idempotencyKey,
-            requestHash,
-            createdBy: principal.userId,
-            cashSessionId: session?.id,
-          })
-          .onConflictDoNothing()
-          .returning();
-        if (payment) break;
-      }
-      if (!payment)
-        throw new DomainError("invalid_state", "Could not allocate a unique payment order");
-      if (input.method === "package" || input.method === "membership") {
-        await redeemPass(tx, input, payment.id, id, principal);
-        await assertGiftServiceCoverage(tx, id);
-      }
-      if (input.method === "gift_card")
-        await redeemGift(
-          tx,
-          input.giftCardCode ?? "",
-          input.amountCents,
-          payment.id,
-          id,
-          principal,
-        );
-      if (session)
-        await tx.insert(cashMovement).values({
-          sessionId: session.id,
-          paymentId: payment.id,
-          amountCents: payment.amountCents,
-          kind: "sale",
-          reason: "Checkout payment",
-          idempotencyKey: `payment-${payment.id}`,
+    const mandateRequested = Boolean(
+      recurring &&
+        input.method === "redsys_card" &&
+        (await needsCardMandate(tx, sale, input.amountCents, principal)),
+    );
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const order = bank ? `${randomInt(1000, 10000)}${randomBytes(4).toString("hex")}` : null;
+      [payment] = await tx
+        .insert(checkoutPayment)
+        .values({
+          checkoutId: id,
+          visitPaymentId,
+          method: input.method,
+          mandateRequested,
+          amountCents: input.amountCents,
+          status: bank ? "pending" : "succeeded",
+          bankOrder: order,
+          idempotencyKey: input.idempotencyKey,
           requestHash,
           createdBy: principal.userId,
-        });
-      await refreshStatus(tx, id, now);
-      await recordAudit(tx, {
-        actorUserId: principal.userId,
-        action: "commerce.payment_started",
-        entity: "checkout_payment",
-        entityId: payment.id,
-        metadata: {
-          amountCents: payment.amountCents,
-          method: payment.method,
-          status: payment.status,
-        },
-      });
+          cashSessionId: session?.id,
+        })
+        .onConflictDoNothing()
+        .returning();
+      if (payment) break;
     }
-    if (!payment) throw new Error("Missing payment after transaction");
-    const form = hostedForm(payment, gateway, bizumEnabled);
-    if (previous && form) await assertHostedBalance(tx, sale, payment, now);
-    return {
-      payment: {
-        id: payment.id,
-        order: payment.bankOrder,
+    if (!payment)
+      throw new DomainError("invalid_state", "Could not allocate a unique payment order");
+    if (input.method === "package" || input.method === "membership") {
+      await redeemPass(tx, input, payment.id, id, principal);
+      await assertGiftServiceCoverage(tx, id);
+    }
+    if (input.method === "gift_card")
+      await redeemGift(tx, input.giftCardCode ?? "", input.amountCents, payment.id, id, principal);
+    if (session)
+      await tx.insert(cashMovement).values({
+        sessionId: session.id,
+        paymentId: payment.id,
+        amountCents: payment.amountCents,
+        kind: "sale",
+        reason: "Checkout payment",
+        idempotencyKey: `payment-${payment.id}`,
+        requestHash,
+        createdBy: principal.userId,
+      });
+    await refreshStatus(tx, id, now);
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: "commerce.payment_started",
+      entity: "checkout_payment",
+      entityId: payment.id,
+      metadata: {
         amountCents: payment.amountCents,
         method: payment.method,
         status: payment.status,
       },
-      form,
-    };
-  });
+    });
+  }
+  if (!payment) throw new Error("Missing payment after transaction");
+  const form = hostedForm(payment, gateway, bizumEnabled);
+  if (previous && form) await assertHostedBalance(tx, sale, payment, now);
+  return {
+    payment: {
+      id: payment.id,
+      order: payment.bankOrder,
+      amountCents: payment.amountCents,
+      method: payment.method,
+      status: payment.status,
+    },
+    form,
+  };
 }
 function hostedForm(
   payment: typeof checkoutPayment.$inferSelect,
