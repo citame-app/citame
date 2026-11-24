@@ -10,7 +10,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
-- Desktop appointment details show the server-confirmed deposit state and payment deadlines. Staff with commerce access can also see the deposit amount, retained fee and refund due.
+- Desktop appointment details show the server-confirmed deposit state and payment deadlines. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
 
 - Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
 

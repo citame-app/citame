@@ -110,6 +110,7 @@ test("private appointment context shows protection and redacts amounts without c
   expect(await details.json()).toMatchObject({
     protection: {
       state: "pending",
+      checkoutId: booking.checkoutId,
       attendanceBlock: "pending_deposit",
       depositCents: 2500,
       feeCents: 0,
@@ -139,6 +140,12 @@ test("private appointment context shows protection and redacts amounts without c
     "expiresAt",
     "state",
   ]);
+
+  const receiptPath = `/admin/commerce/checkouts/${booking.checkoutId}`;
+  const receipt = await call(owner, receiptPath);
+  expect(receipt.status).toBe(200);
+  expect(await receipt.json()).toMatchObject({ id: booking.checkoutId, appointmentId: id });
+  expect((await call(professional, receiptPath)).status).toBe(403);
 
   const payment = await call(
     owner,

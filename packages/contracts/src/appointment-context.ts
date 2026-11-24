@@ -10,7 +10,7 @@ export const appointmentProtectionContextSchema = bookingProtectionSchema
   })
   .extend(
     bookingProtectionSchema
-      .pick({ depositCents: true, feeCents: true, refundDueCents: true })
+      .pick({ checkoutId: true, depositCents: true, feeCents: true, refundDueCents: true })
       .partial().shape,
   )
   .extend({

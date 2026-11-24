@@ -280,6 +280,7 @@ struct Details {
     price_review: Option<billing::PriceReview>,
     settlement_review: Option<settlement::SettlementReview>,
     checkout: Option<checkout::CheckoutReview>,
+    deposit_receipt_scope: Option<String>,
     annotations: Option<annotations::Annotations>,
     deposit_outcome_block: Option<AttendanceProtectionBlock>,
     annotations_requested_version: Option<i64>,
@@ -994,6 +995,15 @@ impl Root {
         self.refresh_client_controls(cx);
         self.reload_team_shifts();
         self.refresh_weekly_conflicts_if_ready(cx);
+        if let Overlay::Details(details) = &mut self.overlay
+            && details
+                .deposit_receipt_scope
+                .as_ref()
+                .is_some_and(|scope| scope != &self.time_off_scope)
+        {
+            details.checkout = None;
+            details.deposit_receipt_scope = None;
+        }
         self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
         self.refresh_resource_calendar(self.status.connectivity, false, cx);
         cx.notify();
@@ -1433,6 +1443,7 @@ impl Root {
             price_review: None,
             settlement_review: None,
             checkout: None,
+            deposit_receipt_scope: None,
             annotations: None,
             deposit_outcome_block: None,
             annotations_requested_version: None,
@@ -3791,6 +3802,7 @@ impl Root {
             })
             .when(
                 !pending
+                    && protection.is_none_or(|deposit| deposit.checkout_id.is_none())
                     && current
                         .as_ref()
                         .is_some_and(|a| self.can_open_appointment_checkout(a)),
@@ -6335,6 +6347,69 @@ mod tests {
         root.update(cx, |root, cx| root.review_updated_appointment(cx));
         cx.run_until_parked();
         assert!(cx.debug_bounds("mark-completed").is_some());
+    }
+
+    #[gpui::test]
+    async fn deposit_receipts_require_a_current_checkout_link_and_drop_it_when_access_changes(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1280.), px(1000.)));
+        root.update(cx, |root, cx| {
+            root.open_details(EXISTING, cx);
+            root.status.connectivity = Connectivity::Online;
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            let context = serde_json::from_value(json!({
+                "appointmentVersion": 3, "rows": [],
+                "protection": {
+                    "state": "confirmed",
+                    "expiresAt": "2026-03-09T14:00:00Z",
+                    "cancellationCutoff": "2026-03-08T15:00:00Z"
+                }
+            }))
+            .unwrap();
+            details.install_annotation_context(context);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("open-deposit-receipt").is_none());
+        root.update(cx, |root, cx| {
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            let context = serde_json::from_value(json!({
+                "appointmentVersion": 3, "rows": [],
+                "protection": {
+                    "state": "confirmed",
+                    "checkoutId": "01a1d81e-0000-7000-8000-000000000f01",
+                    "expiresAt": "2026-03-09T14:00:00Z",
+                    "cancellationCutoff": "2026-03-08T15:00:00Z"
+                }
+            }))
+            .unwrap();
+            details.install_annotation_context(context);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("open-deposit-receipt").is_some());
+        root.update(cx, |root, cx| {
+            root.status.connectivity = Connectivity::Offline;
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            details.checkout = Some(checkout::CheckoutReview::Failed);
+            details.deposit_receipt_scope = Some(root.time_off_scope.clone());
+            root.svc.store.set_meta("time_off_scope", "none").unwrap();
+            root.reload(cx);
+            assert!(
+                matches!(&root.overlay, Overlay::Details(details) if details.checkout.is_none())
+            );
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("open-deposit-receipt").is_none());
     }
 
     #[gpui::test]

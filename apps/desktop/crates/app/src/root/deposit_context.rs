@@ -63,6 +63,23 @@ impl Root {
                     }),
             )
             .child(self.t(state))
+            .when(
+                can_refresh && self.status.connectivity == Connectivity::Online
+                    && protection.checkout_id.is_some(),
+                |panel| {
+                    panel.child(
+                        self.button(
+                            "open-deposit-receipt",
+                            self.t(Key::DepositReceipt),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| this.open_deposit_receipt(cx)),
+                        )
+                        .tab_index(0)
+                        .focus(|style| style.border_color(theme::text()))
+                        .debug_selector(|| "open-deposit-receipt".to_owned()),
+                    )
+                },
+            )
             .children(money.into_iter().filter_map(|(label, amount)| {
                 let amount = amount.filter(|value| *value > 0)?;
                 Some(div().child(i18n::fill(

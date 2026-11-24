@@ -63,6 +63,7 @@ export async function getAppointmentContext(db: Connection, id: string, principa
             ...(attendanceBlock ? { attendanceBlock } : {}),
             ...(commerce
               ? {
+                  checkoutId: protection.checkoutId,
                   depositCents: protection.depositCents,
                   feeCents: protection.feeCents,
                   refundDueCents: protection.refundDueCents,

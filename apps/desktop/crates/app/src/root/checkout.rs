@@ -15,6 +15,12 @@ mod refunds;
 mod rewards;
 mod stock_return;
 
+enum DetailCheckoutSource {
+    Start(Option<ExternalBalance>),
+    Existing(Uuid),
+    Deposit(Uuid),
+}
+
 pub(super) enum CheckoutReview {
     Loading(Arc<()>),
     Failed,
@@ -169,7 +175,43 @@ impl Root {
         if !self.can_open_appointment_checkout(&appointment) {
             return;
         }
-        let balance = appointment.external_balance;
+        let source = receipt.map_or(
+            DetailCheckoutSource::Start(appointment.external_balance),
+            DetailCheckoutSource::Existing,
+        );
+        self.load_details_checkout(id, source, cx);
+    }
+
+    pub(super) fn open_deposit_receipt(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Details(details) = &self.overlay else {
+            return;
+        };
+        if self.status.connectivity != Connectivity::Online || details.checkout.is_some() {
+            return;
+        }
+        let Some(annotations::Annotations::Ready(context)) = &details.annotations else {
+            return;
+        };
+        let Some(receipt) = context
+            .protection
+            .as_ref()
+            .and_then(|deposit| deposit.checkout_id)
+        else {
+            return;
+        };
+        self.load_details_checkout(
+            details.id.clone(),
+            DetailCheckoutSource::Deposit(receipt),
+            cx,
+        );
+    }
+
+    fn load_details_checkout(
+        &mut self,
+        id: String,
+        source: DetailCheckoutSource,
+        cx: &mut Context<Self>,
+    ) {
         let Some(transport) = self.svc.transport() else {
             return;
         };
@@ -182,19 +224,22 @@ impl Root {
         let session = self.svc.session.clone();
         if let Overlay::Details(details) = &mut self.overlay {
             details.checkout = Some(CheckoutReview::Loading(token.clone()));
+            details.deposit_receipt_scope = matches!(source, DetailCheckoutSource::Deposit(_))
+                .then(|| self.time_off_scope.clone());
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor()
                 .spawn(async move {
-                    if let Some(receipt_id) = receipt {
-                        let receipt = transport.open_saved_checkout(receipt_id)?;
-                        if receipt.appointment_id.as_deref() != Some(id.as_str()) {
-                            return Err(sob_core::sync::TransportError::Server("Unexpected appointment on receipt".into()));
+                    match source {
+                        DetailCheckoutSource::Existing(receipt_id) | DetailCheckoutSource::Deposit(receipt_id) => {
+                            let receipt = transport.open_saved_checkout(receipt_id)?;
+                            if receipt.appointment_id.as_deref() != Some(id.as_str()) {
+                                return Err(sob_core::sync::TransportError::Server("Unexpected appointment on receipt".into()));
+                            }
+                            Ok(receipt)
                         }
-                        Ok(receipt)
-                    } else {
-                        transport.open_appointment_checkout(&id, balance)
+                        DetailCheckoutSource::Start(balance) => transport.open_appointment_checkout(&id, balance),
                     }
                 })
                 .await;
@@ -536,7 +581,9 @@ impl Root {
         let history = self.overlay.sales_history().is_some();
         let body = div().flex().flex_col().gap_3().child(
             div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if history
+                if matches!(&self.overlay, Overlay::Details(details) if details.deposit_receipt_scope.is_some()) {
+                    Key::DepositReceipt
+                } else if history
                     || matches!(
                         self.overlay,
                         Overlay::WalkInReceipt(_) | Overlay::GiftCards(_)
