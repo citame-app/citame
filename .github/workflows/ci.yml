@@ -213,7 +213,7 @@ jobs:
           K6_EMAIL: ci-owner@example.com
           K6_PASSWORD: correct horse battery staple
       - name: Upload browser diagnostics
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         # A failed attempt can leave a trace even when the retry passes.
         if: ${{ !cancelled() && (failure() || hashFiles('apps/web/test-results/**/trace.zip') != '') }}
         with:
@@ -312,7 +312,7 @@ jobs:
           SOB_TEST_API_URL: http://127.0.0.1:3055
           SOB_TEST_EMAIL: ci-owner@example.com
           SOB_TEST_PASSWORD: ci-only-owner-password
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: desktop-api-log

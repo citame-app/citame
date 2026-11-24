@@ -63,7 +63,7 @@ jobs:
           bash scripts/package-desktop-macos.sh
           cd .release/desktop
           shasum -a 256 -c ./*.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: desktop-macos-test-${{ matrix.architecture }}
           path: .release/desktop/*
