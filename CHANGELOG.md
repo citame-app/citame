@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop calendar shortcuts navigate between dates and views, open a new appointment, and sync the replica. Find the key guide in the calendar header.
+
 - Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
 
 - Web and Desktop can issue gift cards for selected treatments and show the terms on vouchers and when checking balances. Checkout verifies the eligible amount even for mixed payments.

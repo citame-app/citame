@@ -39,6 +39,7 @@ mod booking_intake;
 mod booking_policy;
 mod calendar_date;
 mod calendar_overview;
+mod calendar_shortcuts;
 mod commissions;
 mod resource_calendar;
 mod visit_booking;
@@ -313,6 +314,7 @@ enum Overlay {
     Reports(Box<reports::Desk>),
     Commissions(Box<commissions::Desk>),
     CalendarDate(calendar_date::DatePicker),
+    CalendarShortcuts,
     TeamShifts(Box<team_shifts::Desk>),
     StaffPortraits(Box<staff_portraits::Desk>),
     StaffAccess(Box<staff_access::Desk>),
@@ -392,6 +394,7 @@ pub struct Root {
     booking_combinations: Vec<sob_core::combinations::ManagedCombination>,
     service_colors: HashMap<String, String>,
     focus: gpui::FocusHandle,
+    shortcuts_close_focus: gpui::FocusHandle,
     overlay: Overlay,
     pending_loyalty: Option<loyalty::Pending>,
     pending_stamp: Option<loyalty::PendingStamp>,
@@ -485,6 +488,7 @@ impl Root {
             booking_combinations: vec![],
             service_colors: HashMap::new(),
             focus: cx.focus_handle(),
+            shortcuts_close_focus: cx.focus_handle(),
             overlay: Overlay::None,
             pending_loyalty: None,
             pending_stamp: None,
@@ -1902,10 +1906,7 @@ impl Root {
                 "sync-now",
                 self.t(Key::SyncNow),
                 Kind::Ghost,
-                cx.listener(|this, _, _, cx| {
-                    this.svc.wake(Wake::Manual);
-                    this.force_resource_calendar_refresh(cx);
-                }),
+                cx.listener(|this, _, _, cx| this.sync_calendar(cx)),
             ))
     }
 
@@ -1981,7 +1982,21 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|this, _, _, cx| this.shift_day(1, cx)),
                     ))
-                    .child(self.calendar_date_button(cx)),
+                    .child(self.calendar_date_button(cx))
+                    .child(
+                        self.button(
+                            "calendar-shortcuts",
+                            self.t(Key::CalendarShortcuts),
+                            Kind::Ghost,
+                            cx.listener(|this, _, window, cx| {
+                                this.open_calendar_shortcuts(window, cx)
+                            }),
+                        )
+                        .when(matches!(self.overlay, Overlay::None), |button| {
+                            button.tab_index(0)
+                        })
+                        .focus(|style| style.border_color(theme::accent())),
+                    ),
             )
             .child(
                 div().flex().items_center().gap_1().children(
@@ -4368,7 +4383,6 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if matches!(self.screen, Screen::Main)
             && !self.login.server_editor
-            && !matches!(self.overlay, Overlay::None)
             && window.focused(cx).is_none()
         {
             self.focus.focus(window);
@@ -4407,6 +4421,7 @@ impl Render for Root {
                 Screen::Main => {
                     let overlay = match &self.overlay {
                         Overlay::None => None,
+                        Overlay::CalendarShortcuts => Some(self.render_calendar_shortcuts(cx)),
                         Overlay::Cloud(desk) => {
                             Some(self.render_web_management(desk, content_viewport, cx))
                         }
@@ -4558,9 +4573,18 @@ impl Render for Root {
             .text_color(theme::text())
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if event.keystroke.key == "tab"
+                    && matches!(this.overlay, Overlay::CalendarShortcuts)
+                {
+                    cx.stop_propagation();
+                    return;
+                }
+                if event.keystroke.key == "tab"
+                    && matches!(this.screen, Screen::Main)
+                    && !this.login.server_editor
                     && (matches!(
                         this.overlay,
-                        Overlay::Directory(_)
+                        Overlay::None
+                            | Overlay::Directory(_)
                             | Overlay::Details(_)
                             | Overlay::New(_)
                             | Overlay::Marketing(_)
@@ -4582,9 +4606,14 @@ impl Render for Root {
                 {
                     if !event.is_held {
                         this.dismiss_overlay(cx);
+                        if matches!(this.overlay, Overlay::None) {
+                            this.focus.focus(window);
+                        }
                     }
                     cx.stop_propagation();
+                    return;
                 }
+                this.handle_calendar_shortcut(event, window, cx);
             }))
             .on_mouse_move(
                 cx.listener(|this, event: &gpui::MouseMoveEvent, _, cx| this.drag_slot(event, cx)),
@@ -5108,6 +5137,67 @@ mod tests {
         win.update(cx, |root, _, _| {
             assert!(matches!(root.overlay, Overlay::None));
             assert!(outbox_kinds(root).is_empty());
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn calendar_shortcuts_use_the_current_view_and_leave_form_input_alone(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        let initial = win.update(cx, |root, _, _| root.date).unwrap();
+
+        cx.simulate_keystrokes(win.into(), "w right");
+        win.update(cx, |root, _, _| {
+            assert_eq!(root.calendar_mode, CalendarMode::Week);
+            assert_eq!(root.date, initial + Span::weeks(1));
+        })
+        .unwrap();
+
+        cx.simulate_keystrokes(win.into(), "ctrl-d n");
+        win.update(cx, |root, window, cx| {
+            assert_eq!(root.calendar_mode, CalendarMode::Week);
+            let Overlay::New(form) = &root.overlay else {
+                panic!("expected booking form");
+            };
+            assert_eq!(form.date, initial + Span::weeks(1));
+            form.client_search.read(cx).focus(window);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "d w");
+        win.update(cx, |root, _, cx| {
+            let Overlay::New(form) = &root.overlay else {
+                panic!("expected booking form");
+            };
+            assert_eq!(form.client_search.read(cx).text(), "dw");
+            assert_eq!(root.calendar_mode, CalendarMode::Week);
+            assert!(outbox_kinds(root).is_empty());
+        })
+        .unwrap();
+
+        cx.simulate_keystrokes(win.into(), "escape m left l d shift-/->?");
+        win.update(cx, |root, _, _| {
+            assert_eq!(root.calendar_mode, CalendarMode::Day);
+            assert_eq!(
+                root.date,
+                CalendarMode::Month.shift(initial + Span::weeks(1), -1)
+            );
+            assert!(matches!(root.overlay, Overlay::CalendarShortcuts));
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "tab");
+        win.update(cx, |root, window, _| {
+            assert!(root.shortcuts_close_focus.is_focused(window));
+        })
+        .unwrap();
+        gpui::VisualTestContext::from_window(win.into(), cx).simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
+        cx.simulate_keystrokes(win.into(), "t");
+        win.update(cx, |root, _, _| {
+            assert!(matches!(root.overlay, Overlay::None));
+            assert_eq!(root.date, Utc::now().with_timezone(&root.tz).date_naive());
         })
         .unwrap();
     }
