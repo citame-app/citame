@@ -13,6 +13,15 @@ pub(super) struct DepositView<'a> {
 }
 
 impl Details {
+    pub(super) fn has_newer_context(&self, appointment: Option<&Appointment>) -> bool {
+        self.annotations
+            .as_ref()
+            .and_then(annotations::Annotations::context)
+            .and_then(|context| context.appointment_version)
+            .zip(appointment)
+            .is_some_and(|(version, appointment)| version > appointment.version)
+    }
+
     pub(super) fn deposit_view(
         &self,
         appointment: Option<&Appointment>,
@@ -51,13 +60,16 @@ impl Details {
 impl Root {
     pub(super) fn render_appointment_protection(
         &self,
-        status: AppointmentDepositStatus,
-        protection: Option<&AppointmentProtection>,
+        deposit: &DepositView<'_>,
         can_refresh: bool,
         can_open_receipt: bool,
+        awaiting_sync: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         use AppointmentProtectionState::*;
+        let status = deposit.status;
+        let online = self.status.connectivity == Connectivity::Online;
+        let protection = deposit.private.filter(|_| online);
         let state_label = match status.state {
             Pending => Key::DepositPending,
             Confirmed => Key::DepositConfirmed,
@@ -95,7 +107,7 @@ impl Root {
                     .justify_between()
                     .gap_2()
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(self.t(Key::AppointmentDeposit)))
-                    .when(can_refresh && self.status.connectivity == Connectivity::Online, |bar| {
+                    .when(can_refresh && online, |bar| {
                         bar.child(self.button(
                             "refresh-appointment-protection",
                             self.t(Key::DepositRefresh),
@@ -109,7 +121,18 @@ impl Root {
                     }),
             )
             .child(self.t(state_label))
-            .when(protection.is_none(), |panel| panel.child(div().text_color(theme::muted()).child(self.t(Key::DepositLastSynced))))
+            .when(protection.is_none(), |panel| {
+                panel.child(div().text_color(theme::muted()).child(self.t(
+                    if deposit.private.is_some() {
+                        Key::DepositLastChecked
+                    } else {
+                        Key::DepositLastSynced
+                    },
+                )))
+            })
+            .when(awaiting_sync, |panel| {
+                panel.child(div().text_color(theme::muted()).child(self.t(Key::DepositAwaitingSync)))
+            })
             .when(
                 can_open_receipt,
                 |panel| {

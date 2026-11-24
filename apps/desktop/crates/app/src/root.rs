@@ -1553,6 +1553,11 @@ impl Root {
         };
         let appointment = self.svc.store.appointment(&d.id).ok().flatten();
         let deposit_status = d.deposit_view(appointment.as_ref());
+        if deposit_status.is_some() && d.has_newer_context(appointment.as_ref()) {
+            d.error = Some(i18n::t(self.locale, Key::DepositAwaitingSync).to_owned());
+            cx.notify();
+            return;
+        }
         if let Some(block) =
             deposit_status.map_or(d.deposit_outcome_block, |view| view.status.attendance_block)
         {
@@ -3629,10 +3634,14 @@ impl Root {
         let online = self.status.connectivity == Connectivity::Online;
         let annotation_ready = matches!(d.annotations, Some(annotations::Annotations::Ready(_)));
         let protection = deposit.as_ref().and_then(|view| view.private);
+        let awaiting_deposit_sync = deposit.is_some() && d.has_newer_context(current.as_ref());
         let outcomes = current
             .as_ref()
             .filter(|a| {
-                !stale && self.can_edit_staff_calendar(&a.staff_id) && deposit_block.is_none()
+                !stale
+                    && !awaiting_deposit_sync
+                    && self.can_edit_staff_calendar(&a.staff_id)
+                    && deposit_block.is_none()
             })
             .map_or(&[][..], |a| {
                 ops::appointment_outcome_options(
@@ -3686,8 +3695,7 @@ impl Root {
             .when_some(deposit.as_ref(), |details, deposit| {
                 details.child(
                     self.render_appointment_protection(
-                        deposit.status,
-                        protection.filter(|_| online),
+                        deposit,
                         !matches!(
                             d.annotations,
                             Some(
@@ -3699,6 +3707,7 @@ impl Root {
                             && annotation_ready
                             && protection
                                 .is_some_and(|p| p.checkout_id.is_some() && !p.receipt_restricted),
+                        awaiting_deposit_sync,
                         cx,
                     ),
                 )
@@ -3829,9 +3838,9 @@ impl Root {
             })
             .when(
                 !pending
-                    && protection.is_none_or(|deposit| {
-                        deposit.checkout_id.is_none() && !deposit.receipt_restricted
-                    })
+                    && (deposit.is_none()
+                        || protection
+                            .is_some_and(|p| p.checkout_id.is_none() && !p.receipt_restricted))
                     && current
                         .as_ref()
                         .is_some_and(|a| self.can_open_appointment_checkout(a)),
@@ -6490,7 +6499,20 @@ mod tests {
         cx.run_until_parked();
         assert!(cx.debug_bounds("open-deposit-receipt").is_some());
         root.update(cx, |root, cx| {
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            details.checkout = Some(checkout::CheckoutReview::Failed);
+            details.checkout_access = Some(DetailsCheckoutAccess {
+                scope: root.time_off_scope.clone(),
+                deposit: true,
+            });
             root.status.connectivity = Connectivity::Offline;
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("deposit-receipt-offline").is_some());
+        root.update(cx, |root, cx| {
             for deposit in [true, false] {
                 root.svc.store.set_meta("time_off_scope", "all").unwrap();
                 root.reload(cx);

@@ -355,7 +355,16 @@ impl Root {
                     return;
                 }
                 match result {
-                    Ok(notes) => details.install_annotation_context(notes),
+                    Ok(notes) => {
+                        let newer = notes
+                            .appointment_version
+                            .zip(details.annotations_requested_version)
+                            .is_some_and(|(remote, requested)| remote > requested);
+                        details.install_annotation_context(notes);
+                        if newer {
+                            this.svc.wake(Wake::Manual);
+                        }
+                    }
                     Err(_) => details.annotations = Some(Annotations::Unavailable),
                 }
                 this.refresh_open_annotations(this.time_off_scope != time_off_scope, cx);
