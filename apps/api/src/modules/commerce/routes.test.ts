@@ -359,81 +359,99 @@ test("an undocumented Booksy payment is held until the owner records evidence of
   expect((await call(owner, checkoutPath, "POST", attemptedSale)).status).toBe(409);
 });
 
-test("new Booksy evidence freezes a previously cleared appointment until the owner reconciles it", async () => {
-  await t.db.insert(appointmentContext).values({
-    appointmentId,
-    servicePosition: 0,
-    source: "booksy",
-    sourceRef: "source-line-full-evidence",
-    paid: false,
-    sourcePaymentUnverified: true,
-  });
-  const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;
-  const unpaid = `/admin/commerce/appointments/${appointmentId}/imported-unpaid`;
-  const before = await call(owner, "/admin/commerce/checkouts", "POST", {
-    appointmentId,
-    idempotencyKey: crypto.randomUUID(),
-  });
-  expect(before.status).toBe(409);
-  expect(
-    (
-      await call(owner, unpaid, "PUT", {
-        appointmentVersion: 1,
-        reference: "Prior inspection of the source records",
-      })
-    ).status,
-  ).toBe(200);
-  const current = await call(owner, `/appointments/${appointmentId}/calendar-entry`);
-  expect(await current.json()).toMatchObject({ booksyUnpaidConfirmed: true });
-  const context = {
-    rows: [
-      {
+test.each(["unchanged", "null to false", "unmarked flag change", "no prior review"] as const)(
+  "new Booksy evidence freezes an appointment until the owner reconciles it (%s)",
+  async (kind) => {
+    const knownNegative = kind === "no prior review";
+    const unchanged = kind === "unchanged";
+    const currentVersion = knownNegative ? 1 : 2;
+    await t.db.insert(appointmentContext).values({
+      appointmentId,
+      servicePosition: 0,
+      source: "booksy",
+      sourceRef: "source-line-full-evidence",
+      paid: unchanged || knownNegative ? false : null,
+      invoiced: knownNegative ? false : null,
+      sourcePaymentUnverified: unchanged,
+    });
+    const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;
+    const unpaid = `/admin/commerce/appointments/${appointmentId}/imported-unpaid`;
+    if (!knownNegative) {
+      const before = await call(owner, "/admin/commerce/checkouts", "POST", {
         appointmentId,
-        appointmentVersion: 2,
-        contextVersion: 1,
-        servicePosition: 0,
-        sourceRef: "source-line-full-evidence",
-        requestedStaffId: null,
-        internalNote: null,
-        customerComment: null,
-        invoiced: null,
-        paid: false,
-        paymentEvidenceChanged: true,
-      },
-    ],
-  };
-  const preview = await call(owner, "/appointments/booksy-context/preview", "POST", context);
-  expect(preview.status, await preview.clone().text()).toBe(200);
-  const plan = booksyContextReviewSchema.parse(await preview.json());
-  expect(plan.paymentReviewsReopened).toBe(1);
-  expect(plan.items[0]?.action).toBe("update");
-  const payload = { input: context, reviewHash: plan.reviewHash };
-  const apply = () => call(owner, "/appointments/booksy-context/import", "POST", payload);
-  expect((await apply()).status).toBe(200);
-  const retried = booksyContextReviewSchema.parse(await (await apply()).json());
-  expect(retried.paymentReviewsReopened).toBeUndefined();
-  expect(retried.items[0]?.action).toBe("unchanged");
-  const blocked = await call(owner, "/admin/commerce/checkouts", "POST", {
-    appointmentId,
-    idempotencyKey: crypto.randomUUID(),
-  });
-  expect(blocked.status).toBe(409);
-  const restored = syncPullResponseSchema
-    .parse(await (await call(owner, "/sync/pull?since=0&booksyPaymentReview=1")).json())
-    .changes.find(({ id }) => id === appointmentId)?.data;
-  expect(restored).toMatchObject({ version: 3, billingReviewReasons: ["unknown_booksy_payment"] });
-  expect(restored).not.toHaveProperty("booksyUnpaidConfirmed");
-  expect(await t.db.select().from(appointmentContext)).toMatchObject([{ version: 1, paid: false }]);
-  const input = { appointmentVersion: 3, amountCents: 10000, reference: "Full external receipt" };
-  expect((await call(owner, path, "PUT", { ...input, amountCents: 0 })).status).toBe(400);
-  const recorded = await call(owner, path, "PUT", input);
-  expect(recorded.status, await recorded.clone().text()).toBe(200);
-  expect(await recorded.json()).toMatchObject({
-    appointmentVersion: 4,
-    settlement: { amountCents: 10000 },
-  });
-  expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
-});
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(before.status).toBe(409);
+      expect(
+        (
+          await call(owner, unpaid, "PUT", {
+            appointmentVersion: 1,
+            reference: "Prior inspection of the source records",
+          })
+        ).status,
+      ).toBe(200);
+      const current = await call(owner, `/appointments/${appointmentId}/calendar-entry`);
+      expect(await current.json()).toMatchObject({ booksyUnpaidConfirmed: true });
+    }
+    const context = {
+      rows: [
+        {
+          appointmentId,
+          appointmentVersion: currentVersion,
+          contextVersion: 1,
+          servicePosition: 0,
+          sourceRef: "source-line-full-evidence",
+          requestedStaffId: null,
+          internalNote: null,
+          customerComment: null,
+          invoiced: unchanged ? null : false,
+          paid: false,
+          paymentEvidenceChanged: kind === "unmarked flag change" ? undefined : true,
+        },
+      ],
+    };
+    const preview = await call(owner, "/appointments/booksy-context/preview", "POST", context);
+    expect(preview.status, await preview.clone().text()).toBe(200);
+    const plan = booksyContextReviewSchema.parse(await preview.json());
+    expect(plan.paymentReviewsReopened).toBe(knownNegative ? undefined : 1);
+    expect(plan.items[0]?.action).toBe("update");
+    const payload = { input: context, reviewHash: plan.reviewHash };
+    const apply = () => call(owner, "/appointments/booksy-context/import", "POST", payload);
+    expect((await apply()).status).toBe(200);
+    const retried = booksyContextReviewSchema.parse(await (await apply()).json());
+    expect(retried.paymentReviewsReopened).toBeUndefined();
+    expect(retried.items[0]?.action).toBe("unchanged");
+    const blocked = await call(owner, "/admin/commerce/checkouts", "POST", {
+      appointmentId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(blocked.status).toBe(409);
+    const restored = syncPullResponseSchema
+      .parse(await (await call(owner, "/sync/pull?since=0&booksyPaymentReview=1")).json())
+      .changes.find(({ id }) => id === appointmentId)?.data;
+    expect(restored).toMatchObject({
+      version: currentVersion + 1,
+      billingReviewReasons: ["unknown_booksy_payment"],
+    });
+    expect(restored).not.toHaveProperty("booksyUnpaidConfirmed");
+    expect(await t.db.select().from(appointmentContext)).toMatchObject([
+      { version: unchanged ? 1 : 2, paid: false, sourcePaymentUnverified: true },
+    ]);
+    const input = {
+      appointmentVersion: currentVersion + 1,
+      amountCents: 10000,
+      reference: "Full external receipt",
+    };
+    expect((await call(owner, path, "PUT", { ...input, amountCents: 0 })).status).toBe(400);
+    const recorded = await call(owner, path, "PUT", input);
+    expect(recorded.status, await recorded.clone().text()).toBe(200);
+    expect(await recorded.json()).toMatchObject({
+      appointmentVersion: currentVersion + 2,
+      settlement: { amountCents: 10000 },
+    });
+    expect(await t.db.select().from(checkoutTable)).toHaveLength(0);
+  },
+);
 
 test("the owner can reconcile a full Booksy settlement without a receipt or a second charge", async () => {
   const path = `/admin/commerce/appointments/${appointmentId}/imported-settlement`;

@@ -319,6 +319,18 @@ function sameContext(
 ) {
   return sameSourceAnnotations(a, b) && a?.invoiced === b.invoiced && a?.paid === b.paid;
 }
+function changesBooksyPayment(
+  current: typeof appointmentContext.$inferSelect | undefined,
+  row: BooksyContextImport["rows"][number],
+) {
+  return (
+    row.paymentEvidenceChanged ||
+    current?.source !== "booksy" ||
+    current.sourceRef !== row.sourceRef ||
+    current.paid !== row.paid ||
+    current.invoiced !== row.invoiced
+  );
+}
 async function prepareImport(
   db: Connection,
   input: BooksyContextImport,
@@ -357,14 +369,7 @@ async function prepareImport(
   const financialChanges = new Set<string>();
   for (const r of input.rows) {
     const current = byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
-    if (
-      r.paymentEvidenceChanged ||
-      current?.source !== "booksy" ||
-      current.sourceRef !== r.sourceRef ||
-      current.paid !== r.paid ||
-      current.invoiced !== r.invoiced
-    )
-      financialChanges.add(r.appointmentId);
+    if (changesBooksyPayment(current, r)) financialChanges.add(r.appointmentId);
   }
   const affected = [...financialChanges];
   const [partial, unpaid, settled] = await Promise.all([
@@ -377,6 +382,8 @@ async function prepareImport(
     state === "confirmed_unpaid" && !partial.has(id) && !settled.has(id) ? [id] : [],
   );
   const reopen = new Set([...reopenPartial, ...reopenUnpaid]);
+  const confirmedUnpaid = new Set(reopenUnpaid);
+  const unverifiedRows = new Set<string>();
   const items = [];
   for (const r of input.rows) {
     const key = `${r.appointmentId}:${r.servicePosition}`;
@@ -410,8 +417,19 @@ async function prepareImport(
         "invalid_state",
         "This Booksy service is already mapped to another appointment",
       );
+    // A newly negative source flag must not clear a hold on unresolved payment evidence.
+    const needsPaymentHold =
+      r.paid === false &&
+      r.invoiced !== true &&
+      !current?.sourcePaymentUnverified &&
+      !settled.has(r.appointmentId) &&
+      (r.paymentEvidenceChanged ||
+        (confirmedUnpaid.has(r.appointmentId) && changesBooksyPayment(current, r)));
+    if (needsPaymentHold) unverifiedRows.add(key);
     const unchanged =
-      sameContext(current, r) && !(r.paymentEvidenceChanged && reopen.has(r.appointmentId));
+      sameContext(current, r) &&
+      !needsPaymentHold &&
+      !(r.paymentEvidenceChanged && reopen.has(r.appointmentId));
     if (
       !unchanged &&
       (visit.version !== r.appointmentVersion || (current?.version ?? 0) !== r.contextVersion)
@@ -432,6 +450,7 @@ async function prepareImport(
     reopen,
     reopenPartial,
     reopenUnpaid,
+    unverifiedRows,
     review: {
       items,
       reviewHash: digest(input),
@@ -469,14 +488,20 @@ export async function importBooksyContext(
     const prepared = await prepareImport(tx, input, principal, now);
     const changed = new Set(prepared.reopen);
     for (const r of input.rows) {
-      const current = prepared.byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
-      if (sameContext(current, r)) continue;
+      const key = `${r.appointmentId}:${r.servicePosition}`;
+      const current = prepared.byPosition.get(key);
+      const needsPaymentHold = prepared.unverifiedRows.has(key);
+      if (sameContext(current, r) && !needsPaymentHold) continue;
       const {
         appointmentVersion: _appointmentVersion,
         contextVersion: _contextVersion,
         paymentEvidenceChanged: _paymentEvidenceChanged,
-        ...values
+        ...inputValues
       } = r;
+      const values = {
+        ...inputValues,
+        ...(needsPaymentHold ? { sourcePaymentUnverified: true } : {}),
+      };
       if (current) {
         await tx
           .update(appointmentContext)
