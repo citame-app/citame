@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { errorResponseSchema, meResponseSchema } from "@sob/contracts";
 import { account, clientProfile, session, user } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -89,6 +89,29 @@ describe("sign-in and session", () => {
     expect(body.user).toMatchObject({ id: userId, email: "lucia@example.com", role: "client" });
     expect(body.staffId).toBeNull();
     expect(body.clientId).not.toBeNull();
+  });
+
+  test("loads the principal once on the account and appointment routes", async () => {
+    const { cookie } = await signUp(t.app, "lucia@example.com");
+    const queries = spyOn(t.db.$client, "unsafe");
+    try {
+      const cases = [
+        { path: "/me", method: "GET", body: undefined, status: 200 },
+        { path: "/me/desktop-workspaces", method: "GET", body: undefined, status: 200 },
+        { path: "/appointments", method: "POST", body: {}, status: 400 },
+      ];
+      for (const { path, method, body, status } of cases) {
+        queries.mockClear();
+        expect((await json(t.app, path, method, body, cookie)).status).toBe(status);
+        const staffReads = queries.mock.calls.filter(
+          ([query]) =>
+            query.includes('from "staff_profile"') && query.includes('"staff_profile"."user_id"'),
+        );
+        expect(staffReads).toHaveLength(1);
+      }
+    } finally {
+      queries.mockRestore();
+    }
   });
 
   test("rejects a wrong password and an unknown email without leaking which one", async () => {

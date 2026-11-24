@@ -389,7 +389,7 @@ export function createApp(input: AppDeps): App {
   app.on(["GET", "HEAD"], "/.well-known/oauth-authorization-server/api/auth", (c) =>
     auth.handler(c.req.raw),
   );
-  app.use("/me", authenticated);
+  // Wildcard middleware covers both the base route and its subpaths.
   app.use("/me/*", authenticated);
   app.route("/notifications", optOutRoutes(deps));
   app.route("/whatsapp/webhook", whatsappWebhookRoutes(deps));
@@ -449,7 +449,6 @@ export function createApp(input: AppDeps): App {
   app.route("/availability", availabilityRoutes(deps));
   app.route("/availability/peak-price", peakPricePreviewRoute(deps, true));
   // Everything that touches appointments needs a session; the routes enforce the role policy.
-  app.use("/appointments", authenticated);
   app.use("/appointments/*", authenticated);
   if (deps.booksyConsultation)
     app.route("/appointments", booksySourceRoutes(deps.db, deps.booksyConsultation));
