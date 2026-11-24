@@ -269,6 +269,11 @@ enum AppointmentReturn {
     Conflict(String),
 }
 
+struct DetailsCheckoutAccess {
+    scope: String,
+    deposit: bool,
+}
+
 struct Details {
     return_to: Option<AppointmentReturn>,
     id: String,
@@ -280,7 +285,7 @@ struct Details {
     price_review: Option<billing::PriceReview>,
     settlement_review: Option<settlement::SettlementReview>,
     checkout: Option<checkout::CheckoutReview>,
-    deposit_receipt_scope: Option<String>,
+    checkout_access: Option<DetailsCheckoutAccess>,
     annotations: Option<annotations::Annotations>,
     deposit_outcome_block: Option<AttendanceProtectionBlock>,
     annotations_requested_version: Option<i64>,
@@ -997,12 +1002,12 @@ impl Root {
         self.refresh_weekly_conflicts_if_ready(cx);
         if let Overlay::Details(details) = &mut self.overlay
             && details
-                .deposit_receipt_scope
+                .checkout_access
                 .as_ref()
-                .is_some_and(|scope| scope != &self.time_off_scope)
+                .is_some_and(|access| access.scope != self.time_off_scope)
         {
             details.checkout = None;
-            details.deposit_receipt_scope = None;
+            details.checkout_access = None;
         }
         self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
         self.refresh_resource_calendar(self.status.connectivity, false, cx);
@@ -1443,7 +1448,7 @@ impl Root {
             price_review: None,
             settlement_review: None,
             checkout: None,
-            deposit_receipt_scope: None,
+            checkout_access: None,
             annotations: None,
             deposit_outcome_block: None,
             annotations_requested_version: None,
@@ -2898,7 +2903,7 @@ impl Root {
                     return;
                 }
                 details.checkout = None;
-                details.deposit_receipt_scope = None;
+                details.checkout_access = None;
             }
             Overlay::Details(_) => self.close_appointment_details(false),
             _ => self.overlay = Overlay::None,
@@ -6400,16 +6405,23 @@ mod tests {
         assert!(cx.debug_bounds("open-deposit-receipt").is_some());
         root.update(cx, |root, cx| {
             root.status.connectivity = Connectivity::Offline;
-            let Overlay::Details(details) = &mut root.overlay else {
-                panic!("expected appointment details");
-            };
-            details.checkout = Some(checkout::CheckoutReview::Failed);
-            details.deposit_receipt_scope = Some(root.time_off_scope.clone());
-            root.svc.store.set_meta("time_off_scope", "none").unwrap();
-            root.reload(cx);
-            assert!(
-                matches!(&root.overlay, Overlay::Details(details) if details.checkout.is_none())
-            );
+            for deposit in [true, false] {
+                root.svc.store.set_meta("time_off_scope", "all").unwrap();
+                root.reload(cx);
+                let Overlay::Details(details) = &mut root.overlay else {
+                    panic!("expected appointment details");
+                };
+                details.checkout = Some(checkout::CheckoutReview::Failed);
+                details.checkout_access = Some(DetailsCheckoutAccess {
+                    scope: root.time_off_scope.clone(),
+                    deposit,
+                });
+                root.svc.store.set_meta("time_off_scope", "none").unwrap();
+                root.reload(cx);
+                assert!(
+                    matches!(&root.overlay, Overlay::Details(details) if details.checkout.is_none())
+                );
+            }
         });
         cx.run_until_parked();
         assert!(cx.debug_bounds("open-deposit-receipt").is_none());

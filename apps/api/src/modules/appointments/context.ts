@@ -69,7 +69,9 @@ export async function getAppointmentContext(db: Connection, id: string, principa
             expiresAt: protection.expiresAt,
             cancellationCutoff: protection.cancellationCutoff,
             ...(attendanceBlock ? { attendanceBlock } : {}),
-            ...(receipt ? { checkoutId: receipt.id } : { receiptRestricted: true as const }),
+            ...(receipt?.appointmentId === id
+              ? { checkoutId: receipt.id }
+              : { receiptRestricted: true as const }),
             ...(commerce
               ? {
                   depositCents: protection.depositCents,

@@ -229,8 +229,10 @@ impl Root {
         let session = self.svc.session.clone();
         if let Overlay::Details(details) = &mut self.overlay {
             details.checkout = Some(CheckoutReview::Loading(token.clone()));
-            details.deposit_receipt_scope = matches!(source, DetailCheckoutSource::Deposit(_))
-                .then(|| self.time_off_scope.clone());
+            details.checkout_access = Some(DetailsCheckoutAccess {
+                scope: self.time_off_scope.clone(),
+                deposit: matches!(source, DetailCheckoutSource::Deposit(_)),
+            });
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -586,7 +588,7 @@ impl Root {
         let history = self.overlay.sales_history().is_some();
         let body = div().flex().flex_col().gap_3().child(
             div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if matches!(&self.overlay, Overlay::Details(details) if details.deposit_receipt_scope.is_some()) {
+                if matches!(&self.overlay, Overlay::Details(details) if details.checkout_access.as_ref().is_some_and(|access| access.deposit)) {
                     Key::DepositReceipt
                 } else if history
                     || matches!(
