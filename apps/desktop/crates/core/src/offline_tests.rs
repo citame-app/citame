@@ -599,6 +599,90 @@ fn seeded() -> Store {
     s
 }
 
+#[test]
+fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("notes.sqlite");
+    let mut store = Store::open(&file).unwrap();
+    seed(&mut store);
+    store.set_meta("calendar_scope", ANA).unwrap();
+    queue_appointment_notes(&mut store, EXISTING, "", "Offline draft", None).unwrap();
+    drop(store);
+
+    let mut store = Store::open(&file).unwrap();
+    let before = store.appointment(EXISTING).unwrap().unwrap();
+    let projected = effective_appointment(&store, EXISTING).unwrap().unwrap();
+    assert_eq!(projected.notes.as_deref(), Some("Offline draft"));
+    assert_eq!(projected.version, 4);
+    assert_eq!(projected.starts_at, before.starts_at);
+    queue_appointment_notes(
+        &mut store,
+        EXISTING,
+        "Offline draft",
+        "Continued offline draft",
+        None,
+    )
+    .unwrap();
+    let mut cloud = before;
+    cloud.version += 1;
+    cloud.notes = Some("Cloud note".into());
+    store
+        .apply_page(&[up(8, "appointment", EXISTING, json!(cloud))], 8)
+        .unwrap();
+    assert_eq!(
+        effective_appointment(&store, EXISTING)
+            .unwrap()
+            .unwrap()
+            .notes,
+        cloud.notes
+    );
+    let sent = store.outbox(10).unwrap();
+    let id = &sent[0].mutation_id;
+    store
+        .apply_push_results(
+            &sent[..1],
+            &[MutationResult::Rejected {
+                mutation_id: id.clone(),
+                reason: "conflict".into(),
+                message: "Version changed".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    assert!(matches!(
+        queue_appointment_notes(&mut store, EXISTING, "", "Offline draft", Some(id)),
+        Err(crate::error::CoreError::AppointmentChanged)
+    ));
+    assert_eq!(
+        store.conflict(id).unwrap().unwrap().payload["notes"],
+        "Offline draft"
+    );
+    assert_eq!(
+        store
+            .conflict(&sent[1].mutation_id)
+            .unwrap()
+            .unwrap()
+            .payload["notes"],
+        "Continued offline draft"
+    );
+    queue_appointment_notes(
+        &mut store,
+        EXISTING,
+        "Cloud note",
+        "Offline draft",
+        Some(id),
+    )
+    .unwrap();
+    assert!(store.conflict(id).unwrap().is_none());
+    let retry = store.outbox(10).unwrap().remove(0);
+    assert_ne!(retry.mutation_id, *id);
+    assert_eq!(retry.payload["version"], 4);
+
+    store.set_meta("calendar_scope", BEA).unwrap();
+    assert!(queue_appointment_notes(&mut store, EXISTING, "Offline draft", "", None).is_err());
+    assert_eq!(store.outbox_len().unwrap(), 1);
+}
+
 fn seed(s: &mut Store) {
     let changes = vec![
         up(

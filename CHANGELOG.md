@@ -121,6 +121,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
 - A rejected move, cancellation or attendance change clears its local calendar preview while preserving newer revisions and other changes received live.
+- Desktop edits general appointment notes inside the detail panel, including offline. Drafts rejected during sync can be compared with the current note and submitted again after review.
 
 - Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.
 

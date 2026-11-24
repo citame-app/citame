@@ -92,7 +92,7 @@ fn can_edit_service_annotations(notes: &AppointmentAnnotations, time_off_scope: 
     notes.appointment_version.is_some() && time_off_scope != "none" && notes.can_edit != Some(false)
 }
 
-fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
+pub(super) fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
     let field = cx.new(|cx| {
         let mut field = TextField::new("", false, cx);
         field.set_text(text, cx);
@@ -172,6 +172,12 @@ impl Root {
         let Overlay::Details(details) = &mut self.overlay else {
             return;
         };
+        if details.note_draft.is_some()
+            || self.svc.store.appointment_edit_sync(&details.id).ok()
+                == Some(AppointmentEditSync::Pending)
+        {
+            return;
+        }
         let Some(Annotations::Ready(notes)) = details.annotations.as_ref() else {
             return;
         };
@@ -386,9 +392,10 @@ impl Root {
     pub(super) fn render_annotations(
         &self,
         appointment: &Appointment,
-        state: Option<&Annotations>,
+        details: &Details,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let state = details.annotations.as_ref();
         let booking_note = appointment
             .notes
             .as_deref()
@@ -408,9 +415,7 @@ impl Root {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.t(Key::AppointmentAnnotations)),
             )
-            .when_some(booking_note, |section, note| {
-                section.child(div().text_sm().child(note.to_owned()))
-            });
+            .child(self.render_appointment_note(appointment, details, cx));
         match state {
             Some(Annotations::Editing(draft)) => {
                 let name = appointment
@@ -482,6 +487,9 @@ impl Root {
                 }
                 if matches!(state, Some(Annotations::Ready(_)))
                     && can_edit_service_annotations(notes, &self.time_off_scope)
+                    && details.note_draft.is_none()
+                    && self.svc.store.appointment_edit_sync(&appointment.id).ok()
+                        != Some(AppointmentEditSync::Pending)
                 {
                     content = content.children(appointment.services.iter().enumerate().map(
                         |(position, service)| {
