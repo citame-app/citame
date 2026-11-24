@@ -95,11 +95,14 @@ impl Root {
         let Overlay::Details(details) = &self.overlay else {
             return;
         };
-        let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, &details.id)
-        else {
+        let Ok(view) = calendar::appointment_view(&self.svc.store, &details.id) else {
             return;
         };
-        if !self.can_edit_appointment_note(&appointment, details)
+        let Some(appointment) = view.appointment else {
+            return;
+        };
+        if view.stale_edits
+            || !self.can_edit_appointment_note(&appointment, details)
             || details.conflict_to_resolve().is_some()
         {
             return;
@@ -174,7 +177,10 @@ impl Root {
             );
             self.show_appointment_details(
                 current,
-                Some(AppointmentReturn::Conflict(conflict.mutation_id.clone())),
+                Some(AppointmentReturn::Conflict {
+                    mutation_id: conflict.mutation_id.clone(),
+                    schedule: None,
+                }),
                 cx,
             );
             if let Overlay::Details(details) = &mut self.overlay {
@@ -243,6 +249,9 @@ impl Root {
                             Key::AppointmentNoteReview
                         }
                         CoreError::AppointmentScopeDenied => Key::ConflictForbidden,
+                        CoreError::AppointmentEditsAwaitingSync => {
+                            Key::AppointmentEditsAwaitingSync
+                        }
                         CoreError::AppointmentNoteRefreshRequired => {
                             Key::AppointmentNoteRefreshRequired
                         }
@@ -284,11 +293,12 @@ impl Root {
         &self,
         appointment: &Appointment,
         details: &Details,
+        allow_changes: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let saved = appointment.notes.as_deref().unwrap_or_default();
         let form = div().flex().flex_col().gap_2();
-        let editable = self.can_edit_appointment_note(appointment, details);
+        let editable = allow_changes && self.can_edit_appointment_note(appointment, details);
         let Some(draft) = details.note_draft.as_ref() else {
             return form
                 .when(!saved.trim().is_empty(), |panel| {

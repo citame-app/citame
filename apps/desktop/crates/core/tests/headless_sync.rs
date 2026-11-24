@@ -6228,6 +6228,74 @@ fn urlenc(s: &str) -> String {
 
 #[test]
 #[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn a_cloud_move_stays_visible_before_a_stale_cancel_is_reconciled() {
+    let mut a = Device::sign_in();
+    let mut b = Device::sign_in();
+    a.sync();
+    b.sync();
+    let c = catalog(&a);
+    let start = free_slot(&a, &c.staff);
+    let client = ops::create_client(&mut a.store, "Synthetic calendar race", None).unwrap();
+    let id = ops::create_appointment(&mut a.store, booking(&c, &c.staff, &client, start)).unwrap();
+    a.sync();
+    b.sync();
+    ops::cancel_appointment(&mut a.store, &id).unwrap();
+    let moved = start + Span::hours(1);
+    ops::reschedule_appointment(&mut b.store, &id, Some(moved), None).unwrap();
+    assert_eq!(b.sync().push.applied, 1);
+
+    let page = a.transport.pull(a.store.cursor().unwrap(), 100).unwrap();
+    a.store.apply_page(&page.changes, page.next_cursor).unwrap();
+    let projected = calendar::appointment_view(&a.store, &id).unwrap();
+    assert!(projected.stale_edits);
+    assert_eq!(projected.appointment.as_ref().unwrap().starts_at, moved);
+    assert!(
+        day_items(&a, moved, &c.staff)
+            .iter()
+            .any(|item| item.appointment.id == id && !item.pending)
+    );
+    assert_eq!(a.store.outbox_len().unwrap(), 1);
+    assert_eq!(a.sync().push.rejected, 1);
+    assert_eq!(a.store.conflicts().unwrap()[0].kind, "appointment.cancel");
+    assert_eq!(
+        a.store.appointment(&id).unwrap().unwrap().status,
+        AppointmentStatus::Booked
+    );
+    let conflict = a.store.conflicts().unwrap().remove(0);
+    let review = ops::review_appointment_conflict(&a.store, &conflict.mutation_id).unwrap();
+    let expected = ops::ReviewedAppointment::from(&review.appointment);
+    assert_eq!(review.action, ops::AppointmentConflictAction::Cancel);
+    assert!(matches!(
+        ops::queue_reviewed_appointment_edit(
+            &mut a.store,
+            &id,
+            &expected,
+            ops::AppointmentEdit::Move {
+                starts_at: Some(start),
+                staff_id: None
+            },
+            Some(&conflict.mutation_id),
+        ),
+        Err(sob_core::error::CoreError::AppointmentConflictActionMismatch)
+    ));
+    assert!(a.store.conflict(&conflict.mutation_id).unwrap().is_some());
+    ops::queue_reviewed_appointment_edit(
+        &mut a.store,
+        &id,
+        &expected,
+        ops::AppointmentEdit::Cancel,
+        Some(&conflict.mutation_id),
+    )
+    .unwrap();
+    assert_eq!(a.sync().push.applied, 1);
+    assert_eq!(
+        a.store.appointment(&id).unwrap().unwrap().status,
+        AppointmentStatus::Cancelled
+    );
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
 fn a_slot_taken_while_offline_becomes_a_resolvable_conflict() {
     let mut a = Device::sign_in();
     let mut b = Device::sign_in();

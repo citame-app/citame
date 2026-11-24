@@ -1522,7 +1522,11 @@ fn visit_group_reads_only_related_cached_appointments_with_current_outcomes() {
     assert_eq!(group[0].status, crate::model::AppointmentStatus::Cancelled);
     store.set_meta("calendar_scope", "st1").unwrap();
     store
-        .enqueue("appointment.reschedule", A2, json!({"staffId":"st2"}))
+        .enqueue(
+            "appointment.reschedule",
+            A2,
+            json!({"id": A2, "version": 1, "staffId":"st2"}),
+        )
         .unwrap();
     assert!(
         crate::calendar::related_visit_appointments(&store, &current)

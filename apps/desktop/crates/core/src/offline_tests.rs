@@ -1316,6 +1316,82 @@ fn an_early_authoritative_tombstone_retires_the_accepted_create() {
 }
 
 #[test]
+fn a_pulled_move_keeps_the_saved_appointment_visible_during_an_offline_edit_chain() {
+    use crate::error::CoreError;
+
+    let mut store = seeded();
+    let mut saved = store.appointment(EXISTING).unwrap().unwrap();
+    let proposed = at("2026-03-09T17:00:00Z");
+    reschedule_appointment(&mut store, EXISTING, Some(proposed), None).unwrap();
+    cancel_appointment(&mut store, EXISTING).unwrap();
+    let entries = store.outbox(10).unwrap();
+    assert_eq!(entries[0].payload["version"], saved.version);
+    assert_eq!(entries[1].payload["version"], saved.version + 1);
+    assert_eq!(
+        appointment_view(&store, EXISTING)
+            .unwrap()
+            .appointment
+            .unwrap()
+            .status,
+        AppointmentStatus::Cancelled
+    );
+
+    let duration = saved.ends_at - saved.starts_at;
+    saved.starts_at = at("2026-03-10T18:00:00Z");
+    saved.ends_at = saved.starts_at + duration;
+    saved.version += 1;
+    store
+        .apply_page(&[up(8, "appointment", EXISTING, json!(saved))], 8)
+        .unwrap();
+    let projected = appointment_view(&store, EXISTING).unwrap();
+    assert_eq!(projected.appointment, Some(saved.clone()));
+    assert!(projected.stale_edits);
+    assert!(
+        effective_appointments_between(&store, saved.starts_at, saved.ends_at)
+            .unwrap()
+            .iter()
+            .any(|a| a.id == EXISTING)
+    );
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentEditsAwaitingSync)
+    ));
+    assert_eq!(store.outbox_len().unwrap(), 2);
+
+    let (_, sendable) = store.push_snapshot(100).unwrap();
+    assert_eq!(sendable.len(), 1);
+    store
+        .apply_push_results(
+            &sendable,
+            &[MutationResult::Rejected {
+                mutation_id: sendable[0].mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "Cloud moved the appointment".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    assert_eq!(store.conflicts().unwrap().len(), 2);
+    assert!(!appointment_view(&store, EXISTING).unwrap().stale_edits);
+    assert_eq!(
+        effective_appointment(&store, EXISTING).unwrap(),
+        Some(saved.clone())
+    );
+    queue_appointment_notes(
+        &mut store,
+        EXISTING,
+        saved.notes.as_deref().unwrap_or(""),
+        "Reviewed after sync",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        store.outbox(10).unwrap()[0].payload["version"],
+        saved.version
+    );
+}
+
+#[test]
 fn a_pulled_current_version_is_not_edited_twice_before_the_receipt_cursor() {
     let mut store = seeded();
     let moved_to = at("2026-03-09T17:00:00Z");
@@ -1716,7 +1792,7 @@ fn editing_an_unknown_appointment_is_refused() {
 }
 
 #[test]
-fn a_pull_for_a_row_with_a_pending_edit_keeps_showing_the_local_version() {
+fn a_pull_for_a_newer_appointment_preserves_a_stale_edit_without_projecting_it() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
     // Somebody else changed the notes meanwhile; the server version moves to 4.
@@ -1724,9 +1800,13 @@ fn a_pull_for_a_row_with_a_pending_edit_keeps_showing_the_local_version() {
         "startsAt": "2026-03-09T15:00:00.000Z", "endsAt": "2026-03-09T16:00:00.000Z", "status": "booked",
         "notes": "vip", "version": 4, "services": [], "createdAt": T0, "updatedAt": T0}))], 9).unwrap();
     let a = effective_appointment(&s, EXISTING).unwrap().unwrap();
-    assert_eq!(a.starts_at, at("2026-03-09T17:00:00Z"));
-    assert_eq!(a.version, 5);
+    assert_eq!(a.starts_at, at("2026-03-09T15:00:00Z"));
+    assert_eq!(a.version, 4);
     assert_eq!(a.notes.as_deref(), Some("vip"));
+    assert_eq!(
+        s.outbox(10).unwrap()[0].payload["startsAt"],
+        "2026-03-09T17:00:00.000Z"
+    );
 }
 
 #[test]
@@ -1881,13 +1961,30 @@ fn a_rejected_move_can_be_rescheduled_again_with_the_fresh_server_version() {
         at("2026-03-09T15:00:00Z")
     );
     assert!(day_view(&s, day("2026-03-09")).unwrap().columns[0].items[0].conflict);
-    resolve_conflict(
+    assert!(matches!(
+        review_appointment_conflict(&s, &entry.mutation_id),
+        Err(crate::error::CoreError::AppointmentConflictRefreshRequired)
+    ));
+    let cursor = s.cursor().unwrap();
+    s.apply_sync_page(
+        &[],
+        cursor,
+        false,
+        true,
+        &[],
+        Some(crate::store::INITIAL_GENERATION),
+    )
+    .unwrap();
+    let reviewed = review_appointment_conflict(&s, &entry.mutation_id).unwrap();
+    queue_reviewed_appointment_edit(
         &mut s,
-        &entry.mutation_id,
-        Resolution::Reschedule {
-            starts_at: at("2026-03-09T19:00:00Z"),
+        EXISTING,
+        &ReviewedAppointment::from(&reviewed.appointment),
+        AppointmentEdit::Move {
+            starts_at: Some(at("2026-03-09T19:00:00Z")),
             staff_id: None,
         },
+        Some(&entry.mutation_id),
     )
     .unwrap();
     let q = s.outbox(10).unwrap();
@@ -1897,15 +1994,127 @@ fn a_rejected_move_can_be_rescheduled_again_with_the_fresh_server_version() {
 }
 
 #[test]
-fn cancelling_after_a_rejected_move_cancels_the_appointment() {
+fn cancelling_an_appointment_does_not_consume_a_rejected_move() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
     let entry = s.outbox(1).unwrap().remove(0);
     reject(&mut s, &entry, "slot_taken");
-    resolve_conflict(&mut s, &entry.mutation_id, Resolution::Cancel).unwrap();
+    assert!(matches!(
+        resolve_conflict(&mut s, &entry.mutation_id, Resolution::Cancel),
+        Err(crate::error::CoreError::AppointmentConflictActionMismatch)
+    ));
+    assert_eq!(s.outbox_len().unwrap(), 0);
+    cancel_appointment(&mut s, EXISTING).unwrap();
+    assert!(s.conflict(&entry.mutation_id).unwrap().is_some());
     let q = s.outbox(10).unwrap();
     assert_eq!(q[0].kind, "appointment.cancel");
     assert_eq!(q[0].payload["version"], json!(3));
+}
+
+#[test]
+fn schedule_conflicts_wait_for_the_rejection_cursor_and_match_the_reviewed_action() {
+    use crate::error::CoreError;
+
+    let mut store = seeded();
+    let mut cloud = store.appointment(EXISTING).unwrap().unwrap();
+    set_appointment_status(
+        &mut store,
+        EXISTING,
+        AppointmentStatus::NoShow,
+        at("2026-03-09T22:00:00Z"),
+    )
+    .unwrap();
+    let sent = store.outbox(1).unwrap();
+    let id = &sent[0].mutation_id;
+    store
+        .apply_push_results_in(
+            &sent,
+            &[MutationResult::Rejected {
+                mutation_id: id.clone(),
+                reason: "conflict".into(),
+                message: "Appointment version changed".into(),
+                replayed: false,
+            }],
+            None,
+            Some(9),
+        )
+        .unwrap();
+    assert!(matches!(
+        review_appointment_conflict(&store, id),
+        Err(CoreError::AppointmentConflictRefreshRequired)
+    ));
+    assert!(matches!(
+        queue_reviewed_appointment_edit(
+            &mut store,
+            EXISTING,
+            &ReviewedAppointment::from(&cloud),
+            AppointmentEdit::Outcome {
+                status: AppointmentStatus::NoShow,
+                now: at("2026-03-09T22:00:00Z")
+            },
+            Some(id),
+        ),
+        Err(CoreError::AppointmentConflictRefreshRequired)
+    ));
+    cloud.version += 1;
+    store
+        .apply_page(&[up(9, "appointment", EXISTING, json!(cloud))], 9)
+        .unwrap();
+    assert!(review_appointment_conflict(&store, id).is_ok());
+    store
+        .set_meta(&format!("appointment_review_head:{id}"), "500")
+        .unwrap();
+    store.reset_replica().unwrap();
+    assert!(matches!(
+        review_appointment_conflict(&store, id),
+        Err(CoreError::AppointmentConflictRefreshRequired)
+    ));
+    store
+        .apply_sync_page(
+            &[up(9, "appointment", EXISTING, json!(cloud))],
+            9,
+            false,
+            true,
+            &[],
+            Some(crate::store::INITIAL_GENERATION),
+        )
+        .unwrap();
+    let review = review_appointment_conflict(&store, id).unwrap();
+    let stamp = ReviewedAppointment::from(&review.appointment);
+    assert_eq!(
+        review.action,
+        AppointmentConflictAction::Outcome(AppointmentStatus::NoShow)
+    );
+    assert!(matches!(
+        queue_reviewed_appointment_edit(
+            &mut store,
+            EXISTING,
+            &stamp,
+            AppointmentEdit::Outcome {
+                status: AppointmentStatus::Completed,
+                now: at("2026-03-09T22:00:00Z")
+            },
+            Some(id),
+        ),
+        Err(CoreError::AppointmentConflictActionMismatch)
+    ));
+    assert!(store.conflict(id).unwrap().is_some());
+    assert_eq!(store.outbox_len().unwrap(), 0);
+    queue_reviewed_appointment_edit(
+        &mut store,
+        EXISTING,
+        &stamp,
+        AppointmentEdit::Outcome {
+            status: AppointmentStatus::NoShow,
+            now: at("2026-03-09T22:00:00Z"),
+        },
+        Some(id),
+    )
+    .unwrap();
+    let requested = store.outbox(1).unwrap().remove(0);
+    assert_eq!(requested.payload["version"], cloud.version);
+    assert_eq!(requested.payload["status"], "no_show");
+    assert!(store.conflict(id).unwrap().is_none());
 }
 
 #[test]
