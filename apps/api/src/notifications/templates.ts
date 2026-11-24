@@ -61,13 +61,13 @@ const COPY: Record<Locale, Copy> = {
     subject: {
       confirmation: (d) => `Appointment confirmed: ${d}`,
       reminder_24h: (d) => `Reminder: your appointment is ${d}`,
-      reminder_2h: (d) => `Reminder: your appointment is today, ${d}`,
+      reminder_2h: (d) => `Reminder: your appointment is ${d}`,
       cancellation: (d) => `Appointment cancelled: ${d}`,
       rescheduled: (d) => `Appointment moved to ${d}`,
     },
     heading: {
       confirmation: "Your appointment is confirmed",
-      reminder_24h: "Your appointment is tomorrow",
+      reminder_24h: "Your upcoming appointment",
       reminder_2h: "Your appointment is coming up",
       cancellation: "Your appointment was cancelled",
       rescheduled: "Your appointment was moved",
@@ -75,7 +75,7 @@ const COPY: Record<Locale, Copy> = {
     intro: {
       confirmation: "Thank you for booking with us. Here are the details.",
       reminder_24h: "This is a friendly reminder of your upcoming appointment.",
-      reminder_2h: "This is a reminder that your appointment starts in about two hours.",
+      reminder_2h: "This is a friendly reminder of your upcoming appointment.",
       cancellation: "This appointment was cancelled and will not take place.",
       rescheduled: "Your appointment has a new time. Here are the updated details.",
     },
@@ -102,13 +102,13 @@ const COPY: Record<Locale, Copy> = {
     subject: {
       confirmation: (d) => `Turno confirmado: ${d}`,
       reminder_24h: (d) => `Recordatorio: tu turno es ${d}`,
-      reminder_2h: (d) => `Recordatorio: tu turno es hoy, ${d}`,
+      reminder_2h: (d) => `Recordatorio: tu turno es ${d}`,
       cancellation: (d) => `Turno cancelado: ${d}`,
       rescheduled: (d) => `Tu turno se movió a ${d}`,
     },
     heading: {
       confirmation: "Tu turno está confirmado",
-      reminder_24h: "Tu turno es mañana",
+      reminder_24h: "Tu próximo turno",
       reminder_2h: "Tu turno se acerca",
       cancellation: "Tu turno fue cancelado",
       rescheduled: "Tu turno cambió de horario",
@@ -116,7 +116,7 @@ const COPY: Record<Locale, Copy> = {
     intro: {
       confirmation: "Gracias por reservar con nosotras. Estos son los datos.",
       reminder_24h: "Te recordamos tu próximo turno.",
-      reminder_2h: "Te recordamos que tu turno empieza en unas dos horas.",
+      reminder_2h: "Te recordamos tu próximo turno.",
       cancellation: "Este turno fue cancelado y no se va a realizar.",
       rescheduled: "Tu turno tiene un nuevo horario. Estos son los datos actualizados.",
     },

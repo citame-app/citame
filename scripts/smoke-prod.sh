@@ -415,7 +415,7 @@ if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
   [[ "$(make_reminder_due reminder_2h)" == reminder_2h ]] ||
     fail "expected a pending second reminder"
   await_reminder_status reminder_2h sent: || fail "worker did not resume email"
-  await_mail smoke-client@example.com 'Reminder: your appointment is today,' 0 ||
+  await_mail smoke-client@example.com 'Reminder: your appointment is ' 0 ||
     fail "SMTP reminder delivery"
 fi
 

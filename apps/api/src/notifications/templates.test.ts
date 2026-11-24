@@ -63,6 +63,26 @@ describe("renderEmail", () => {
     expect(confirmation.text).not.toContain("opt-out");
   });
 
+  test.each(["reminder_24h", "reminder_2h"] as const)(
+    "%s uses the centre date and time even when delivery crosses midnight",
+    (kind) => {
+      const booking = {
+        kind,
+        timeZone: "Europe/Madrid",
+        startsAt: new Date("2026-11-24T23:30:00Z"),
+        endsAt: new Date("2026-11-25T00:30:00Z"),
+      };
+      const english = renderEmail(data(booking));
+      const spanish = renderEmail(data({ ...booking, locale: "es-AR" }));
+      expect(english.subject).toContain("Nov 25, 12:30 AM");
+      expect(english.text).toContain("Wednesday, November 25");
+      expect(spanish.subject).toMatch(/25 (?:de )?nov.*0{1,2}:30/i);
+      expect(spanish.text).toContain("miércoles, 25 de noviembre");
+      expect(english.subject + english.text).not.toMatch(/today|tomorrow|about two hours/i);
+      expect(spanish.subject + spanish.text).not.toMatch(/hoy|mañana|unas dos horas/i);
+    },
+  );
+
   test("attaches a calendar entry for confirmations and reschedules only", () => {
     expect(renderEmail(data()).ics).toContain("BEGIN:VEVENT");
     expect(renderEmail(data({ kind: "rescheduled" })).ics).toContain("BEGIN:VEVENT");
