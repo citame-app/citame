@@ -444,7 +444,7 @@ impl Root {
                     .when(
                         can_write && review.entry.can_manage && !awaiting_confirmation,
                         |d| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-requeue",
                                 self.t(if review.confirming_requeue {
                                     Key::WaitlistConfirmRequeue
@@ -568,7 +568,7 @@ impl Root {
     }
 
     fn review_back_button(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
-        self.button(
+        self.waitlist_action(
             "wl-back",
             self.t(Key::Back),
             Kind::Ghost,

@@ -196,14 +196,21 @@ impl Root {
                 )
             },
         );
-        self.waitlist_action(
+        self.button(
             "waitlist",
             label,
             Kind::Ghost,
             cx.listener(move |root, _, _, cx| {
-                root.open_waitlist(WaitlistView::Calendar(range), 1, cx)
+                if matches!(root.overlay, Overlay::None) {
+                    root.open_waitlist(WaitlistView::Calendar(range), 1, cx);
+                }
             }),
         )
+        .when(matches!(self.overlay, Overlay::None), |button| {
+            button
+                .tab_index(0)
+                .focus(|style| style.border_color(theme::text()))
+        })
     }
 
     pub(super) fn refresh_waitlist_count(&mut self, status: &SyncStatus, cx: &mut Context<Self>) {
@@ -1457,7 +1464,11 @@ mod tests {
         assert!(cx.debug_bounds("wl-body-one").is_none());
         click(cx, "wl-details-one");
         assert!(cx.debug_bounds("wl-body-one").is_some());
-        cx.simulate_keystrokes("tab enter");
+        cx.simulate_keystrokes("tab");
+        cx.run_until_parked();
+        cx.simulate_event(gpui::KeyUpEvent {
+            keystroke: gpui::Keystroke::parse("enter").unwrap(),
+        });
         cx.run_until_parked();
         assert!(cx.debug_bounds("wl-body-two").is_some());
         entity.update(cx, |root, _| {
