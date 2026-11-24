@@ -139,6 +139,30 @@ test("a whole visit is hidden from operators restricted to their own receipts", 
   expect(await t.db.select().from(checkout)).toHaveLength(0);
 });
 
+test("first-time group and individual preparations share the same receipts", async () => {
+  const { first, second } = await group("itinerary");
+  const [one, two, individual] = await Promise.all([
+    prepare(first),
+    prepare(second),
+    json(
+      t.app,
+      "/admin/commerce/checkouts",
+      "POST",
+      { appointmentId: second, idempotencyKey: crypto.randomUUID() },
+      owner.cookie,
+    ),
+  ]);
+  expect([one.status, two.status, individual.status]).toEqual([200, 200, 201]);
+  const a = visitCheckoutSchema.parse(await one.json());
+  const b = visitCheckoutSchema.parse(await two.json());
+  const receipt = checkoutSchema.parse(await individual.json());
+  expect(a.appointments.map(({ receipt }) => receipt?.id)).toEqual(
+    b.appointments.map(({ receipt }) => receipt?.id),
+  );
+  expect(a.appointments[1]?.receipt?.id).toBe(receipt.id);
+  expect(await t.db.select().from(checkout)).toHaveLength(2);
+});
+
 test("a legacy billing hold anywhere in the group prevents preparing receipts", async () => {
   const { first, second } = await group("import");
   await t.db.insert(appointmentContext).values({
