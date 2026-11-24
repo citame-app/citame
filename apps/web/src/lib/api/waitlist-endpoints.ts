@@ -1,4 +1,5 @@
 import {
+  WAITLIST_ACCESS_SCOPE_HEADER,
   type WaitlistAccept,
   type WaitlistInput,
   type WaitlistPolicy,
@@ -14,8 +15,17 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/waitlist" : "/me/waitlist");
 export function waitlistEndpoints(client: ApiClient) {
   return {
-    list: (mode: CommerceMode, query: WaitlistQuery = {}, signal?: AbortSignal) =>
-      client.get(base(mode), waitlistListSchema, { query: { ...query }, signal }),
+    list: (
+      mode: CommerceMode,
+      query: WaitlistQuery = {},
+      signal?: AbortSignal,
+      accessScope?: string,
+    ) =>
+      client.get(base(mode), waitlistListSchema, {
+        query: { ...query },
+        signal,
+        ...(accessScope ? { headers: { [WAITLIST_ACCESS_SCOPE_HEADER]: accessScope } } : {}),
+      }),
     join: (
       mode: CommerceMode,
       input: WaitlistInput & { clientId?: string; importedEntryId?: string },

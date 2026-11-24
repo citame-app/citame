@@ -21,12 +21,14 @@ import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { addDaysLocal, localDateOf } from "~/lib/format";
 import { salonQuery, servicesQuery, staffQuery } from "~/lib/queries";
+import { type WaitlistViewer, waitlistUserKey } from "~/lib/waitlist-queries";
 
 const unreviewedStaff = "unreviewed";
 
 export interface JoinFormProps {
   mode: CommerceMode;
   role: UserRole;
+  viewer: WaitlistViewer;
   accessPreset?: StaffAccessPreset | null;
   ownStaffId?: string | null;
   initialServices?: string[];
@@ -39,6 +41,7 @@ export function WaitlistJoinForm({
   role,
   accessPreset,
   ownStaffId,
+  viewer,
   initialServices = [],
   initialStaff,
   initialDate,
@@ -85,9 +88,12 @@ export function WaitlistJoinForm({
   const key = useRef({ signature: "", id: crypto.randomUUID() });
   const debounced = useDebounced(search.trim());
   const clients = useQuery({
-    queryKey: ["waitlist", "customers", debounced],
-    queryFn: () =>
-      api().admin.clients.list({ search: debounced, pageSize: 8, sort: "name", order: "asc" }),
+    queryKey: [...waitlistUserKey(mode, viewer.userId), viewer.accessScope, "customers", debounced],
+    queryFn: ({ signal }) =>
+      api().admin.clients.list(
+        { search: debounced, pageSize: 8, sort: "name", order: "asc" },
+        signal,
+      ),
     enabled: mode === "admin" && !imported && debounced.length > 0,
   });
   const qualified = (staff.data ?? []).filter(
@@ -99,11 +105,12 @@ export function WaitlistJoinForm({
     mutationFn: (input: WaitlistInput & { clientId?: string; importedEntryId?: string }) =>
       api().waitlist.join(mode, input),
     onError: () => {
-      if (imported) void queries.invalidateQueries({ queryKey: ["waitlist"] });
+      if (imported)
+        void queries.invalidateQueries({ queryKey: waitlistUserKey(mode, viewer.userId) });
     },
     onSuccess: () => {
       toast.success(t("waitlist.saved"));
-      void queries.invalidateQueries({ queryKey: ["waitlist"] });
+      void queries.invalidateQueries({ queryKey: waitlistUserKey(mode, viewer.userId) });
       onJoined();
     },
   });

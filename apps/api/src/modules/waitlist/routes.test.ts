@@ -1,5 +1,9 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { waitlistEntrySchema } from "@sob/contracts";
+import {
+  scheduleAccessScope,
+  WAITLIST_ACCESS_SCOPE_HEADER,
+  waitlistEntrySchema,
+} from "@sob/contracts";
 import { reminder, service, waitlistEntry, waitlistOffer, waitlistSourceEntry } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -52,6 +56,31 @@ async function enable() {
   });
   expect(r.status, await r.clone().text()).toBe(200);
 }
+test("a scoped waitlist read rejects a different browser account or staff access preset", async () => {
+  const professional = await actor(t, "staff", "waitlist-staff@test.local", {
+    staffProfileId: f.anaId,
+  });
+  const forClient = scheduleAccessScope({ ...client, role: "client" });
+  const forStaff = scheduleAccessScope({ ...professional, role: "staff" });
+  const read = (path: string, cookie: string, expected: string) =>
+    t.app.request(path, { headers: { cookie, [WAITLIST_ACCESS_SCOPE_HEADER]: expected } });
+
+  const own = await read("/me/waitlist", client.cookie, forClient);
+  expect(own.status).toBe(200);
+  expect(own.headers.get("cache-control")).toBe("private, no-store");
+  expect((await read("/me/waitlist", other.cookie, forClient)).status).toBe(403);
+  expect((await read("/admin/waitlist", professional.cookie, forStaff)).status).toBe(200);
+  const priorScope = scheduleAccessScope({
+    ...professional,
+    role: "staff",
+    accessPreset: "manager",
+  });
+  expect(
+    (await read("/admin/waitlist?active=true&pageSize=1", professional.cookie, priorScope)).status,
+  ).toBe(403);
+  expect((await call(owner, "/admin/waitlist")).status).toBe(200);
+});
+
 test("calendar counts and pages include only active requests intersecting the displayed dates", async () => {
   await enable();
   const first = await call(client, "/me/waitlist", "POST", {

@@ -8,6 +8,7 @@ import {
 import { ApiError } from "./api/client";
 import type { CommerceMode } from "./api/commerce-endpoints";
 import { api } from "./api/instance";
+import { clearPrivateQueryData } from "./private-queries";
 
 export const waitlistQueryKey = ["waitlist"] as const;
 export const waitlistUserKey = (mode: CommerceMode, userId: string) =>
@@ -18,15 +19,13 @@ export interface WaitlistViewer {
   accessScope?: string;
 }
 
-export async function clearWaitlist(
+export function clearWaitlist(
   client: QueryClient,
   mode: CommerceMode,
   userId: string,
   failingKey?: QueryKey,
 ) {
-  const scope = { queryKey: waitlistUserKey(mode, userId) };
-  await client.cancelQueries({ ...scope, predicate: ({ queryKey }) => queryKey !== failingKey });
-  client.setQueriesData(scope, null);
+  return clearPrivateQueryData(client, waitlistUserKey(mode, userId), failingKey);
 }
 
 async function readWaitlist(
@@ -37,7 +36,7 @@ async function readWaitlist(
   endpoints = api,
 ) {
   try {
-    return await endpoints().waitlist.list(mode, filters, signal);
+    return await endpoints().waitlist.list(mode, filters, signal, viewer.accessScope);
   } catch (error) {
     if (signal.aborted || !(error instanceof ApiError) || ![401, 403].includes(error.status))
       throw error;

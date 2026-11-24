@@ -4,34 +4,30 @@ import type {
   ReportSummaryQuery,
   ResourceOccupancy,
 } from "@sob/contracts";
+import { scheduleAccessScope } from "@sob/contracts";
 import { type QueryClient, type QueryKey, queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
+import { clearPrivateQueryData } from "./private-queries";
 
 /** SSE refreshes the web calendar; focus/interval remain the fallback when disconnected. */
 export const CALENDAR_POLL_MS = 30_000;
 
 export function calendarScope(session: MeResponse) {
-  return JSON.stringify([
-    session.user.id,
-    session.user.role,
-    session.accessPreset,
-    session.staffId,
-  ]);
+  return scheduleAccessScope({
+    userId: session.user.id,
+    role: session.user.role,
+    accessPreset: session.accessPreset,
+    staffId: session.staffId,
+    clientId: session.clientId,
+  });
 }
 
 export const calendarResourceQueryKey = ["admin", "calendar", "resources"] as const;
 export const calendarInboxQueryKey = ["calendar-inbox"] as const;
 export const calendarInboxUserKey = (userId: string) => [...calendarInboxQueryKey, userId] as const;
 
-export async function clearCalendarInbox(
-  queries: QueryClient,
-  userId: string,
-  failingKey?: QueryKey,
-) {
-  const scope = { queryKey: calendarInboxUserKey(userId) };
-  // Cancel older reads before they can put the prior pages back in the cache.
-  await queries.cancelQueries({ ...scope, predicate: ({ queryKey }) => queryKey !== failingKey });
-  queries.setQueriesData(scope, null);
+export function clearCalendarInbox(queries: QueryClient, userId: string, failingKey?: QueryKey) {
+  return clearPrivateQueryData(queries, calendarInboxUserKey(userId), failingKey);
 }
 
 const resourceSnapshotReceipts = new WeakMap<ResourceOccupancy, number>();

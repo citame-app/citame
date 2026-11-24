@@ -73,6 +73,7 @@ export interface RequestOptions {
   signal?: AbortSignal;
   cache?: RequestCache;
   reviewedGeneration?: string;
+  headers?: HeadersInit;
 }
 
 function toApiError(status: number, body: unknown, retryAfter: string | null): ApiError {
@@ -123,6 +124,10 @@ export function createApiClient(options: ApiClientOptions) {
     requestOptions: RequestOptions = {},
   ): Promise<z.infer<S>> {
     const headers = new Headers(options.headers?.());
+    if (requestOptions.headers)
+      new Headers(requestOptions.headers).forEach((value, name) => {
+        headers.set(name, value);
+      });
     headers.set("accept", "application/json");
     if (body !== undefined) headers.set("content-type", "application/json");
     if (requestOptions.reviewedGeneration !== undefined)

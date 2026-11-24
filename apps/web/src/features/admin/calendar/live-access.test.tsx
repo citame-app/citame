@@ -356,7 +356,8 @@ test("a live waitlist change replaces an in-flight first calendar count", async 
   globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
     if (String(input).includes("/admin/waitlist")) return fetchCount(input, init);
     return Response.json({
-      changes: [{ seq: 11, entity: "waitlist", id: staffId, op: "delete", data: null }],
+      changes: [],
+      refresh: ["waitlist"],
       nextCursor: 11,
       headSeq: 11,
       hasMore: false,

@@ -14,7 +14,7 @@ import { useI18n } from "~/i18n/react";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
-import { type WaitlistViewer, waitlistQuery, waitlistUserKey } from "~/lib/waitlist-queries";
+import { waitlistQuery, waitlistUserKey } from "~/lib/waitlist-queries";
 import { type JoinFormProps, WaitlistJoinForm } from "./join-form";
 import { WaitlistOfferReview } from "./offer-review";
 import { WaitlistPolicyForm } from "./policy-form";
@@ -33,7 +33,6 @@ export function WaitlistView({
   calendarRange,
   onNavigate,
 }: Omit<JoinFormProps, "onJoined"> & {
-  viewer: WaitlistViewer;
   onlineBookingEnabled?: boolean;
   calendarRange?: { fromDate: string; toDate: string };
   onNavigate?: () => void;
@@ -243,6 +242,7 @@ export function WaitlistView({
         <div className="space-y-3">
           <WaitlistJoinForm
             mode={mode}
+            viewer={viewer}
             role={role}
             accessPreset={accessPreset}
             ownStaffId={ownStaffId}

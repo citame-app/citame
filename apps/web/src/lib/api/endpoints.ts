@@ -385,8 +385,8 @@ export function createEndpoints(client: ApiClient) {
         controls: (id: string) => client.get(`/admin/clients/${id}/controls`, clientControlsSchema),
         updateControls: (id: string, input: ClientControlsInput) =>
           client.patch(`/admin/clients/${id}/controls`, input, clientControlsSchema),
-        list: (query: Partial<ClientListQuery>) =>
-          client.get("/admin/clients", listClientsResponseSchema, { query: { ...query } }),
+        list: (query: Partial<ClientListQuery>, signal?: AbortSignal) =>
+          client.get("/admin/clients", listClientsResponseSchema, { query: { ...query }, signal }),
         get: (id: string) => client.get(`/admin/clients/${id}`, clientDetailResponseSchema),
         update: (id: string, request: UpdateClientRequest) =>
           client.patch(`/admin/clients/${id}`, request, adminClientSchema),

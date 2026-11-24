@@ -1,5 +1,7 @@
 import {
   idSchema,
+  scheduleAccessScope,
+  WAITLIST_ACCESS_SCOPE_HEADER,
   waitlistAcceptSchema,
   waitlistAdminInputSchema,
   waitlistCancelSchema,
@@ -11,7 +13,8 @@ import {
 import { Hono } from "hono";
 import type { AppDeps } from "../../app";
 import { requirePermission, requireRole } from "../../auth/policy";
-import type { AppEnv } from "../../auth/principal";
+import type { AppEnv, Principal } from "../../auth/principal";
+import { DomainError } from "../../errors";
 import { parseOrThrow, readJson } from "../../http";
 import { acceptWaitlist } from "./accept";
 import {
@@ -22,6 +25,11 @@ import {
   reviewWaitlistOffer,
   setWaitlistPolicy,
 } from "./service";
+
+function requireWaitlistScope(expected: string | undefined, principal: Principal) {
+  if (expected !== undefined && expected !== scheduleAccessScope(principal))
+    throw new DomainError("forbidden", "Waitlist access scope changed");
+}
 
 function entryActions(app: Hono<AppEnv>, { db, now = () => new Date() }: AppDeps) {
   return app
@@ -69,15 +77,14 @@ export function waitlistClientRoutes(deps: AppDeps) {
         requireRole(c.get("principal"), "client");
         await next();
       })
-      .get("/", async (c) =>
-        c.json(
-          await listWaitlist(
-            db,
-            c.get("principal"),
-            parseOrThrow(waitlistQuerySchema, c.req.query()),
-          ),
-        ),
-      )
+      .get("/", async (c) => {
+        const principal = c.get("principal");
+        c.header("Cache-Control", "private, no-store");
+        requireWaitlistScope(c.req.header(WAITLIST_ACCESS_SCOPE_HEADER), principal);
+        return c.json(
+          await listWaitlist(db, principal, parseOrThrow(waitlistQuerySchema, c.req.query())),
+        );
+      })
       .post("/", async (c) =>
         c.json(
           await joinWaitlist(
@@ -117,6 +124,8 @@ export function waitlistAdminRoutes(deps: AppDeps) {
       )
       .get("/", async (c) => {
         const principal = c.get("principal");
+        c.header("Cache-Control", "private, no-store");
+        requireWaitlistScope(c.req.header(WAITLIST_ACCESS_SCOPE_HEADER), principal);
         const query = parseOrThrow(waitlistQuerySchema, c.req.query());
         const [list, imported] = await Promise.all([
           listWaitlist(db, principal, query),

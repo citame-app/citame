@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema } from "./appointments";
+import type { UserRole } from "./auth";
 import { bookingPolicySchema } from "./booking-protection";
 import {
   idSchema,
@@ -15,8 +16,32 @@ import {
   intakeRequirementsSchema,
   intakeRevisionSchema,
 } from "./intake";
+import type { StaffAccessPreset } from "./permissions";
 import { servicePriceTypeSchema } from "./service-pricing";
 import { processingTimeSchema } from "./staff-capacity";
+
+export const WAITLIST_ACCESS_SCOPE_HEADER = "x-citame-waitlist-scope";
+
+/** Binds a waitlist read to the session and calendar scope shown by the browser. */
+export function scheduleAccessScope({
+  userId,
+  role,
+  staffId = null,
+  accessPreset,
+  clientId = null,
+}: {
+  userId: string;
+  role: UserRole;
+  staffId?: string | null;
+  accessPreset?: StaffAccessPreset | null;
+  clientId?: string | null;
+}) {
+  return JSON.stringify(
+    role === "client"
+      ? [userId, role, clientId]
+      : [userId, role, role === "staff" ? (accessPreset ?? "professional") : null, staffId],
+  );
+}
 
 const time = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
 export const waitlistPolicySchema = z.object({

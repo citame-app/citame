@@ -51,9 +51,9 @@ function WaitlistPage() {
   const accessScope = calendarScope(session);
   return (
     <WaitlistView
-      key={JSON.stringify([accessScope, session.clientId])}
+      key={accessScope}
       mode="client"
-      viewer={{ userId: session.user.id, accessScope: session.clientId ?? undefined }}
+      viewer={{ userId: session.user.id, accessScope }}
       role="client"
       onlineBookingEnabled={salon?.onlineBookingEnabled}
       initialServices={search.services?.split(",")}
