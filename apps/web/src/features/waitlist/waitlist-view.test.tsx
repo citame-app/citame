@@ -3,6 +3,7 @@ import type { WaitlistSourceEntry } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { CalendarWaitlist } from "~/features/admin/calendar/waitlist";
+import { calendarScope } from "~/lib/admin-queries";
 import { calendarWaitlistQuery, waitlistQuery } from "~/lib/waitlist-queries";
 import { renderApp } from "../../../test/render";
 import { WaitlistView } from "./waitlist-view";
@@ -517,4 +518,43 @@ test("a denied calendar count clears cached waitlist pages and cancels an earlie
     );
   }
   await waitFor(() => expect(queryClient.getQueryData(list.queryKey)).toBeNull());
+});
+
+test("retry checks the current session before requesting a previously denied waitlist", async () => {
+  const session = {
+    user: {
+      id: "viewer",
+      role: "client" as const,
+      name: "Test customer",
+      email: "viewer@fixture.test",
+    },
+    staffId: null,
+    clientId,
+    phone: null,
+  };
+  const requests: string[] = [];
+  const defaultFetch = globalThis.fetch;
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = new URL(String(input), "http://localhost").pathname;
+    if (path === "/api/me") {
+      requests.push(path);
+      return json(session);
+    }
+    if (path === "/api/me/waitlist") {
+      requests.push(path);
+      if (requests.length === 1)
+        return json({ error: { code: "forbidden", message: "Access changed" } }, 403);
+    }
+    return defaultFetch(input, init);
+  }) as unknown as typeof fetch;
+  renderApp(
+    <WaitlistView
+      mode="client"
+      role="client"
+      viewer={{ userId: "viewer", accessScope: calendarScope(session) }}
+    />,
+  );
+  fireEvent.click(await screen.findByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("No waitlist requests yet")).toBeVisible();
+  expect(requests).toEqual(["/api/me/waitlist", "/api/me", "/api/me/waitlist"]);
 });
