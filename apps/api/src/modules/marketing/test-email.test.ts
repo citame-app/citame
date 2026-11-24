@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createServer } from "node:net";
-import { campaignTestEmailReceiptSchema } from "@sob/contracts";
+import { type CampaignEmailLayout, campaignTestEmailReceiptSchema } from "@sob/contracts";
 import { auditLog, marketingCampaign, marketingDelivery, user } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import { actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
@@ -74,7 +74,7 @@ afterAll(async () => {
   await new Promise<void>((closed) => smtp.close(() => closed()));
 });
 
-async function prepareDraft() {
+async function prepareDraft(emailLayout?: CampaignEmailLayout) {
   await t.reset();
   messages.length = 0;
   smtpResult = "accept";
@@ -86,12 +86,12 @@ async function prepareDraft() {
       staffProfileId: fixtures.anaId,
     }),
   ]);
-  return { owner, staff, id: await createDraft(owner.cookie), root };
+  return { owner, staff, id: await createDraft(owner.cookie, emailLayout), root };
 }
 
 const root = "/admin/marketing/campaigns";
 
-async function createDraft(cookie: string) {
+async function createDraft(cookie: string, emailLayout?: CampaignEmailLayout) {
   const id = crypto.randomUUID();
   const create = await json(
     t.app,
@@ -103,6 +103,7 @@ async function createDraft(cookie: string) {
       channel: "email",
       subject: "Hello {{first_name}}",
       emailBody: "Welcome to {{salon_name}}. {{booking_url}}",
+      ...(emailLayout && { emailLayout }),
       smsBody: "",
       audience: {},
       trigger: "manual",
@@ -116,7 +117,14 @@ async function createDraft(cookie: string) {
 }
 
 test("only the verified owner receives a reviewed test, with a safe replay", async () => {
-  const { owner, staff, id, root } = await prepareDraft();
+  const { owner, staff, id, root } = await prepareDraft({
+    heading: "Local Campaign Heading",
+    preheader: "Preview without customer recipients",
+    blocks: [
+      { kind: "paragraph", text: "Welcome to {{salon_name}}.", emphasis: "strong" },
+      { kind: "booking", label: "Reserve Local Slot" },
+    ],
+  });
   const path = `${root}/${id}/test-email`;
   const packet = { version: 1, requestId: crypto.randomUUID() };
   const send = (cookie: string, body: unknown = packet) => json(t.app, path, "POST", body, cookie);
@@ -160,6 +168,10 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   expect(messages).toHaveLength(1);
   expect(messages[0]?.to).toBe("<preview-owner@example.com>");
   expect(messages[0]?.content).toContain("Subject: [Prueba / Test] Hello preview-owner");
+  const mail = messages[0]?.content.replaceAll("=\r\n", "");
+  expect(mail).toContain("Local Campaign Heading");
+  expect(mail).toContain("<strong>Welcome to Test Salon.</strong>");
+  expect(mail?.match(/Reserve Local Slot/g)).toHaveLength(2);
   expect(messages[0]?.content).not.toContain("/marketing/opt-out");
   expect(await t.db.select().from(marketingDelivery)).toEqual([]);
 });

@@ -107,6 +107,7 @@ impl EmailLayout {
     pub const PREHEADER_LIMIT: usize = 150;
     pub const BOOKING_LIMIT: usize = 80;
     pub const BLOCK_LIMIT: usize = 16;
+    pub const PARAGRAPH_LINE_LIMIT: usize = 256;
 
     pub fn plain_text(&self) -> String {
         [&self.heading, &self.preheader]
@@ -131,20 +132,29 @@ impl EmailLayout {
             })
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub fn validated_plain_text(&self) -> Option<String> {
         let fits = |text: &str, limit| text.encode_utf16().count() <= limit && !text.contains('\0');
-        fits(&self.heading, Self::HEADING_LIMIT)
-            && fits(&self.preheader, Self::PREHEADER_LIMIT)
-            && (1..=Self::BLOCK_LIMIT).contains(&self.blocks.len())
-            && self.blocks.iter().all(|block| {
-                let (text, limit) = match block {
-                    EmailBlock::Heading { text } => (text, Self::HEADING_LIMIT),
-                    EmailBlock::Paragraph { text, .. } => (text, Self::BODY_LIMIT),
-                    EmailBlock::Booking { label } => (label, Self::BOOKING_LIMIT),
-                };
-                !text.is_empty() && fits(text, limit)
+        let line = |text: &str, limit| fits(text, limit) && !text.contains(['\r', '\n']);
+        if !line(&self.heading, Self::HEADING_LIMIT)
+            || !line(&self.preheader, Self::PREHEADER_LIMIT)
+            || !(1..=Self::BLOCK_LIMIT).contains(&self.blocks.len())
+            || !self.blocks.iter().all(|block| match block {
+                EmailBlock::Heading { text } => !text.is_empty() && line(text, Self::HEADING_LIMIT),
+                EmailBlock::Paragraph { text, .. } => {
+                    !text.is_empty()
+                        && fits(text, Self::BODY_LIMIT)
+                        && !text.contains('\r')
+                        && text.split('\n').count() <= Self::PARAGRAPH_LINE_LIMIT
+                }
+                EmailBlock::Booking { label } => {
+                    !label.is_empty() && line(label, Self::BOOKING_LIMIT)
+                }
             })
-            && self.plain_text().encode_utf16().count() <= Self::BODY_LIMIT
+        {
+            return None;
+        }
+        let body = self.plain_text();
+        (body.encode_utf16().count() <= Self::BODY_LIMIT).then_some(body)
     }
 }
 

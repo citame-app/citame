@@ -27,7 +27,11 @@ import { ApiError, NetworkError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { localDateOf } from "~/lib/format";
 import { zonedInstant } from "~/lib/zoned";
-import { CampaignEmailEditor, CampaignEmailPreview } from "./campaign-email-editor";
+import {
+  CampaignEmailEditor,
+  CampaignEmailPreview,
+  SavedCampaignEmailPreview,
+} from "./campaign-email-editor";
 import { InvitationContacts } from "./invitation-contacts";
 
 function lostMarketingAccess(error: unknown): error is ApiError {
@@ -960,6 +964,9 @@ function CampaignReview({
       >
         <div className="space-y-5">
           <h3 className="font-semibold">{campaign.name}</h3>
+          {campaign.emailLayout && (
+            <SavedCampaignEmailPreview subject={campaign.subject} layout={campaign.emailLayout} />
+          )}
           {audience.isPending ? (
             <Skeleton className="h-32" />
           ) : audience.isError ? (
@@ -1160,6 +1167,9 @@ function CampaignHistory({
           <p className="text-sm text-muted">
             {t(`marketing.${c.status}`)} · {t(`marketing.${c.trigger}`)}
           </p>
+          {c.emailLayout && (
+            <SavedCampaignEmailPreview subject={c.subject} layout={c.emailLayout} />
+          )}
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {Object.entries(c.counts).map(([key, value]) => (
               <div key={key} className="rounded-xl border border-line p-4">

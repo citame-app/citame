@@ -148,10 +148,13 @@ test("the delivery worker renders a safe heading, booking button and plain-text 
   expect(message.text).toContain("/marketing/opt-out?token=");
 });
 
-test("a campaign cannot contain caller-supplied HTML blocks or booking URLs", async () => {
+test("formatted blocks validate their type, URL and line constraints", async () => {
   for (const block of [
     { kind: "html", text: "<iframe src=unsafe>" },
     { kind: "booking", label: "Invalid", href: "javascript:alert(1)" },
+    { kind: "heading", text: "Two\nlines" },
+    { kind: "booking", label: "Two\nlines" },
+    { kind: "paragraph", text: "line\n".repeat(257), emphasis: "none" },
   ]) {
     const input = draft({ emailLayout: { ...emailLayout, blocks: [block] } });
     expect((await call(owner, "/admin/marketing/campaigns", "POST", input)).status).toBe(400);

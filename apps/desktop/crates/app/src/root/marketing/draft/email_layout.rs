@@ -77,9 +77,27 @@ impl LayoutEditor {
         self.blocks.push((id, block));
     }
 
-    fn change_block(&mut self, id: usize, change: impl FnOnce(&mut Self, usize)) {
-        if let Some(index) = self.blocks.iter().position(|(key, _)| *key == id) {
-            change(self, index);
+    fn move_block(&mut self, id: usize, down: bool) {
+        let Some(index) = self.blocks.iter().position(|(key, _)| *key == id) else {
+            return;
+        };
+        let target = index.checked_add_signed(if down { 1 } else { -1 });
+        if let Some(target) = target.filter(|&target| target < self.blocks.len()) {
+            self.blocks.swap(index, target);
+        }
+    }
+
+    fn set_emphasis(&mut self, id: usize, style: EmailEmphasis) {
+        if let Some((_, BlockEditor::Paragraph(_, emphasis))) =
+            self.blocks.iter_mut().find(|(key, _)| *key == id)
+        {
+            *emphasis = style;
+        }
+    }
+
+    fn remove_block(&mut self, id: usize) {
+        if self.blocks.len() > 1 {
+            self.blocks.retain(|(key, _)| *key != id);
         }
     }
 
@@ -180,6 +198,7 @@ impl Root {
                         )
                         .tab_index(0)
                         .focus(|style| style.border_color(theme::text()))
+                        .debug_selector(move || format!("marketing-email-format-{layout}"))
                     }),
                 ),
             )
@@ -245,19 +264,20 @@ impl Root {
                                         row.child(self.email_move_button(id, true, cx))
                                     })
                                     .when(layout.blocks.len() > 1, |row| {
-                                        row.child(self.marketing_button(
-                                            SharedString::from(format!("email-remove-{id}")),
-                                            Key::MarketingRemoveEmailBlock,
-                                            Kind::Ghost,
-                                            move |root, cx| {
-                                                root.edit_email_layout(cx, |layout, _| {
-                                                    if layout.blocks.len() > 1 {
-                                                        layout.blocks.retain(|(key, _)| *key != id);
-                                                    }
-                                                })
-                                            },
-                                            cx,
-                                        ))
+                                        row.child(
+                                            self.marketing_button(
+                                                SharedString::from(format!("email-remove-{id}")),
+                                                Key::MarketingRemoveEmailBlock,
+                                                Kind::Ghost,
+                                                move |root, cx| {
+                                                    root.edit_email_layout(cx, |layout, _| {
+                                                        layout.remove_block(id);
+                                                    })
+                                                },
+                                                cx,
+                                            )
+                                            .debug_selector(move || format!("email-remove-{id}")),
+                                        )
                                     }),
                             )
                     }),
@@ -280,6 +300,7 @@ impl Root {
                                     },
                                     cx,
                                 )
+                                .debug_selector(move || format!("email-block-add-{index}"))
                             }),
                     ),
                 )
@@ -300,19 +321,10 @@ impl Root {
                 Key::FormMoveUp
             },
             Kind::Ghost,
-            move |root, cx| {
-                root.edit_email_layout(cx, |layout, _| {
-                    layout.change_block(id, |layout, index| {
-                        let target = index.checked_add_signed(if down { 1 } else { -1 });
-                        if let Some(target) = target.filter(|&target| target < layout.blocks.len())
-                        {
-                            layout.blocks.swap(index, target);
-                        }
-                    });
-                })
-            },
+            move |root, cx| root.edit_email_layout(cx, |layout, _| layout.move_block(id, down)),
             cx,
         )
+        .debug_selector(move || format!("email-move-{id}-{down}"))
     }
 
     fn email_emphasis_options(
@@ -335,25 +347,20 @@ impl Root {
                     self.t(key),
                     style == emphasis,
                     cx.listener(move |root, _, _, cx| {
-                        root.edit_email_layout(cx, |layout, _| {
-                            layout.change_block(id, |layout, index| {
-                                if let BlockEditor::Paragraph(_, emphasis) =
-                                    &mut layout.blocks[index].1
-                                {
-                                    *emphasis = style;
-                                }
-                            });
-                        });
+                        root.edit_email_layout(cx, |layout, _| layout.set_emphasis(id, style));
                     }),
                 )
                 .tab_index(0)
                 .focus(|style| style.border_color(theme::text()))
+                .debug_selector(move || format!("email-emphasis-{id}-{index}"))
             }),
         )
     }
 
-    pub(super) fn preview_email_layout(&self, layout: &LayoutEditor, cx: &App) -> gpui::Div {
-        let layout = layout.packet(cx);
+    pub(in crate::root::marketing) fn render_email_layout_preview(
+        &self,
+        layout: &EmailLayout,
+    ) -> gpui::Div {
         div()
             .flex()
             .flex_col()
@@ -396,5 +403,90 @@ impl Root {
                     ),
                 }
             }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn click_control(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+        let viewport = cx.debug_bounds("marketing-body").unwrap();
+        let center = cx.debug_bounds(selector).unwrap().center();
+        if center.y < viewport.top() || center.y > viewport.bottom() {
+            cx.simulate_event(gpui::ScrollWheelEvent {
+                position: viewport.center(),
+                delta: gpui::ScrollDelta::Pixels(gpui::point(
+                    px(0.),
+                    viewport.center().y - center.y,
+                )),
+                ..Default::default()
+            });
+            cx.run_until_parked();
+        }
+        let center = cx.debug_bounds(selector).unwrap().center();
+        assert!(
+            center.y >= viewport.top() && center.y <= viewport.bottom(),
+            "{selector}"
+        );
+        cx.simulate_click(center, Default::default());
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn native_campaign_controls_create_style_reorder_and_remove_blocks(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_directory, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_marketing(cx);
+            root.status.connectivity = Connectivity::Online;
+            root.open_campaign_editor(EditorMode::Create(Trigger::Manual), cx);
+            root
+        });
+        cx.simulate_resize(gpui::size(px(1100.), px(740.)));
+        cx.run_until_parked();
+        click_control(cx, "marketing-email-format-true");
+        click_control(cx, "email-emphasis-0-1");
+        click_control(cx, "email-block-add-2");
+        click_control(cx, "email-move-1-false");
+        root.update(cx, |root, cx| {
+            let editor = root.marketing_desk().unwrap().editor.as_ref().unwrap();
+            let layout = editor.email_layout.as_ref().unwrap();
+            assert!(matches!(layout.blocks[0].1, BlockEditor::Booking(_)));
+            let BlockEditor::Booking(label) = &layout.blocks[0].1 else {
+                unreachable!();
+            };
+            label.update(cx, |field, cx| field.set_text("Book an appointment", cx));
+            let packet = editor
+                .packet(cx)
+                .unwrap()
+                .draft
+                .email_layout
+                .unwrap()
+                .unwrap();
+            assert!(matches!(
+                packet.blocks[1],
+                EmailBlock::Paragraph {
+                    emphasis: EmailEmphasis::Strong,
+                    ..
+                }
+            ));
+        });
+        click_control(cx, "email-remove-1");
+        root.update(cx, |root, cx| {
+            let editor = root.marketing_desk().unwrap().editor.as_ref().unwrap();
+            let packet = editor
+                .packet(cx)
+                .unwrap()
+                .draft
+                .email_layout
+                .unwrap()
+                .unwrap();
+            assert_eq!(packet.blocks.len(), 1);
+        });
     }
 }

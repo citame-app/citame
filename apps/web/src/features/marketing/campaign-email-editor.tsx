@@ -127,8 +127,14 @@ export function CampaignEmailEditor({
               };
               const value = block.kind === "booking" ? block.label : block.text;
               const label = t(`marketing.emailBlock.${block.kind}`);
-              const inputError =
-                invalid && !value.trim() ? t("marketing.emailBlockRequired") : undefined;
+              const inputError = invalid
+                ? !value.trim()
+                  ? t("marketing.emailBlockRequired")
+                  : block.kind === "paragraph" &&
+                      value.split("\n").length > CAMPAIGN_EMAIL_LIMITS.paragraphLines
+                    ? t("marketing.emailParagraphLines")
+                    : undefined
+                : undefined;
               return (
                 <li key={keys[index]} className="space-y-3 rounded-xl border border-line p-3">
                   {block.kind === "paragraph" ? (
@@ -280,5 +286,26 @@ export function CampaignEmailPreview({
         </div>
       ))}
     </div>
+  );
+}
+
+export function SavedCampaignEmailPreview({
+  subject,
+  layout,
+}: {
+  subject: string;
+  layout: CampaignEmailLayout;
+}) {
+  const { t } = useI18n();
+  return (
+    <details className="rounded-xl border border-line bg-sunken px-4">
+      <summary className="cursor-pointer py-3 text-sm font-medium">
+        {t("marketing.preview")}
+      </summary>
+      <div className="pb-4">
+        <strong className="block break-words">{previewText(subject)}</strong>
+        <CampaignEmailPreview body="" layout={layout} />
+      </div>
+    </details>
   );
 }

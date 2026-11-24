@@ -17,6 +17,7 @@ export const CAMPAIGN_EMAIL_LIMITS = {
   preheader: 150,
   bookingLabel: 80,
   blocks: 16,
+  paragraphLines: 256,
   body: 10000,
 } as const;
 
@@ -27,24 +28,31 @@ const layoutText = (max: number, min = 0) =>
     .min(min)
     .max(max)
     .refine((value) => !value.includes("\0"), "Text cannot contain NUL");
+const layoutLine = (max: number, min = 0) =>
+  layoutText(max, min).refine((value) => !/[\r\n]/.test(value), "Enter a single line");
 const campaignEmailLayoutFields = z.strictObject({
-  heading: layoutText(CAMPAIGN_EMAIL_LIMITS.heading).default(""),
-  preheader: layoutText(CAMPAIGN_EMAIL_LIMITS.preheader).default(""),
+  heading: layoutLine(CAMPAIGN_EMAIL_LIMITS.heading).default(""),
+  preheader: layoutLine(CAMPAIGN_EMAIL_LIMITS.preheader).default(""),
   blocks: z
     .array(
       z.discriminatedUnion("kind", [
         z.strictObject({
           kind: z.literal("heading"),
-          text: layoutText(CAMPAIGN_EMAIL_LIMITS.heading, 1),
+          text: layoutLine(CAMPAIGN_EMAIL_LIMITS.heading, 1),
         }),
         z.strictObject({
           kind: z.literal("paragraph"),
-          text: layoutText(CAMPAIGN_EMAIL_LIMITS.body, 1),
+          text: layoutText(CAMPAIGN_EMAIL_LIMITS.body, 1)
+            .transform((value) => value.replace(/\r\n?/g, "\n"))
+            .refine(
+              (value) => value.split("\n").length <= CAMPAIGN_EMAIL_LIMITS.paragraphLines,
+              "Split long messages into paragraphs of at most 256 lines",
+            ),
           emphasis: z.enum(["none", "strong", "italic"]),
         }),
         z.strictObject({
           kind: z.literal("booking"),
-          label: layoutText(CAMPAIGN_EMAIL_LIMITS.bookingLabel, 1),
+          label: layoutLine(CAMPAIGN_EMAIL_LIMITS.bookingLabel, 1),
         }),
       ]),
     )

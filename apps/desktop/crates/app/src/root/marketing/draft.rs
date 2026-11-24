@@ -7,7 +7,7 @@ mod invitation;
 use email_layout::LayoutEditor;
 use invitation::InvitationEditor;
 
-const MAX_EDITABLE_LINES: usize = 256;
+const MAX_EDITABLE_LINES: usize = EmailLayout::PARAGRAPH_LINE_LIMIT;
 
 const CHANNELS: [Channel; 3] = [Channel::Email, Channel::Sms, Channel::Optimized];
 const TRIGGERS: [Trigger; 4] = [
@@ -272,21 +272,16 @@ impl Editor {
         let name = text(&self.name, cx);
         let subject = text(&self.subject, cx);
         let layout = self.email_layout.as_ref().map(|layout| layout.packet(cx));
+        let formatted_body = layout.as_ref().and_then(EmailLayout::validated_plain_text);
+        if self.channel != Channel::Sms && layout.is_some() && formatted_body.is_none() {
+            return None;
+        }
+        let email_body = formatted_body.unwrap_or_else(|| message_text(&self.email.lines, cx));
         let email_layout = if self.channel == Channel::Sms {
             None
         } else {
-            layout.clone()
+            layout
         };
-        if email_layout
-            .as_ref()
-            .is_some_and(|layout| !layout.is_valid())
-        {
-            return None;
-        }
-        let email_body = layout.filter(EmailLayout::is_valid).map_or_else(
-            || message_text(&self.email.lines, cx),
-            |layout| layout.plain_text(),
-        );
         let sms_body = message_text(&self.sms.lines, cx);
         let delay_minutes = timing(
             &text(&self.delay, cx),
@@ -592,14 +587,12 @@ impl Root {
                             move |root, cx| {
                                 if let Some(editor) =
                                     root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                                    && let Some(input) = message.input(editor)
+                                    && input.lines.len() > 1
                                 {
-                                    if let Some(input) = message.input(editor)
-                                        && input.lines.len() > 1
-                                    {
-                                        input.lines.retain(|line| *line != remove);
-                                        input.update_budget();
-                                        cx.notify();
-                                    }
+                                    input.lines.retain(|line| *line != remove);
+                                    input.update_budget();
+                                    cx.notify();
                                 }
                             },
                             cx,
@@ -650,7 +643,7 @@ impl Root {
                             .child(preview_message(&text(&editor.subject, cx))),
                     )
                     .child(if let Some(layout) = &editor.email_layout {
-                        self.preview_email_layout(layout, cx)
+                        self.render_email_layout_preview(&layout.packet(cx))
                     } else {
                         div().child(preview_message(&message_text(&editor.email.lines, cx)))
                     })
