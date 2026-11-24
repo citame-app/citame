@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { CalendarAppointment } from "@sob/contracts";
+import type { AppointmentContextRow, CalendarAppointment } from "@sob/contracts";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../../test/render";
@@ -39,12 +39,16 @@ const appointment: CalendarAppointment = {
 
 let patches: unknown[];
 let pendingPatch: Promise<void> | undefined;
+let serviceContext: { rows: AppointmentContextRow[]; appointmentVersion: number };
+let rejectServiceSave: boolean;
 let patchReply: { status: number; body: unknown };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 beforeEach(() => {
   patches = [];
+  serviceContext = { rows: [], appointmentVersion: appointment.version };
+  rejectServiceSave = false;
   pendingPatch = undefined;
   patchReply = { status: 200, body: { ...appointment, version: 4 } };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
@@ -53,13 +57,15 @@ beforeEach(() => {
       if (init?.method === "PATCH") {
         const input = JSON.parse(String(init.body));
         patches.push(input);
+        if (rejectServiceSave)
+          return json({ error: { code: "version_conflict", message: "stale" } }, 409);
         return json({
           rows: [],
           customerComment: null,
           appointmentVersion: input.appointmentVersion + 1,
         });
       }
-      return json({ rows: [], customerComment: null, appointmentVersion: appointment.version });
+      return json(serviceContext);
     }
     if (url.pathname === `/api/admin/clients/${CLIENT}`) {
       return json({
@@ -123,7 +129,13 @@ const open = (props: Partial<Parameters<typeof AppointmentDrawer>[0]> = {}) =>
     />,
   );
 
-function LiveUpdateHarness({ remoteNotes = appointment.notes }: { remoteNotes?: string | null }) {
+function LiveUpdateHarness({
+  remoteNotes = appointment.notes,
+  remoteStaff = appointment.staffId,
+}: {
+  remoteNotes?: string | null;
+  remoteStaff?: string;
+}) {
   const [version, setVersion] = useState(appointment.version);
   return (
     <>
@@ -131,9 +143,10 @@ function LiveUpdateHarness({ remoteNotes = appointment.notes }: { remoteNotes?: 
         appointment={{
           ...appointment,
           version,
+          staffId: version === 4 ? remoteStaff : appointment.staffId,
           notes: version === 4 ? remoteNotes : appointment.notes,
         }}
-        staffName="Ana"
+        staffName={version === 4 && remoteStaff !== appointment.staffId ? "Bea" : "Ana"}
         onClose={() => {}}
         role="owner"
         ownStaffId={null}
@@ -248,6 +261,78 @@ describe("AppointmentDrawer", () => {
           servicePosition: 0,
           version: 0,
           internalNote: "Confirm preferred styling",
+        },
+      ]),
+    );
+  });
+
+  test("a stale service save keeps the draft and requires explicit review before retrying", async () => {
+    rejectServiceSave = true;
+    open();
+    const note = await screen.findByLabelText("Internal notes");
+    const save = () =>
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save service details" });
+    fireEvent.change(note, { target: { value: "Keep my colour notes" } });
+    fireEvent.click(save());
+    await screen.findByText(
+      "This appointment changed. Load the saved details to review your draft.",
+    );
+    expect(note).toHaveValue("Keep my colour notes");
+    expect(save().disabled).toBe(true);
+    const latest: AppointmentContextRow = {
+      servicePosition: 0,
+      version: 1,
+      requestedStaffId: STAFF,
+      internalNote: "Latest note from Desktop",
+      customerComment: null,
+      paid: null,
+      invoiced: null,
+      source: "citame",
+      sourceRef: null,
+    };
+    serviceContext = { appointmentVersion: 4, rows: [latest] };
+    fireEvent.click(screen.getByRole("button", { name: "Reload latest" }));
+    await screen.findByText("Latest note from Desktop");
+    expect(note).toHaveValue("Keep my colour notes");
+    expect(
+      screen.getByRole("checkbox", { name: "Client requested a specific professional" }),
+    ).toBeChecked();
+    expect(save().disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Keep my draft" }));
+    expect(patches).toHaveLength(1);
+    rejectServiceSave = false;
+    fireEvent.click(save());
+    await waitFor(() => expect(patches).toHaveLength(2));
+    expect(patches[1]).toEqual({
+      appointmentVersion: 4,
+      servicePosition: 0,
+      version: 1,
+      internalNote: "Keep my colour notes",
+    });
+  });
+
+  test("a new request must be confirmed again after reassignment", async () => {
+    renderApp(<LiveUpdateHarness remoteStaff="0198f5a0-7b1c-7000-8000-000000000202" />);
+    const requested = await screen.findByRole("checkbox", {
+      name: "Client requested a specific professional",
+    });
+    fireEvent.click(requested);
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(
+      screen.getByText("The assigned professional changed. Confirm whom this request applies to."),
+    ).toBeVisible();
+    const save = screen.getByRole<HTMLButtonElement>("button", { name: "Save service details" });
+    expect(save.disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Keep my draft" }));
+    fireEvent.click(save);
+    await waitFor(() =>
+      expect(patches).toEqual([
+        {
+          appointmentVersion: 4,
+          servicePosition: 0,
+          version: 0,
+          requested: true,
+          internalNote: "",
         },
       ]),
     );

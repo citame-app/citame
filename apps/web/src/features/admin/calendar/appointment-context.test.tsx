@@ -61,7 +61,7 @@ test("a reassigned booking keeps its original preference selected until explicit
     });
   }) as unknown as typeof fetch;
 
-  renderApp(<AppointmentContext appointment={visit} />);
+  renderApp(<AppointmentContext appointment={visit} staffName="Ana" />);
   const preference = await screen.findByRole("checkbox", {
     name: "Client requested a specific professional",
   });
@@ -82,7 +82,7 @@ test("a reassigned booking keeps its original preference selected until explicit
   );
 });
 
-test("live notes refresh until edited and a conflict preserves the version reviewed", async () => {
+test("live notes refresh until edited and a retry uses the explicitly reviewed version", async () => {
   let remoteVersion = 1;
   const patches: unknown[] = [];
   globalThis.fetch = mock(async (_input: unknown, init?: RequestInit) => {
@@ -115,7 +115,7 @@ test("live notes refresh until edited and a conflict preserves the version revie
       { headers: { "content-type": "application/json" } },
     );
   }) as unknown as typeof fetch;
-  const rendered = renderApp(<AppointmentContext appointment={visit} />);
+  const rendered = renderApp(<AppointmentContext appointment={visit} staffName="Ana" />);
   const field = await screen.findByRole("textbox", { name: "Internal notes" });
   const updateFromServer = (version: number) => {
     remoteVersion = version;
@@ -131,13 +131,19 @@ test("live notes refresh until edited and a conflict preserves the version revie
   fireEvent.change(field, { target: { value: "My unsaved private draft" } });
   await updateFromServer(3);
   expect(field).toHaveValue("My unsaved private draft");
-  fireEvent.click(screen.getByRole("button", { name: "Save service details" }));
-  await screen.findByRole("alert");
+  expect(await screen.findByText("Saved note 3")).toBeVisible();
+  const save = () =>
+    screen.getByRole<HTMLButtonElement>("button", { name: "Save service details" });
+  expect(save().disabled).toBe(true);
+  expect(patches).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Keep my draft" }));
+  fireEvent.click(save());
+  await screen.findByText("This appointment changed. Load the saved details to review your draft.");
   expect(patches).toEqual([
     {
-      appointmentVersion: 2,
+      appointmentVersion: 3,
       servicePosition: 0,
-      version: 2,
+      version: 3,
       internalNote: "My unsaved private draft",
     },
   ]);

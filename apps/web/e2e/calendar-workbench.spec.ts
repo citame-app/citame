@@ -463,10 +463,15 @@ test("drag and keyboard moves keep conflict rollback and read the committed serv
 
 test("service badges preserve private notes, explicit professional preference and booking comments", async ({
   page,
+  baseURL,
 }) => {
   await signInThroughUi(page, fixture.ownerEmail, path);
+  await expect(page.getByRole("img", { name: "Live updates connected" })).toBeVisible();
   const card = page.getByRole("button", { name: /10:20.*11:20.*Invoiced in Booksy/ }).first();
   await expect(card.getByRole("img", { name: "Internal notes", exact: true })).toBeVisible();
+  const contextResponse = page.waitForResponse(
+    (r) => r.url().endsWith("/context") && r.request().method() === "GET",
+  );
   await card.click();
   const dialog = page.getByRole("dialog", { name: "Cliente de demostración", exact: true });
   await expect(dialog.getByRole("textbox", { name: "Internal notes", exact: true })).toHaveValue(
@@ -479,13 +484,43 @@ test("service badges preserve private notes, explicit professional preference an
   const save = dialog.getByRole("button", { name: "Save service details", exact: true });
   const original = await note.inputValue();
   await note.fill(`${original} · synthetic verification`);
+  const context = await contextResponse;
+  const saved = await context.json();
+  const endpoint = new URL(context.url()).pathname;
+  const headers = { origin: baseURL ?? "http://localhost:4273" };
+  const other = await page.request.patch(endpoint, {
+    headers,
+    data: {
+      appointmentVersion: saved.appointmentVersion,
+      servicePosition: 0,
+      version: saved.rows[0].version,
+      internalNote: "Updated in another session",
+      requested: true,
+    },
+  });
+  expect(other.status(), await other.text()).toBe(200);
+  await expect(dialog.getByText("Updated in another session", { exact: true })).toBeVisible();
+  await expect(note).toHaveValue(`${original} · synthetic verification`);
+  await expect(save).toBeDisabled();
+  const preference = dialog.getByRole("checkbox", {
+    name: "Client requested a specific professional",
+  });
+  await expect(preference).toBeChecked();
+  await dialog.getByRole("button", { name: "Keep my draft" }).click();
   const firstSave = page.waitForResponse(
     (r) => r.url().endsWith("/context") && r.request().method() === "PATCH",
   );
   await save.click();
-  expect((await firstSave).status()).toBe(200);
+  const committed = await firstSave;
+  expect(committed.status()).toBe(200);
+  expect((await committed.json()).rows[0]).toMatchObject({
+    requestedStaffId: expect.any(String),
+    internalNote: `${original} · synthetic verification`,
+  });
   await expect(save).toBeDisabled();
+  await expect(preference).toBeChecked();
   await note.fill(original);
+  await preference.uncheck();
   const restored = page.waitForResponse(
     (r) => r.url().endsWith("/context") && r.request().method() === "PATCH",
   );
