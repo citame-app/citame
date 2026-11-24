@@ -2068,6 +2068,10 @@ impl HttpTransport {
             use std::fmt::Write;
             let _ = write!(path, "&fromDate={}&toDate={}", range.from, range.to);
         }
+        if let WaitlistView::State(state) = view {
+            path.push_str("&state=");
+            path.push_str(state.as_str());
+        }
         let response = self.get(&self.agent, &path, None)?;
         read_response(response, false)
     }

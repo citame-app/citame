@@ -4921,6 +4921,7 @@ impl Render for Root {
                             | Overlay::New(_)
                             | Overlay::Marketing(_)
                             | Overlay::Loyalty(_)
+                            | Overlay::Waitlist(_)
                     ) || this.checkout_review_mut().is_some())
                 {
                     if event.keystroke.modifiers.shift {

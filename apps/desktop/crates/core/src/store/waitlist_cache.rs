@@ -19,6 +19,7 @@ fn prefix(view: WaitlistView) -> String {
     match view {
         WaitlistView::Active => "desk_waitlist:active:".into(),
         WaitlistView::History => "desk_waitlist:history:".into(),
+        WaitlistView::State(state) => format!("desk_waitlist:state:{}:", state.as_str()),
         WaitlistView::Calendar(range) => {
             format!("{CALENDAR_PREFIX}{}:{}:", range.from, range.to)
         }
