@@ -64,8 +64,7 @@ impl Root {
             )
             .child(self.t(state))
             .when(
-                can_refresh && self.status.connectivity == Connectivity::Online
-                    && protection.checkout_id.is_some(),
+                self.ready_deposit_receipt().is_some(),
                 |panel| {
                     panel.child(
                         self.button(

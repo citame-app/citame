@@ -13,6 +13,7 @@ import {
 import {
   appointment,
   appointmentService,
+  bookingProtection,
   cashMovement,
   cashSession,
   checkout,
@@ -23,7 +24,7 @@ import {
   type Database,
   staffProfile,
 } from "@sob/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import { ownsClient, type Principal } from "../../auth/principal";
@@ -550,12 +551,20 @@ export async function createCheckoutInTransaction(
         "Appointment seller must match the booked professional",
       );
     staffId = booking.staffId;
-    const [previous] = await tx
-      .select()
+    // A protected booking keeps its original receipt even after the deposit is settled or void.
+    const [linked] = await tx
+      .select({ receipt: checkout })
       .from(checkout)
+      .leftJoin(bookingProtection, eq(bookingProtection.checkoutId, checkout.id))
       .where(
-        and(eq(checkout.appointmentId, input.appointmentId), sql`${checkout.status} <> 'void'`),
-      );
+        and(
+          eq(checkout.appointmentId, input.appointmentId),
+          or(sql`${checkout.status} <> 'void'`, isNotNull(bookingProtection.checkoutId)),
+        ),
+      )
+      .orderBy(desc(sql`${bookingProtection.checkoutId} IS NOT NULL`))
+      .limit(1);
+    const previous = linked?.receipt;
     if (previous) {
       assertSaleAccess(principal, previous);
       if (input.lines.length || input.discountCents || input.tipCents || input.clientId)

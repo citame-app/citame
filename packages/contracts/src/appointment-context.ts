@@ -14,6 +14,7 @@ export const appointmentProtectionContextSchema = bookingProtectionSchema
       .partial().shape,
   )
   .extend({
+    receiptRestricted: z.literal(true).optional(),
     attendanceBlock: z.enum(["pending_deposit", "closed_protection"]).optional(),
   });
 

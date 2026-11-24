@@ -138,6 +138,7 @@ test("private appointment context shows protection and redacts amounts without c
     "attendanceBlock",
     "cancellationCutoff",
     "expiresAt",
+    "receiptRestricted",
     "state",
   ]);
 
@@ -445,7 +446,40 @@ test("no-show fee cannot exceed the paid signal and future service charges stop"
     fulfilledAt: null,
     protection: { state: "no_show", feeCents: 2500, refundDueCents: 0 },
   });
+  const reopen = await call(owner, "/admin/commerce/checkouts", "POST", {
+    appointmentId: a.id,
+    idempotencyKey: crypto.randomUUID(),
+  });
+  expect(reopen.status).toBe(201);
+  expect(await reopen.json()).toMatchObject({ id: a.protection.checkoutId, status: "void" });
+  expect(await t.db.select().from(checkout).where(eq(checkout.appointmentId, a.id))).toHaveLength(
+    1,
+  );
 });
+test("a reassigned professional can see the signal but cannot open the original seller's receipt", async () => {
+  const a = await funded();
+  const bea = await actor(t, "staff", "bea@deposits.test", { staffProfileId: f.beaId });
+  await updateAppointment(
+    t.db,
+    a.id,
+    { version: a.version, staffId: f.beaId },
+    { userId: owner.userId },
+    { now: new Date(NOW) },
+  );
+  const path = `/appointments/${a.id}/context`;
+  const reassigned = await call(bea, path);
+  expect(reassigned.status).toBe(200);
+  const context = (await reassigned.json()) as { protection: Record<string, unknown> };
+  expect(context.protection).toMatchObject({ state: "confirmed", receiptRestricted: true });
+  expect(context.protection.checkoutId).toBeUndefined();
+  expect((await call(bea, `/admin/commerce/checkouts/${a.protection.checkoutId}`)).status).toBe(
+    404,
+  );
+  expect(await (await call(owner, path)).json()).toMatchObject({
+    protection: { checkoutId: a.protection.checkoutId },
+  });
+});
+
 test("trusted exemption and an audited manager waiver do not allow customers to impersonate a waiver", async () => {
   await enable();
   expect((await book({ protectionWaiverReason: "Waive my own fee" })).status).toBe(403);

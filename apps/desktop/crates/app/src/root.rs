@@ -2898,6 +2898,7 @@ impl Root {
                     return;
                 }
                 details.checkout = None;
+                details.deposit_receipt_scope = None;
             }
             Overlay::Details(_) => self.close_appointment_details(false),
             _ => self.overlay = Overlay::None,
@@ -3802,7 +3803,9 @@ impl Root {
             })
             .when(
                 !pending
-                    && protection.is_none_or(|deposit| deposit.checkout_id.is_none())
+                    && protection.is_none_or(|deposit| {
+                        deposit.checkout_id.is_none() && !deposit.receipt_restricted
+                    })
                     && current
                         .as_ref()
                         .is_some_and(|a| self.can_open_appointment_checkout(a)),

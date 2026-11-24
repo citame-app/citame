@@ -27,6 +27,7 @@ import {
   externallySettledAppointments,
   importedPartialPayments,
 } from "../commerce/appointment-billing";
+import { saleRow } from "../commerce/service";
 
 type Connection = Database | Tx;
 const conflict = () =>
@@ -49,6 +50,13 @@ export async function getAppointmentContext(db: Connection, id: string, principa
     db.select().from(appointmentContext).where(eq(appointmentContext.appointmentId, id)),
     protectionView(db, id),
   ]);
+  const receipt =
+    commerce && protection
+      ? await saleRow(db, protection.checkoutId, principal).catch((error: unknown) => {
+          if (error instanceof DomainError && error.code === "not_found") return null;
+          throw error;
+        })
+      : null;
   const attendanceBlock = protection ? attendanceProtectionBlock(protection.state) : undefined;
   return {
     appointmentVersion: visit.version,
@@ -61,9 +69,9 @@ export async function getAppointmentContext(db: Connection, id: string, principa
             expiresAt: protection.expiresAt,
             cancellationCutoff: protection.cancellationCutoff,
             ...(attendanceBlock ? { attendanceBlock } : {}),
+            ...(receipt ? { checkoutId: receipt.id } : { receiptRestricted: true as const }),
             ...(commerce
               ? {
-                  checkoutId: protection.checkoutId,
                   depositCents: protection.depositCents,
                   feeCents: protection.feeCents,
                   refundDueCents: protection.refundDueCents,

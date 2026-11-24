@@ -182,28 +182,33 @@ impl Root {
         self.load_details_checkout(id, source, cx);
     }
 
-    pub(super) fn open_deposit_receipt(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ready_deposit_receipt(&self) -> Option<Uuid> {
         let Overlay::Details(details) = &self.overlay else {
-            return;
+            return None;
         };
         if self.status.connectivity != Connectivity::Online || details.checkout.is_some() {
-            return;
+            return None;
         }
         let Some(annotations::Annotations::Ready(context)) = &details.annotations else {
-            return;
+            return None;
         };
-        let Some(receipt) = context
-            .protection
-            .as_ref()
-            .and_then(|deposit| deposit.checkout_id)
-        else {
-            return;
-        };
-        self.load_details_checkout(
-            details.id.clone(),
-            DetailCheckoutSource::Deposit(receipt),
-            cx,
-        );
+        let protection = context.protection.as_ref()?;
+        if protection.receipt_restricted {
+            return None;
+        }
+        protection.checkout_id
+    }
+
+    pub(super) fn open_deposit_receipt(&mut self, cx: &mut Context<Self>) {
+        if let Some(receipt) = self.ready_deposit_receipt()
+            && let Overlay::Details(details) = &self.overlay
+        {
+            self.load_details_checkout(
+                details.id.clone(),
+                DetailCheckoutSource::Deposit(receipt),
+                cx,
+            );
+        }
     }
 
     fn load_details_checkout(

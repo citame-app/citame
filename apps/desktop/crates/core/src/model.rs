@@ -186,6 +186,8 @@ pub struct AppointmentProtection {
     pub state: AppointmentProtectionState,
     pub attendance_block: Option<AttendanceProtectionBlock>,
     pub checkout_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub receipt_restricted: bool,
     pub expires_at: DateTime<Utc>,
     pub cancellation_cutoff: DateTime<Utc>,
     pub deposit_cents: Option<i64>,
