@@ -1339,6 +1339,7 @@ keys! {
     InboxCached => ("Showing the last saved page", "Mostrando la última página guardada"),
     InboxUnavailable => ("Could not load the inbox. Try again when connected.", "No se pudo actualizar la bandeja. Vuelve a intentarlo con conexión."),
     InboxArchiveFailed => ("Could not confirm the change. Refresh before retrying.", "No se pudo confirmar el cambio. Actualiza antes de reintentar."),
+    InboxAppointmentUnavailable => ("Synchronize the calendar to open this appointment.", "Sincroniza la agenda para abrir esta cita."),
     InboxRefresh => ("Refresh", "Actualizar"),
     InboxLoading => ("Updating notifications…", "Actualizando avisos…"),
     InboxPrevious => ("Previous page", "Página anterior"),

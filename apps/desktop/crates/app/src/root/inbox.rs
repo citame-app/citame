@@ -8,6 +8,15 @@ pub(super) use reward_inbox::RewardBadge;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
+#[derive(Default)]
+pub(super) struct CalendarBadge {
+    count: u32,
+    requested_cursor: Option<i64>,
+    next_poll: Option<Instant>,
+    request: Option<Arc<()>>,
+    scope: Option<CalendarCacheScope>,
+}
+
 pub(super) struct Inbox {
     rewards: Option<reward_inbox::RewardInbox>,
     archived: bool,
@@ -19,16 +28,93 @@ pub(super) struct Inbox {
     next_poll: Instant,
     scope: Option<CalendarCacheScope>,
     busy: bool,
+    refreshing: bool,
     cached: bool,
     error: Option<Key>,
 }
 
 impl Root {
+    fn refresh_calendar_badge(&mut self, status: &SyncStatus, cx: &mut Context<Self>) {
+        let scope = self.svc.store.calendar_cache_scope().ok();
+        let badge = &mut self.calendar_badge;
+        if scope != badge.scope {
+            *badge = CalendarBadge {
+                count: scope
+                    .as_ref()
+                    .and_then(|_| {
+                        self.svc
+                            .store
+                            .calendar_inbox_cache(false, None)
+                            .ok()
+                            .flatten()
+                    })
+                    .map_or(0, |page| page.total),
+                scope,
+                ..Default::default()
+            };
+            cx.notify();
+        }
+        if status.connectivity != Connectivity::Online {
+            badge.requested_cursor = None;
+            return;
+        }
+        if badge.scope.is_none()
+            || badge.request.is_some()
+            || (badge.requested_cursor == Some(status.cursor)
+                && badge
+                    .next_poll
+                    .is_some_and(|deadline| Instant::now() < deadline))
+        {
+            return;
+        }
+        let Some(transport) = self.svc.transport() else {
+            return;
+        };
+        let cursor = status.cursor;
+        let request = Arc::new(());
+        badge.request = Some(request.clone());
+        let session = self.svc.session.clone();
+        cx.spawn(async move |root, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { transport.calendar_inbox(false, None, 1) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                let badge = &mut root.calendar_badge;
+                if !Arc::ptr_eq(&session, &root.svc.session)
+                    || !badge
+                        .request
+                        .as_ref()
+                        .is_some_and(|pending| Arc::ptr_eq(&request, pending))
+                {
+                    return;
+                }
+                badge.request = None;
+                if root.svc.store.calendar_cache_scope().ok() != badge.scope {
+                    return;
+                }
+                badge.requested_cursor = Some(cursor);
+                badge.next_poll = Some(Instant::now() + REFRESH_INTERVAL);
+                let count = match result {
+                    Ok(page) => page.total,
+                    Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => 0,
+                    Err(_) => badge.count,
+                };
+                if count != badge.count {
+                    badge.count = count;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn update_inbox_connectivity(
         &mut self,
         status: &SyncStatus,
         cx: &mut Context<Self>,
     ) {
+        self.refresh_calendar_badge(status, cx);
         self.refresh_reward_badge(status, cx);
         if matches!(&self.overlay, Overlay::Inbox(inbox) if inbox.rewards.is_some()) {
             self.refresh_reward_inbox_if_changed(status, cx);
@@ -44,7 +130,7 @@ impl Root {
         }
         if status.connectivity != Connectivity::Online {
             inbox.observed_online = false;
-        } else if !inbox.busy
+        } else if !inbox.refreshing
             && (!inbox.observed_online
                 || inbox.observed_cursor != status.cursor
                 || Instant::now() >= inbox.next_poll)
@@ -82,7 +168,7 @@ impl Root {
                     .flatten()
             })
             .flatten();
-        self.overlay = Overlay::Inbox(Inbox {
+        self.overlay = Overlay::Inbox(Box::new(Inbox {
             rewards: None,
             archived,
             kind,
@@ -94,8 +180,9 @@ impl Root {
             next_poll: Instant::now(),
             scope,
             busy: false,
+            refreshing: false,
             error: None,
-        });
+        }));
         self.refresh_inbox(None, cx);
     }
 
@@ -103,7 +190,7 @@ impl Root {
         let Overlay::Inbox(inbox) = &mut self.overlay else {
             return;
         };
-        if inbox.busy {
+        if inbox.busy || (inbox.refreshing && action.is_none()) {
             return;
         }
         self.inbox_generation = self.inbox_generation.wrapping_add(1);
@@ -131,7 +218,19 @@ impl Root {
         let kind = inbox.kind;
         let mut requested_page = inbox.requested_page;
         let session = self.svc.session.clone();
-        inbox.busy = true;
+        let affected: Vec<_> = inbox
+            .page
+            .iter()
+            .flat_map(|page| &page.entries)
+            .filter_map(|notice| {
+                action
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&notice.id))
+                    .then_some(notice.kind)
+            })
+            .collect();
+        inbox.busy = action.is_some();
+        inbox.refreshing = true;
         inbox.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -143,6 +242,7 @@ impl Root {
                         {
                             return (false, Err(error), Key::InboxArchiveFailed);
                         }
+                        requested_page = 1;
                         true
                     } else {
                         false
@@ -165,13 +265,14 @@ impl Root {
                 if this.svc.store.calendar_cache_scope().ok().as_ref() != Some(&scope) {
                     return;
                 }
-                let invalidated = changed
-                    || matches!(
-                        &result,
-                        Err(TransportError::Unauthorized | TransportError::Forbidden(_))
-                    );
-                if invalidated {
+                let access_denied = matches!(
+                    &result,
+                    Err(TransportError::Unauthorized | TransportError::Forbidden(_))
+                );
+                if access_denied {
                     let _ = this.svc.store.clear_calendar_inbox_cache();
+                } else if changed {
+                    let _ = this.svc.store.invalidate_calendar_inbox_filters(&affected);
                 }
                 if generation != this.inbox_generation {
                     return;
@@ -180,23 +281,23 @@ impl Root {
                     return;
                 };
                 inbox.busy = false;
-                if invalidated {
+                inbox.refreshing = false;
+                if access_denied || changed {
                     inbox.page = None;
                     inbox.cached = false;
                 }
                 match result {
                     Ok(page) => {
-                        if page.page == 1 {
-                            if !this
+                        if page.page == 1
+                            && !this
                                 .svc
                                 .store
                                 .cache_calendar_inbox(&scope, archived, kind, &page)
-                                .unwrap_or(false)
-                            {
-                                this.overlay = Overlay::None;
-                                cx.notify();
-                                return;
-                            }
+                                .unwrap_or(true)
+                        {
+                            this.overlay = Overlay::None;
+                            cx.notify();
+                            return;
                         }
                         inbox.cached = false;
                         inbox.requested_page = page.page;
@@ -326,7 +427,7 @@ impl Root {
                             .child(self.t(Key::InboxCached)),
                     )
                 })
-                .when(inbox.busy, |d| {
+                .when(inbox.busy || (inbox.refreshing && inbox.page.is_none()), |d| {
                     d.child(
                         div()
                             .text_sm()
@@ -394,6 +495,8 @@ impl Root {
                                         let id = notice.id.clone();
                                         let appointment_id = notice.appointment_id.clone();
                                         let starts = notice.appointment_starts_at;
+                                        let staff = notice.staff_id.clone();
+                                        let cached = inbox.cached;
                                         div()
                                             .flex()
                                             .flex_col()
@@ -440,25 +543,13 @@ impl Root {
                                                         self.t(Key::ViewBookingNotice),
                                                         Kind::Ghost,
                                                         cx.listener(move |this, _, _, cx| {
-                                                            this.overlay = Overlay::None;
-                                                            this.calendar_mode = CalendarMode::Day;
-                                                            this.overview_staff.clear();
-                                                            this.pending_local_today = false;
-                                                            let current_start =
-                                                                calendar::effective_appointment(
-                                                                    &this.svc.store,
-                                                                    &appointment_id,
-                                                                )
-                                                                .ok()
-                                                                .flatten()
-                                                                .map_or(starts, |appointment| {
-                                                                    appointment.starts_at
-                                                                });
-                                                            this.date = current_start
-                                                                .with_timezone(&this.tz)
-                                                                .date_naive();
-                                                            this.reload(cx);
-                                                            this.open_details(&appointment_id, cx);
+                                                            if !this.open_notice_appointment(&appointment_id, (!cached).then_some((starts, staff.as_str())), cx) {
+                                                                if let Overlay::Inbox(inbox) = &mut this.overlay {
+                                                                    inbox.error = Some(Key::InboxAppointmentUnavailable);
+                                                                }
+                                                                this.svc.wake(Wake::Manual);
+                                                                cx.notify();
+                                                            }
                                                         }),
                                                     ))
                                                     .when(can_archive, |d| {

@@ -1560,8 +1560,7 @@ impl Store {
         Self::invalidate_resource_days(tx)?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
-        waitlist_cache::invalidate_visibility(tx)?;
-        Self::clear_calendar_inbox_cache_at(tx)?;
+        Self::invalidate_calendar_caches(tx)?;
         gift_cache::clear_at(tx)?;
         Self::apply_inventory_access_at(tx, false)?;
         Self::apply_inventory_read_access_at(tx, false)?;
@@ -1601,8 +1600,7 @@ impl Store {
         if restart {
             Self::clear_replica(&tx)?;
         } else {
-            waitlist_cache::invalidate_visibility(&tx)?;
-            Self::clear_calendar_inbox_cache_at(&tx)?;
+            Self::invalidate_calendar_caches(&tx)?;
             if changes.iter().any(|(key, _)| *key == "calendar_scope") {
                 Self::invalidate_resource_days(&tx)?;
                 Self::forget_booking_combinations_at(&tx)?;
@@ -1831,6 +1829,37 @@ impl Store {
 
     pub fn clear_calendar_inbox_cache(&self) -> Result<()> {
         Self::clear_calendar_inbox_cache_at(&self.conn)
+    }
+
+    pub fn invalidate_calendar_inbox_filters(
+        &mut self,
+        affected: &[CalendarNoticeKind],
+    ) -> Result<()> {
+        self.write_transaction(|store| {
+            for archived in [false, true] {
+                for kind in std::iter::once(None).chain(
+                    [
+                        CalendarNoticeKind::New,
+                        CalendarNoticeKind::Rescheduled,
+                        CalendarNoticeKind::Cancelled,
+                    ]
+                    .into_iter()
+                    .filter(|kind| affected.contains(kind))
+                    .map(Some),
+                ) {
+                    store.conn.execute(
+                        "DELETE FROM meta WHERE key = ?1",
+                        [inbox_key(archived, kind)],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn invalidate_calendar_caches(db: &Connection) -> Result<()> {
+        waitlist_cache::invalidate_visibility(db)?;
+        Self::clear_calendar_inbox_cache_at(db)
     }
 
     fn clear_calendar_inbox_cache_at(db: &Connection) -> Result<()> {

@@ -60,15 +60,29 @@ impl Root {
             return;
         }
         self.dismiss_notice(id, cx);
+        self.open_notice_appointment(id, None, cx);
+    }
+
+    pub(super) fn open_notice_appointment(
+        &mut self,
+        id: &str,
+        placement: Option<(DateTime<Utc>, &str)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id) else {
-            return;
+            return false;
         };
         self.pending_local_today = false;
         self.calendar_mode = CalendarMode::Day;
         self.overview_staff.clear();
-        self.date = appointment.starts_at.with_timezone(&self.tz).date_naive();
+        let starts_at = placement.map_or(appointment.starts_at, |(starts, _)| starts);
+        if let Some((_, staff)) = placement {
+            self.overview_staff.insert(staff.to_owned());
+        }
+        self.date = starts_at.with_timezone(&self.tz).date_naive();
         self.reload(cx);
         self.open_details(id, cx);
+        true
     }
 
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> gpui::Div {

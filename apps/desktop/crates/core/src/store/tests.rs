@@ -1024,7 +1024,7 @@ fn device_id_is_generated_once_and_stable() {
 }
 
 #[test]
-fn calendar_inbox_keeps_separate_pages_and_clears_on_replica_reset() {
+fn calendar_inbox_preserves_unaffected_filters_and_clears_pages_on_visibility_changes() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("inbox.db");
     let page = CalendarInbox {
@@ -1058,9 +1058,30 @@ fn calendar_inbox_keeps_separate_pages_and_clears_on_replica_reset() {
     );
     assert!(store.calendar_inbox_cache(true, None).unwrap().is_none());
     store
+        .invalidate_calendar_inbox_filters(&[CalendarNoticeKind::Rescheduled])
+        .unwrap();
+    assert!(store.calendar_inbox_cache(false, None).unwrap().is_none());
+    assert_eq!(
+        store
+            .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))
+            .unwrap(),
+        Some(archived.clone())
+    );
+    store
         .apply_visibility_scopes(Some(true), Some("none"), INITIAL_GENERATION)
         .unwrap();
     assert!(store.calendar_inbox_cache(false, None).unwrap().is_none());
+    assert!(
+        store
+            .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))
+            .unwrap()
+            .is_none()
+    );
+    let scope = store.calendar_cache_scope().unwrap();
+    store
+        .cache_calendar_inbox(&scope, true, Some(CalendarNoticeKind::Cancelled), &archived)
+        .unwrap();
+    store.reset_replica().unwrap();
     assert!(
         store
             .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))

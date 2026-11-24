@@ -108,7 +108,14 @@ impl Root {
     }
 
     pub(in crate::root) fn inbox_toolbar_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.reward_badge.count;
+        let count = self
+            .calendar_badge
+            .count
+            .saturating_add(if self.directory_enabled() {
+                self.reward_badge.count
+            } else {
+                0
+            });
         self.button(
             "calendar-inbox",
             self.t(Key::CalendarInbox),
@@ -116,7 +123,7 @@ impl Root {
             cx.listener(|root, _, _, cx| root.open_inbox(false, 1, cx)),
         )
         .relative()
-        .when(count > 0 && self.directory_enabled(), |button| {
+        .when(count > 0, |button| {
             button.child(
                 div()
                     .absolute()

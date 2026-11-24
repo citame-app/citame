@@ -327,7 +327,7 @@ enum Overlay {
     Details(Box<Details>),
     Block(Box<blocks::BlockForm>),
     Blocks,
-    Inbox(inbox::Inbox),
+    Inbox(Box<inbox::Inbox>),
     Cash(cash::RegisterDesk),
     WalkIn(Box<walk_in::SaleDesk>),
     WalkInReceipt(checkout::CheckoutReview),
@@ -427,6 +427,7 @@ pub struct Root {
     notice_cursor: i64,
     notices: Vec<(CalendarNoticeKind, Appointment, Instant)>,
     inbox_generation: u64,
+    calendar_badge: inbox::CalendarBadge,
     reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
     review_generation: u64,
@@ -522,6 +523,7 @@ impl Root {
             notice_cursor: 0,
             notices: vec![],
             inbox_generation: 0,
+            calendar_badge: inbox::CalendarBadge::default(),
             reward_badge: inbox::RewardBadge::default(),
             waitlist_generation: 0,
             review_generation: 0,
@@ -758,6 +760,7 @@ impl Root {
     }
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
+        self.calendar_badge = inbox::CalendarBadge::default();
         self.reward_badge = inbox::RewardBadge::default();
         self.pending_loyalty = None;
         self.pending_stamp = None;
@@ -893,6 +896,7 @@ impl Root {
                 self.overlay = Overlay::None;
             }
             self.notices.clear();
+            self.calendar_badge = inbox::CalendarBadge::default();
             self.reward_badge = inbox::RewardBadge::default();
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }

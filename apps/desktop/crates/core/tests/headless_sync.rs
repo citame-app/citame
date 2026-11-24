@@ -6729,10 +6729,13 @@ fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
             .any(|entry| entry.id == notices[0].id)
     );
     let notice_ids = [notices[0].id.clone(), notices[1].id.clone()];
+    let inbox_revision = observer.store.live_view_revision("inbox").unwrap();
     device
         .transport
         .set_calendar_notices_archived(&notice_ids, true)
         .unwrap();
+    observer.sync();
+    assert!(observer.store.live_view_revision("inbox").unwrap() > inbox_revision);
     assert!(
         !device
             .transport
