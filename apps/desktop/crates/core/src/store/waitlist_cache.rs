@@ -2,10 +2,11 @@ use rusqlite::{Connection, TransactionBehavior, params};
 
 use super::{CALENDAR_VISIBILITY_EPOCH, CalendarCacheScope, Store};
 use crate::error::Result;
-use crate::waitlist::WaitlistPage;
+use crate::waitlist::{WaitlistPage, WaitlistView};
 
 const LEGACY_FIRST_ACTIVE_PAGE: &str = "desk_waitlist";
 const RECENT_PAGES_PER_TAB: i64 = 7;
+const CALENDAR_PREFIX: &str = "desk_waitlist:calendar:";
 
 #[derive(Debug, Default)]
 pub struct SavedWaitlistPages {
@@ -14,11 +15,13 @@ pub struct SavedWaitlistPages {
     pub scope: Option<CalendarCacheScope>,
 }
 
-fn prefix(active: bool) -> &'static str {
-    if active {
-        "desk_waitlist:active:"
-    } else {
-        "desk_waitlist:history:"
+fn prefix(view: WaitlistView) -> String {
+    match view {
+        WaitlistView::Active => "desk_waitlist:active:".into(),
+        WaitlistView::History => "desk_waitlist:history:".into(),
+        WaitlistView::Calendar(range) => {
+            format!("{CALENDAR_PREFIX}{}:{}:", range.from, range.to)
+        }
     }
 }
 
@@ -40,16 +43,19 @@ pub(super) fn invalidate_visibility(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-fn saved_pages(db: &Connection, active: bool) -> Result<Vec<u32>> {
-    let prefix = prefix(active);
+fn saved_pages(db: &Connection, view: WaitlistView) -> Result<Vec<u32>> {
+    let prefix = prefix(view);
     let mut query = db.prepare("SELECT key FROM meta WHERE key GLOB ?1")?;
     let keys = query.query_map([format!("{prefix}*")], |row| row.get::<_, String>(0))?;
     let mut pages = keys
         .collect::<rusqlite::Result<Vec<_>>>()?
         .iter()
-        .filter_map(|key| key.strip_prefix(prefix)?.parse().ok())
+        .filter_map(|key| key.strip_prefix(&prefix)?.parse().ok())
         .collect::<Vec<u32>>();
-    if active && !pages.contains(&1) && Store::meta_at(db, LEGACY_FIRST_ACTIVE_PAGE)?.is_some() {
+    if view == WaitlistView::Active
+        && !pages.contains(&1)
+        && Store::meta_at(db, LEGACY_FIRST_ACTIVE_PAGE)?.is_some()
+    {
         pages.push(1);
     }
     pages.sort_unstable();
@@ -57,7 +63,7 @@ fn saved_pages(db: &Connection, active: bool) -> Result<Vec<u32>> {
 }
 
 impl Store {
-    pub fn waitlist_cache(&self, active: bool, page: u32) -> Result<SavedWaitlistPages> {
+    pub fn waitlist_cache(&self, view: WaitlistView, page: u32) -> Result<SavedWaitlistPages> {
         let tx = self.conn.unchecked_transaction()?;
         let scope = CalendarCacheScope::read(&tx)?;
         if !scope.permits_read() {
@@ -66,9 +72,9 @@ impl Store {
                 ..SavedWaitlistPages::default()
             });
         }
-        let pages = saved_pages(&tx, active)?;
-        let mut raw = Self::meta_at(&tx, &format!("{}{page}", prefix(active)))?;
-        if active && page == 1 && raw.is_none() {
+        let pages = saved_pages(&tx, view)?;
+        let mut raw = Self::meta_at(&tx, &format!("{}{page}", prefix(view)))?;
+        if view == WaitlistView::Active && page == 1 && raw.is_none() {
             raw = Self::meta_at(&tx, LEGACY_FIRST_ACTIVE_PAGE)?;
         }
         let current = raw
@@ -86,7 +92,7 @@ impl Store {
     pub fn cache_waitlist(
         &mut self,
         scope: &CalendarCacheScope,
-        active: bool,
+        view: WaitlistView,
         page: &WaitlistPage,
     ) -> Result<Option<Vec<u32>>> {
         if !scope.permits_read() || page.page == 0 {
@@ -98,10 +104,10 @@ impl Store {
         if &CalendarCacheScope::read(&tx)? != scope {
             return Ok(None);
         }
-        let prefix = prefix(active);
+        let prefix = prefix(view);
         let first = format!("{prefix}1");
         let mut saved = page.clone();
-        if !active || saved.page != 1 {
+        if !view.active() || saved.page != 1 {
             saved.imported.clear();
         }
         tx.execute(
@@ -111,24 +117,43 @@ impl Store {
                 serde_json::to_string(&saved)?
             ],
         )?;
-        if active && page.page == 1 {
+        if view == WaitlistView::Active && page.page == 1 {
             tx.execute("DELETE FROM meta WHERE key=?1", [LEGACY_FIRST_ACTIVE_PAGE])?;
         }
-        // Keep the entry point to the tab plus its last seven successful page reads.
-        tx.execute(
-            "DELETE FROM meta WHERE key IN (
+        if view.range().is_some() {
+            tx.execute(
+                "DELETE FROM meta WHERE key IN (
+                    SELECT key FROM meta WHERE key GLOB ?1
+                    ORDER BY rowid DESC LIMIT -1 OFFSET ?2
+                )",
+                params![format!("{CALENDAR_PREFIX}*"), RECENT_PAGES_PER_TAB + 1],
+            )?;
+        } else {
+            // Keep the entry point to the tab plus its last seven successful page reads.
+            tx.execute(
+                "DELETE FROM meta WHERE key IN (
                  SELECT key FROM meta WHERE key GLOB ?1 AND key<>?2
                  ORDER BY rowid DESC LIMIT -1 OFFSET ?3
              )",
-            params![format!("{prefix}*"), first, RECENT_PAGES_PER_TAB],
-        )?;
-        let pages = saved_pages(&tx, active)?;
+                params![format!("{prefix}*"), first, RECENT_PAGES_PER_TAB],
+            )?;
+        }
+        let pages = saved_pages(&tx, view)?;
         tx.commit()?;
         Ok(Some(pages))
     }
 
-    pub fn clear_waitlist_cache(&self) -> Result<()> {
-        clear(&self.conn)
+    pub fn invalidate_waitlist_access(
+        &mut self,
+        expected: &CalendarCacheScope,
+    ) -> Result<Option<CalendarCacheScope>> {
+        self.write_transaction(|store| {
+            if &CalendarCacheScope::read(&store.conn)? != expected {
+                return Ok(None);
+            }
+            invalidate_visibility(&store.conn)?;
+            CalendarCacheScope::read(&store.conn).map(Some)
+        })
     }
 }
 
@@ -154,6 +179,40 @@ mod tests {
     }
 
     #[test]
+    fn calendar_pages_are_isolated_by_period_and_bounded_across_periods() {
+        use crate::waitlist::WaitlistRange;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("calendar-waitlist.db")).unwrap();
+        let scope = store.calendar_cache_scope().unwrap();
+        let date: chrono::NaiveDate = "2026-03-01".parse().unwrap();
+        let view = |offset| {
+            let day = date + chrono::Duration::days(offset);
+            WaitlistView::Calendar(WaitlistRange { from: day, to: day })
+        };
+        store
+            .cache_waitlist(&scope, WaitlistView::Active, &page(1))
+            .unwrap();
+        for offset in 0..9 {
+            store
+                .cache_waitlist(&scope, view(offset), &page(2))
+                .unwrap();
+        }
+        assert!(store.waitlist_cache(view(0), 2).unwrap().pages.is_empty());
+        assert_eq!(store.waitlist_cache(view(1), 2).unwrap().pages, [2]);
+        assert!(store.waitlist_cache(view(8), 2).unwrap().current.is_some());
+        assert!(
+            store
+                .waitlist_cache(WaitlistView::Active, 1)
+                .unwrap()
+                .current
+                .is_some()
+        );
+        store.reset_replica().unwrap();
+        assert!(store.waitlist_cache(view(8), 2).unwrap().pages.is_empty());
+    }
+
+    #[test]
     fn pages_survive_restart_with_separate_bounded_tabs_and_the_legacy_first_page() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("desk.sqlite3");
@@ -166,17 +225,27 @@ mod tests {
             .unwrap();
         let scope = store.calendar_cache_scope().unwrap();
         for number in 2..=10 {
-            store.cache_waitlist(&scope, true, &page(number)).unwrap();
+            store
+                .cache_waitlist(&scope, WaitlistView::Active, &page(number))
+                .unwrap();
         }
-        store.cache_waitlist(&scope, false, &page(2)).unwrap();
+        store
+            .cache_waitlist(&scope, WaitlistView::History, &page(2))
+            .unwrap();
         drop(store);
 
         let store = Store::open(&path).unwrap();
-        let first = store.waitlist_cache(true, 1).unwrap();
+        let first = store.waitlist_cache(WaitlistView::Active, 1).unwrap();
         assert_eq!(first.current, Some(page(1)));
         assert_eq!(first.pages, [1, 4, 5, 6, 7, 8, 9, 10]);
-        assert!(store.waitlist_cache(true, 2).unwrap().current.is_none());
-        let history = store.waitlist_cache(false, 2).unwrap();
+        assert!(
+            store
+                .waitlist_cache(WaitlistView::Active, 2)
+                .unwrap()
+                .current
+                .is_none()
+        );
+        let history = store.waitlist_cache(WaitlistView::History, 2).unwrap();
         assert_eq!(history.current, Some(page(2)));
         assert_eq!(history.pages, [2]);
     }
@@ -190,8 +259,12 @@ mod tests {
                 .unwrap();
             store.set_meta("cursor", cursor).unwrap();
             let old_scope = store.calendar_cache_scope().unwrap();
-            store.cache_waitlist(&old_scope, true, &page(1)).unwrap();
-            store.cache_waitlist(&old_scope, false, &page(3)).unwrap();
+            store
+                .cache_waitlist(&old_scope, WaitlistView::Active, &page(1))
+                .unwrap();
+            store
+                .cache_waitlist(&old_scope, WaitlistView::History, &page(3))
+                .unwrap();
             assert_eq!(
                 store
                     .apply_visibility_scopes(Some(false), Some("own"), INITIAL_GENERATION)
@@ -203,10 +276,24 @@ mod tests {
                 .apply_visibility_scopes(Some(true), Some("all"), INITIAL_GENERATION)
                 .unwrap();
 
-            assert!(store.waitlist_cache(true, 1).unwrap().pages.is_empty());
-            assert!(store.waitlist_cache(false, 3).unwrap().pages.is_empty());
+            assert!(
+                store
+                    .waitlist_cache(WaitlistView::Active, 1)
+                    .unwrap()
+                    .pages
+                    .is_empty()
+            );
+            assert!(
+                store
+                    .waitlist_cache(WaitlistView::History, 3)
+                    .unwrap()
+                    .pages
+                    .is_empty()
+            );
             assert_eq!(
-                store.cache_waitlist(&old_scope, false, &page(3)).unwrap(),
+                store
+                    .cache_waitlist(&old_scope, WaitlistView::History, &page(3))
+                    .unwrap(),
                 None
             );
         }

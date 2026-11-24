@@ -55,7 +55,7 @@ use crate::sse::{SseParser, nudge_seq};
 use crate::sync::{CatalogColors, CatalogueSnapshots, Transport, TransportError};
 use crate::waitlist::{
     AcceptOffer, AcceptOfferError, AcceptedOffer, BookedAppointment, WaitlistEntry, WaitlistPage,
-    WaitlistPolicy, WaitlistRequest,
+    WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistView,
 };
 
 pub struct HttpTransport {
@@ -2044,12 +2044,31 @@ impl HttpTransport {
         }
         Ok(())
     }
-    pub fn waitlist(&self, page: u32, active: bool) -> Result<WaitlistPage, TransportError> {
-        let response = self.get(
-            &self.agent,
-            &format!("/admin/waitlist/desk?page={page}&pageSize=15&active={active}"),
-            None,
-        )?;
+    pub fn waitlist(&self, page: u32, view: WaitlistView) -> Result<WaitlistPage, TransportError> {
+        self.waitlist_page(page, 15, view)
+    }
+
+    pub fn waitlist_count(&self, range: WaitlistRange) -> Result<u32, TransportError> {
+        Ok(self
+            .waitlist_page(1, 1, WaitlistView::Calendar(range))?
+            .total)
+    }
+
+    fn waitlist_page(
+        &self,
+        page: u32,
+        size: u32,
+        view: WaitlistView,
+    ) -> Result<WaitlistPage, TransportError> {
+        let mut path = format!(
+            "/admin/waitlist/desk?page={page}&pageSize={size}&active={}",
+            view.active()
+        );
+        if let Some(range) = view.range() {
+            use std::fmt::Write;
+            let _ = write!(path, "&fromDate={}&toDate={}", range.from, range.to);
+        }
+        let response = self.get(&self.agent, &path, None)?;
         read_response(response, false)
     }
 

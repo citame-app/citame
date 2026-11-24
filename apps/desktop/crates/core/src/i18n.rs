@@ -2006,6 +2006,8 @@ keys! {
     PartialPaymentInvalid => ("Enter a payment greater than zero and below the full total, and a receipt reference.", "Introduce un pago mayor que cero y menor que el total, y la referencia del justificante."),
     WaitlistActive => ("Active", "Activas"),
     WaitlistAll => ("All requests", "Todas"),
+    WaitlistThisPeriod => ("Calendar period", "Fechas de la agenda"),
+    WaitlistCalendarCount => ("Waitlist · {n}", "Lista de espera · {n}"),
     WaitlistNew => ("Add request", "Añadir solicitud"),
     WaitlistReview => ("Review Booksy request", "Revisar solicitud de Booksy"),
     WaitlistImportedPast => ("The requested date has passed", "La fecha solicitada ya ha pasado"),

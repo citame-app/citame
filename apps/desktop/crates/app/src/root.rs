@@ -430,6 +430,7 @@ pub struct Root {
     calendar_badge: inbox::CalendarBadge,
     reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
+    waitlist_count: sob_core::waitlist::WaitlistCount,
     review_generation: u64,
     _subs: Vec<Subscription>,
 }
@@ -526,6 +527,7 @@ impl Root {
             calendar_badge: inbox::CalendarBadge::default(),
             reward_badge: inbox::RewardBadge::default(),
             waitlist_generation: 0,
+            waitlist_count: Default::default(),
             review_generation: 0,
             _subs: subs,
         };
@@ -760,6 +762,7 @@ impl Root {
     }
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
+        self.waitlist_count = Default::default();
         self.calendar_badge = inbox::CalendarBadge::default();
         self.reward_badge = inbox::RewardBadge::default();
         self.pending_loyalty = None;
@@ -814,6 +817,7 @@ impl Root {
         }
         let resource_reconnected = reconnected || (status.stream_live && !self.status.stream_live);
         self.update_inbox_connectivity(&status, cx);
+        self.refresh_waitlist_count(&status, cx);
         self.refresh_open_report(&status, cx);
         self.refresh_commissions(&status, cx);
         if status.connectivity == Connectivity::Online {
@@ -2154,12 +2158,9 @@ impl Root {
                     cx.listener(|this, _, _, cx| this.open_directory(cx)),
                 ))
             })
-            .child(self.button(
-                "waitlist",
-                self.t(Key::Waitlist),
-                Kind::Ghost,
-                cx.listener(|this, _, _, cx| this.open_waitlist(true, 1, cx)),
-            ))
+            .when(self.can_view_waitlist(), |d| {
+                d.child(self.waitlist_button(cx))
+            })
             .child(self.button(
                 "cash-register",
                 self.t(Key::CashRegister),
@@ -4842,7 +4843,9 @@ impl Render for Root {
                         Overlay::ReviewModeration(desk) => {
                             Some(self.render_review_moderation(desk, content_viewport, cx))
                         }
-                        Overlay::Waitlist(desk) => Some(self.render_waitlist(desk, cx)),
+                        Overlay::Waitlist(desk) => {
+                            Some(self.render_waitlist(desk, content_viewport, cx))
+                        }
                         Overlay::Directory(directory) => {
                             Some(self.render_directory(directory, content_viewport, cx))
                         }
