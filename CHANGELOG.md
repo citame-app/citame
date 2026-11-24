@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+WhatsApp Embedded Signup rejects malformed phone and account selections and lets the owner retry when the Meta sign-in window closes early.
+
 Appointment reminders use the centre’s local date and time in the subject and avoid relative labels that could become misleading around midnight or after delivery delays.
 
 The web waitlist and calendar badge refresh together when the list changes. Cached requests and counts are cleared when the team member loses access. Desktop skips outdated waitlist reads when a newer change has already arrived.

@@ -19,6 +19,8 @@ Cada instalación de Citame conecta un número remitente. El propietario abre **
 
 Mantén el worker de notificaciones en ejecución. Completa en WhatsApp Manager la configuración de facturación que Meta pida a la empresa. Para registrar un número nuevo, introduce el PIN de verificación de seis cifras en Citame antes de abrir la ventana de Meta. La coexistencia utiliza el número existente sin volver a registrarlo. **Renovar conexión** conserva las reglas si se vuelve a elegir el mismo número.
 
+Si cierras la ventana de Meta antes de terminar, vuelve a iniciar la conexión desde Citame. Si Meta registró el número pero falló la suscripción del webhook, vuelve a autorizar ese número. Citame comprobará que ya está registrado y completará la suscripción.
+
 Citame carga un documento nuevo al entrar o salir de WhatsApp Business. Así limita a esa página los permisos de navegador que necesita la ventana de Meta. [Política del documento de WhatsApp](adr/0019-whatsapp-signup-document.md).
 
 [Implementación de Meta](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/implementation) · [Versión 5](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/version-5) · [Coexistencia](https://developers.facebook.com/documentation/business-messaging/whatsapp/embedded-signup/onboarding-business-app-users)
