@@ -105,12 +105,11 @@ test("private appointment context shows protection and redacts amounts without c
     protection: { checkoutId: string };
   };
   const path = `/appointments/${id}/context`;
-  const mirrored = async () => {
-    const snapshot = await pull(t, owner, { since: 0, limit: 200 });
-    expect(snapshot.appointmentDepositStatus).toBe(true);
-    return snapshot.changes.find((change) => change.entity === "appointment" && change.id === id);
-  };
-  const pending = await mirrored();
+  const pendingPage = await pull(t, owner, { since: 0, limit: 200 });
+  expect(pendingPage.appointmentDepositStatus).toBe(true);
+  const pending = pendingPage.changes.find(
+    (change) => change.entity === "appointment" && change.id === id,
+  );
   expect(pending).toMatchObject({
     data: {
       depositStatus: {
@@ -173,6 +172,13 @@ test("private appointment context shows protection and redacts amounts without c
   expect(await receipt.json()).toMatchObject({ id: booking.checkoutId, appointmentId: id });
   expect((await call(professional, receiptPath)).status).toBe(403);
 
+  const restrictedReplica = await pull(t, professional, { since: 0, limit: 200 });
+  expect(
+    restrictedReplica.changes.find((change) => change.entity === "appointment" && change.id === id),
+  ).toMatchObject({
+    data: { depositStatus: { state: "pending", attendanceBlock: "pending_deposit" } },
+  });
+
   const payment = await call(
     owner,
     `/admin/commerce/checkouts/${booking.checkoutId}/payments`,
@@ -187,7 +193,12 @@ test("private appointment context shows protection and redacts amounts without c
   expect(await (await call(owner, path)).json()).toMatchObject({
     protection: { state: "confirmed", depositCents: 2500 },
   });
-  expect(await mirrored()).toMatchObject({ data: { depositStatus: { state: "confirmed" } } });
+  const delta = await pull(t, owner, { since: pendingPage.nextCursor, limit: 200 });
+  expect(
+    delta.changes.find((change) => change.entity === "appointment" && change.id === id),
+  ).toMatchObject({
+    data: { depositStatus: { state: "confirmed" } },
+  });
 });
 
 test("a required signal needs explicit current policy acceptance and creates one server-priced appointment receipt", async () => {

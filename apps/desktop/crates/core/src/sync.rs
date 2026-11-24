@@ -326,99 +326,82 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             );
         }
     };
-    if client_groups_supported {
-        backfill_client_groups(store, transport, &generation, &mut report)?;
-    }
-    if booked_resource_ids_supported {
-        backfill_booked_resources(store, transport, &generation, &mut report)?;
-    }
-    if deposit_status_supported {
-        backfill_appointment_deposits(store, transport, &generation, &mut report)?;
+    for (supported, projection) in [
+        (client_groups_supported, BackfillProjection::ClientGroups),
+        (
+            booked_resource_ids_supported,
+            BackfillProjection::BookedResources,
+        ),
+        (
+            deposit_status_supported,
+            BackfillProjection::AppointmentDeposits,
+        ),
+    ] {
+        if supported {
+            backfill_projection(store, transport, &generation, &mut report, projection)?;
+        }
     }
     report.cursor = store.cursor()?;
     Ok(report)
 }
 
-fn backfill_appointment_deposits(
-    store: &mut Store,
-    transport: &dyn Transport,
-    generation: &str,
-    report: &mut PullReport,
-) -> Result<(), SyncError> {
-    while let Some(since) = store.appointment_deposit_cursor()? {
-        let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
-        if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
-            || page.appointment_deposit_status != Some(true)
-        {
-            break;
-        }
-        if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
-            return Err(SyncError::Fatal(
-                "The appointment deposit backfill cursor did not advance".into(),
-            ));
-        }
-        report.changes += store.apply_appointment_deposit_page(
-            &page.changes,
-            page.next_cursor,
-            page.has_more,
-            generation,
-        )?;
-        report.pages += 1;
-    }
-    Ok(())
+#[derive(Clone, Copy)]
+enum BackfillProjection {
+    ClientGroups,
+    BookedResources,
+    AppointmentDeposits,
 }
 
-/// Fill allocations discarded by an older Desktop without replaying booking notices or outbox state.
-fn backfill_booked_resources(
+/// Enrich legacy rows without replaying calendar notices, outbox state or the primary cursor.
+fn backfill_projection(
     store: &mut Store,
     transport: &dyn Transport,
     generation: &str,
     report: &mut PullReport,
+    projection: BackfillProjection,
 ) -> Result<(), SyncError> {
-    while let Some(since) = store.booked_resources_cursor()? {
+    loop {
+        let since = match projection {
+            BackfillProjection::ClientGroups => store.client_groups_cursor()?,
+            BackfillProjection::BookedResources => store.booked_resources_cursor()?,
+            BackfillProjection::AppointmentDeposits => store.appointment_deposit_cursor()?,
+        };
+        let Some(since) = since else { break };
         let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
+        let (supported, label) = match projection {
+            BackfillProjection::ClientGroups => (page.client_groups, "client groups"),
+            BackfillProjection::BookedResources => (page.booked_resource_ids, "booked resources"),
+            BackfillProjection::AppointmentDeposits => {
+                (page.appointment_deposit_status, "appointment deposit")
+            }
+        };
         if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
-            || page.booked_resource_ids != Some(true)
+            || supported != Some(true)
         {
             break;
         }
         if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
-            return Err(SyncError::Fatal(
-                "The booked resources backfill cursor did not advance".into(),
-            ));
+            return Err(SyncError::Fatal(format!(
+                "The {label} backfill cursor did not advance"
+            )));
         }
-        report.changes += store.apply_booked_resource_page(
-            &page.changes,
-            page.next_cursor,
-            page.has_more,
-            generation,
-        )?;
-        report.pages += 1;
-    }
-    Ok(())
-}
-
-/// Enrich existing client rows without reapplying unrelated events or moving the primary cursor.
-fn backfill_client_groups(
-    store: &mut Store,
-    transport: &dyn Transport,
-    generation: &str,
-    report: &mut PullReport,
-) -> Result<(), SyncError> {
-    while let Some(since) = store.client_groups_cursor()? {
-        let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
-        if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
-            || page.client_groups != Some(true)
-        {
-            break;
-        }
-        if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
-            return Err(SyncError::Fatal(
-                "The client groups backfill cursor did not advance".into(),
-            ));
-        }
-        report.changes +=
-            store.apply_client_group_page(&page.changes, page.next_cursor, generation)?;
+        report.changes += match projection {
+            BackfillProjection::ClientGroups => {
+                store.apply_client_group_page(&page.changes, page.next_cursor, generation)?
+            }
+            BackfillProjection::BookedResources => store.apply_booked_resource_page(
+                &page.changes,
+                page.next_cursor,
+                page.has_more,
+                generation,
+            )?,
+            BackfillProjection::AppointmentDeposits => store.apply_appointment_deposit_page(
+                &page.changes,
+                page.next_cursor,
+                page.has_more,
+                generation,
+            )?,
+        };
         report.pages += 1;
         if !page.has_more {
             break;

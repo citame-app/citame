@@ -7,12 +7,54 @@ pub(super) fn attendance_block_label(block: AttendanceProtectionBlock) -> Key {
     }
 }
 
+pub(super) struct DepositView<'a> {
+    pub(super) status: AppointmentDepositStatus,
+    pub(super) private: Option<&'a AppointmentProtection>,
+}
+
+impl Details {
+    pub(super) fn deposit_view(
+        &self,
+        appointment: Option<&Appointment>,
+    ) -> Option<DepositView<'_>> {
+        let context = self
+            .annotations
+            .as_ref()
+            .and_then(annotations::Annotations::context);
+        let live = context.and_then(|context| context.protection.as_ref());
+        let replica = appointment.and_then(|appointment| appointment.deposit_status);
+        if let Some(status) = replica
+            && !context
+                .and_then(|context| context.appointment_version)
+                .is_some_and(|version| {
+                    appointment.is_some_and(|appointment| version >= appointment.version)
+                })
+        {
+            return Some(DepositView {
+                status,
+                private: None,
+            });
+        }
+        live.map(|protection| DepositView {
+            status: protection.status,
+            private: Some(protection),
+        })
+        .or_else(|| {
+            replica.map(|status| DepositView {
+                status,
+                private: None,
+            })
+        })
+    }
+}
+
 impl Root {
     pub(super) fn render_appointment_protection(
         &self,
         status: AppointmentDepositStatus,
         protection: Option<&AppointmentProtection>,
         can_refresh: bool,
+        can_open_receipt: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         use AppointmentProtectionState::*;
@@ -69,7 +111,7 @@ impl Root {
             .child(self.t(state_label))
             .when(protection.is_none(), |panel| panel.child(div().text_color(theme::muted()).child(self.t(Key::DepositLastSynced))))
             .when(
-                self.ready_deposit_receipt().is_some(),
+                can_open_receipt,
                 |panel| {
                     panel.child(
                         self.button(

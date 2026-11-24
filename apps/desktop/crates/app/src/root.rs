@@ -1551,15 +1551,10 @@ impl Root {
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
-        let deposit_status = self
-            .svc
-            .store
-            .appointment(&d.id)
-            .ok()
-            .flatten()
-            .and_then(|a| a.deposit_status);
+        let appointment = self.svc.store.appointment(&d.id).ok().flatten();
+        let deposit_status = d.deposit_view(appointment.as_ref());
         if let Some(block) =
-            deposit_status.map_or(d.deposit_outcome_block, |status| status.attendance_block)
+            deposit_status.map_or(d.deposit_outcome_block, |view| view.status.attendance_block)
         {
             let key = deposit_context::attendance_block_label(block);
             d.error = Some(i18n::t(self.locale, key).to_owned());
@@ -3627,16 +3622,13 @@ impl Root {
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
             });
-        let protection = d
-            .annotations
+        let deposit = d.deposit_view(current.as_ref());
+        let deposit_block = deposit
             .as_ref()
-            .and_then(annotations::Annotations::protection);
-        let deposit_status = current
-            .as_ref()
-            .and_then(|appointment| appointment.deposit_status)
-            .or_else(|| protection.map(|deposit| deposit.status));
-        let deposit_block =
-            deposit_status.map_or(d.deposit_outcome_block, |status| status.attendance_block);
+            .map_or(d.deposit_outcome_block, |view| view.status.attendance_block);
+        let online = self.status.connectivity == Connectivity::Online;
+        let annotation_ready = matches!(d.annotations, Some(annotations::Annotations::Ready(_)));
+        let protection = deposit.as_ref().and_then(|view| view.private);
         let outcomes = current
             .as_ref()
             .filter(|a| {
@@ -3691,22 +3683,28 @@ impl Root {
             .child(div().text_sm().child(SharedString::from(
                 self.date_time_label(d.reviewed.starts_at),
             )))
-            .when_some(deposit_status, |details, status| {
-                details.child(self.render_appointment_protection(
-                    status,
-                    protection.filter(|protection| protection.status == status),
-                    !matches!(
-                        d.annotations,
-                        Some(
-                            annotations::Annotations::Loading { .. }
-                                | annotations::Annotations::Editing(_)
-                        )
+            .when_some(deposit.as_ref(), |details, deposit| {
+                details.child(
+                    self.render_appointment_protection(
+                        deposit.status,
+                        protection.filter(|_| online),
+                        !matches!(
+                            d.annotations,
+                            Some(
+                                annotations::Annotations::Loading { .. }
+                                    | annotations::Annotations::Editing(_)
+                            )
+                        ),
+                        online
+                            && annotation_ready
+                            && protection
+                                .is_some_and(|p| p.checkout_id.is_some() && !p.receipt_restricted),
+                        cx,
                     ),
-                    cx,
-                ))
+                )
             })
             .when_some(
-                deposit_block.filter(|_| deposit_status.is_none()),
+                deposit_block.filter(|_| deposit.is_none()),
                 |details, block| {
                     details.child(
                         div()
@@ -6413,6 +6411,36 @@ mod tests {
         assert!(cx.debug_bounds("appointment-protection").is_some());
         assert!(cx.debug_bounds("mark-completed").is_none());
         assert!(cx.debug_bounds("open-deposit-receipt").is_none());
+        root.update(cx, |root, _| {
+            let mut appointment = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
+            };
+            let confirmed = serde_json::from_value(json!({
+                "appointmentVersion": 4, "rows": [],
+                "protection": {
+                    "state": "confirmed", "depositCents": 2500,
+                    "expiresAt": "2026-03-09T14:00:00Z",
+                    "cancellationCutoff": "2026-03-08T15:00:00Z"
+                }
+            }))
+            .unwrap();
+            details.install_annotation_context(confirmed);
+            let view = details.deposit_view(Some(&appointment)).unwrap();
+            assert_eq!(view.status.state, AppointmentProtectionState::Confirmed);
+            assert_eq!(view.private.and_then(|p| p.deposit_cents), Some(2500));
+
+            appointment.version = 5;
+            let status = appointment.deposit_status.as_mut().unwrap();
+            status.state = AppointmentProtectionState::NoShow;
+            status.attendance_block = Some(AttendanceProtectionBlock::ClosedProtection);
+            let view = details.deposit_view(Some(&appointment)).unwrap();
+            assert_eq!(
+                view.status.attendance_block,
+                Some(AttendanceProtectionBlock::ClosedProtection)
+            );
+            assert!(view.private.is_none());
+        });
     }
 
     #[gpui::test]

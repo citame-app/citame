@@ -12,11 +12,11 @@ pub(super) enum Annotations {
 }
 
 impl Annotations {
-    pub(super) fn protection(&self) -> Option<&AppointmentProtection> {
+    pub(super) fn context(&self) -> Option<&AppointmentAnnotations> {
         match self {
-            Self::Loading { previous, .. } => previous.as_ref()?.protection.as_ref(),
-            Self::Ready(context) => context.protection.as_ref(),
-            Self::Editing(draft) => draft.notes.protection.as_ref(),
+            Self::Loading { previous, .. } => previous.as_ref(),
+            Self::Ready(context) => Some(context),
+            Self::Editing(draft) => Some(&draft.notes),
             Self::Unavailable => None,
         }
     }

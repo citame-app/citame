@@ -189,10 +189,16 @@ impl Root {
         if self.status.connectivity != Connectivity::Online || details.checkout.is_some() {
             return None;
         }
-        let Some(annotations::Annotations::Ready(context)) = &details.annotations else {
+        if !matches!(
+            details.annotations,
+            Some(annotations::Annotations::Ready(_))
+        ) {
             return None;
-        };
-        let protection = context.protection.as_ref()?;
+        }
+        let appointment = calendar::effective_appointment(&self.svc.store, &details.id)
+            .ok()
+            .flatten();
+        let protection = details.deposit_view(appointment.as_ref())?.private?;
         if protection.receipt_restricted {
             return None;
         }

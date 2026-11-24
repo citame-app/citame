@@ -31,7 +31,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
-import { attendanceProtectionBlock } from "../booking-protection/value";
+import { appointmentDepositStatus } from "../booking-protection/value";
 import { groupName } from "../clients/groups";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { giftReplicaScope } from "../gift-cards/service";
@@ -111,18 +111,16 @@ async function loadVisible(
         { includeBilling: permissions.commerce },
       );
       for (const { row, clientName, itineraryId, deposit } of visible) {
-        const attendanceBlock = deposit ? attendanceProtectionBlock(deposit.state) : undefined;
         const billing = badges.get(row.id);
         const bookedResources = resources.get(row.id);
         put(row.id, {
           ...toAppointment(row, snapshots.get(row.id) ?? []),
           depositStatus: deposit
-            ? {
+            ? appointmentDepositStatus({
                 state: deposit.state,
                 expiresAt: deposit.expiresAt.toISOString(),
                 cancellationCutoff: deposit.cancellationCutoff.toISOString(),
-                ...(attendanceBlock ? { attendanceBlock } : {}),
-              }
+              })
             : null,
           ...(projection.bookingCombinations && permissions.editCalendar && row.combinationStaffIds
             ? {
