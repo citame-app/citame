@@ -61,7 +61,7 @@ Reminders run only when the worker is running (it is its own service here) and a
 
 ```bash
 docker compose -f compose.prod.yaml up -d --build --wait    # postgres, valkey, one-shot migrate, api, worker, web
-docker compose -f compose.prod.yaml --profile tls up -d      # Caddy: HTTPS on 80/443
+docker compose -f compose.prod.yaml --profile tls up -d --wait --wait-timeout 90      # Caddy: HTTPS on 80/443
 ```
 
 The `migrate` service creates the schema and the double-booking constraint; the API and worker start only after it succeeds.
