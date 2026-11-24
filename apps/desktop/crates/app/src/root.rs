@@ -3669,7 +3669,9 @@ impl Root {
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
-        let editing_note = d.note_draft.is_some() && current.is_some();
+        let editing_note = current.is_some()
+            && (d.note_draft.is_some()
+                || matches!(d.annotations, Some(annotations::Annotations::Editing(_))));
         let editable = !editing_note
             && !stale
             && current.as_ref().is_some_and(|a| {

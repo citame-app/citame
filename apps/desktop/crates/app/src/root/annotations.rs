@@ -51,9 +51,15 @@ pub(super) struct NoteDraft {
     lines: Vec<Entity<TextField>>,
     original_requested: bool,
     requested: bool,
+    preference_edited: bool,
+    reviewed_staff: String,
+    reviewed_preference: Option<String>,
+    reviewed_note: String,
+    preserve_note_edit: bool,
     pending: Option<Arc<()>>,
+    refreshing: Option<Arc<()>>,
+    rejected: Option<(i64, u32)>,
     error: Option<Key>,
-    conflicted: bool,
 }
 
 impl NoteDraft {
@@ -65,26 +71,106 @@ impl NoteDraft {
             .join("\n")
     }
 
-    fn update(&self, internal_note: String) -> Option<UpdateServiceAnnotations> {
-        let original = self
-            .notes
+    fn row(&self) -> Option<&ServiceAnnotations> {
+        self.notes
             .rows
             .iter()
-            .find(|row| row.service_position == self.position);
-        let original_note = original
+            .find(|row| row.service_position == self.position)
+    }
+
+    fn saved_note(&self) -> &str {
+        self.row()
             .and_then(|row| row.internal_note.as_deref())
-            .unwrap_or_default();
-        let requested = (self.requested != self.original_requested).then_some(self.requested);
-        if requested.is_none() && original_note.trim() == internal_note.trim() {
+            .unwrap_or_default()
+    }
+
+    fn saved_preference(&self) -> Option<&str> {
+        self.row().and_then(|row| row.requested_staff_id.as_deref())
+    }
+
+    fn saved_requested(&self) -> bool {
+        self.row()
+            .map(|row| row.requested_staff_id.is_some())
+            .or(self.notes.default_requested)
+            .unwrap_or(self.original_requested)
+    }
+
+    fn revision(&self) -> Option<(i64, u32)> {
+        Self::context_revision(&self.notes, self.position)
+    }
+
+    fn context_revision(notes: &AppointmentAnnotations, position: usize) -> Option<(i64, u32)> {
+        let row = notes
+            .rows
+            .iter()
+            .find(|row| row.service_position == position);
+        Some((notes.appointment_version?, row.map_or(0, |row| row.version)))
+    }
+
+    fn awaiting_review(&self, text: &str, staff: &str) -> bool {
+        let note_changed = text.trim() != self.saved_note().trim()
+            && self.reviewed_note.trim() != self.saved_note().trim();
+        let preference_changed = self.preference_edited
+            && ((self.requested && self.reviewed_staff != staff)
+                || (self.request_change(staff).is_some()
+                    && self.reviewed_preference.as_deref() != self.saved_preference()));
+        note_changed || preference_changed
+    }
+
+    fn request_change(&self, staff: &str) -> Option<bool> {
+        (self.preference_edited
+            && (self.requested != self.saved_requested()
+                || (self.requested && self.saved_preference().is_some_and(|id| id != staff))))
+        .then_some(self.requested)
+    }
+
+    fn update(&self, internal_note: String) -> Option<UpdateServiceAnnotations> {
+        let (appointment_version, version) = self.revision()?;
+        let requested = self.request_change(&self.reviewed_staff);
+        if requested.is_none() && self.saved_note().trim() == internal_note.trim() {
             return None;
         }
         Some(UpdateServiceAnnotations {
-            appointment_version: self.notes.appointment_version?,
+            appointment_version,
             service_position: self.position,
-            version: original.map_or(0, |row| row.version),
+            version,
             requested,
             internal_note,
         })
+    }
+
+    fn receive(&mut self, notes: AppointmentAnnotations, cx: &mut Context<Root>) {
+        if Self::context_revision(&notes, self.position) < self.revision() {
+            return;
+        }
+        let text = self.text(cx);
+        let keep_edit = self.preserve_note_edit || self.reviewed_note.trim() != text.trim();
+        self.notes = notes;
+        if self
+            .rejected
+            .is_some_and(|attempt| self.revision().is_some_and(|read| read > attempt))
+        {
+            self.rejected = None;
+            self.error = None;
+        }
+        if keep_edit && text.trim() != self.saved_note().trim() {
+            self.preserve_note_edit = true;
+        } else {
+            self.preserve_note_edit = false;
+            self.reviewed_note = self.saved_note().to_owned();
+            if text != self.reviewed_note {
+                self.lines = self
+                    .reviewed_note
+                    .split('\n')
+                    .map(|line| note_field(line, false, cx))
+                    .collect();
+            }
+        }
+        if !self.preference_edited {
+            self.original_requested = self.saved_requested();
+            self.requested = self.original_requested;
+            self.reviewed_preference = self.saved_preference().map(str::to_owned);
+        }
     }
 }
 
@@ -130,7 +216,13 @@ impl Root {
             return;
         };
         let loaded_version = match &details.annotations {
-            Some(Annotations::Loading { .. } | Annotations::Editing(_)) => return,
+            Some(Annotations::Loading { .. }) => return,
+            Some(Annotations::Editing(draft))
+                if draft.pending.is_some() || draft.refreshing.is_some() =>
+            {
+                return;
+            }
+            Some(Annotations::Editing(draft)) => draft.notes.appointment_version,
             Some(Annotations::Ready(notes)) => notes.appointment_version,
             Some(Annotations::Unavailable) if force_refresh => {
                 self.open_annotations(cx);
@@ -189,6 +281,17 @@ impl Root {
         if !can_edit_service_annotations(notes, &self.time_off_scope) {
             return;
         }
+        let Ok(Some(appointment)) = self.svc.store.appointment(&details.id) else {
+            return;
+        };
+        if !self.calendar_edits_allowed
+            || !ops::calendar_scope_permits_edit(
+                self.calendar_scope.as_deref(),
+                Some(&appointment.staff_id),
+            )
+        {
+            return;
+        }
         let row = notes
             .rows
             .iter()
@@ -197,21 +300,16 @@ impl Root {
             .map(|row| row.requested_staff_id.is_some())
             .or(notes.default_requested)
             .unwrap_or_else(|| {
-                self.svc
-                    .store
-                    .appointment(&details.id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|visit| {
-                        visit
-                            .service_badges
-                            .iter()
-                            .any(|badge| badge.service_position == position && badge.requested)
-                    })
+                appointment
+                    .service_badges
+                    .iter()
+                    .any(|badge| badge.service_position == position && badge.requested)
             });
         let text = row
             .and_then(|row| row.internal_note.as_deref())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_owned();
+        let reviewed_preference = row.and_then(|row| row.requested_staff_id.clone());
         let lines = text
             .split('\n')
             .map(|line| note_field(line, false, cx))
@@ -223,9 +321,15 @@ impl Root {
                 lines,
                 original_requested: requested,
                 requested,
+                preference_edited: false,
+                reviewed_staff: appointment.staff_id,
+                reviewed_preference,
+                reviewed_note: text,
+                preserve_note_edit: false,
                 pending: None,
+                refreshing: None,
+                rejected: None,
                 error: None,
-                conflicted: false,
             })));
         }
         cx.notify();
@@ -243,7 +347,8 @@ impl Root {
             return;
         };
         if draft.pending.is_some()
-            || draft.conflicted
+            || draft.refreshing.is_some()
+            || draft.rejected.is_some()
             || !can_edit_service_annotations(&draft.notes, &self.time_off_scope)
         {
             return;
@@ -264,6 +369,21 @@ impl Root {
             return;
         };
         let internal_note = draft.text(cx);
+        let Ok(Some(appointment)) = self.svc.store.appointment(&details.id) else {
+            return;
+        };
+        if !self.calendar_edits_allowed
+            || !ops::calendar_scope_permits_edit(
+                self.calendar_scope.as_deref(),
+                Some(&appointment.staff_id),
+            )
+            || draft.awaiting_review(&internal_note, &appointment.staff_id)
+            || (draft.preference_edited
+                && draft.requested
+                && draft.notes.appointment_version != Some(appointment.version))
+        {
+            return;
+        }
         if internal_note.encode_utf16().count() > 2000 {
             draft.error = Some(Key::InternalNoteTooLong);
             cx.notify();
@@ -272,6 +392,7 @@ impl Root {
         let Some(input) = draft.update(internal_note) else {
             return;
         };
+        let attempted = (input.appointment_version, input.version);
         let id = details.id.clone();
         let session = self.svc.session.clone();
         let time_off_scope = self.time_off_scope.clone();
@@ -311,8 +432,9 @@ impl Root {
                         this.refresh_open_annotations(permissions_changed, cx);
                     }
                     Ok(None) => {
-                        draft.conflicted = true;
-                        draft.error = Some(Key::InternalNoteConflict);
+                        draft.rejected = Some(attempted);
+                        draft.error = Some(Key::AppointmentNoteRefreshRequired);
+                        this.open_annotations(cx);
                     }
                     Err(_) => draft.error = Some(Key::InternalNoteSaveFailed),
                 }
@@ -331,7 +453,11 @@ impl Root {
             .transport()
             .filter(|_| self.status.connectivity != Connectivity::Offline)
         else {
-            details.annotations = Some(Annotations::Unavailable);
+            if let Some(Annotations::Editing(draft)) = &mut details.annotations {
+                draft.error = Some(Key::InternalNoteSaveFailed);
+            } else {
+                details.annotations = Some(Annotations::Unavailable);
+            }
             cx.notify();
             return;
         };
@@ -351,14 +477,21 @@ impl Root {
         let time_off_scope = self.time_off_scope.clone();
         let session = self.svc.session.clone();
         let request = Arc::new(());
-        let previous = match details.annotations.take() {
-            Some(Annotations::Ready(notes)) => Some(notes),
-            _ => None,
-        };
-        details.annotations = Some(Annotations::Loading {
-            request: request.clone(),
-            previous,
-        });
+        if let Some(Annotations::Editing(draft)) = &mut details.annotations {
+            if draft.pending.is_some() || draft.refreshing.is_some() {
+                return;
+            }
+            draft.refreshing = Some(request.clone());
+        } else {
+            let previous = match details.annotations.take() {
+                Some(Annotations::Ready(notes)) => Some(notes),
+                _ => None,
+            };
+            details.annotations = Some(Annotations::Loading {
+                request: request.clone(),
+                previous,
+            });
+        }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -373,6 +506,23 @@ impl Root {
                 let Overlay::Details(details) = &mut this.overlay else {
                     return;
                 };
+                if let Some(Annotations::Editing(draft)) = &mut details.annotations
+                    && draft.refreshing.as_ref().is_some_and(|current| Arc::ptr_eq(current, &request))
+                {
+                    draft.refreshing = None;
+                    match result {
+                        Ok(notes) => {
+                            draft.receive(notes, cx);
+                            if draft.notes.appointment_version > details.annotations_requested_version {
+                                this.svc.wake(Wake::Manual);
+                            }
+                        }
+                        Err(_) => draft.error = Some(Key::InternalNoteSaveFailed),
+                    }
+                    this.refresh_open_annotations(this.time_off_scope != time_off_scope, cx);
+                    cx.notify();
+                    return;
+                }
                 if !matches!(&details.annotations, Some(Annotations::Loading { request: current, .. }) if Arc::ptr_eq(current, &request))
                 {
                     return;
@@ -430,7 +580,7 @@ impl Root {
                     .services
                     .get(draft.position)
                     .map(|s| s.name.as_str());
-                content = content.child(self.render_note_draft(draft, name, cx));
+                content = content.child(self.render_note_draft(draft, appointment, name, cx));
             }
             Some(
                 Annotations::Ready(notes)
@@ -554,6 +704,7 @@ impl Root {
     fn render_note_draft(
         &self,
         draft: &NoteDraft,
+        appointment: &Appointment,
         name: Option<&str>,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
@@ -583,18 +734,114 @@ impl Root {
         } else {
             Key::NoProfessionalPreference
         });
-        let can_edit = can_edit_service_annotations(&draft.notes, &self.time_off_scope);
-        let can_change_preference = can_edit && !draft.conflicted;
-        let can_save = can_edit && draft.update(draft.text(cx)).is_some();
+        let can_edit = self.can_edit_staff_calendar(&appointment.staff_id)
+            && can_edit_service_annotations(&draft.notes, &self.time_off_scope);
+        let text = draft.text(cx);
+        let review_required = draft.awaiting_review(&text, &appointment.staff_id);
+        let waiting_for_assignment = draft.preference_edited
+            && draft.requested
+            && draft.notes.appointment_version != Some(appointment.version);
+        let can_review = can_edit
+            && draft.refreshing.is_none()
+            && draft.rejected.is_none()
+            && !waiting_for_assignment;
+        let can_save = can_review && !review_required && draft.update(text).is_some();
+        let staff_id = appointment.staff_id.clone();
+        let reviewed_staff = staff_id.clone();
+        let reviewed_version = draft.revision();
         body.child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .when(draft.refreshing.is_some(), |panel| {
+                    panel.child(self.t(Key::AppointmentAnnotationsLoading))
+                })
+                .when(
+                    draft.rejected.is_some() || waiting_for_assignment,
+                    |panel| {
+                        panel
+                            .child(self.t(Key::AppointmentNoteRefreshRequired))
+                            .when(draft.refreshing.is_none(), |row| {
+                                row.child(self.button(
+                                    "refresh-service-note",
+                                    self.t(Key::AppointmentAnnotationsRetry),
+                                    Kind::Ghost,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.svc.wake(Wake::Manual);
+                                        this.open_annotations(cx);
+                                    }),
+                                ))
+                            })
+                    },
+                )
+                .when(review_required, |panel| {
+                    panel.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .p_3()
+                            .rounded_md()
+                            .bg(theme::conflict_bg())
+                            .child(self.label(Key::AppointmentNoteCurrent))
+                            .child(div().text_sm().child(if draft.saved_note().is_empty() {
+                                self.t(Key::AppointmentNoteNoText).to_owned()
+                            } else {
+                                draft.saved_note().to_owned()
+                            }))
+                            .when_some(draft.saved_preference(), |panel, staff| {
+                                panel.child(div().text_sm().child(self.staff_name(staff)))
+                            })
+                            .when(draft.preference_edited && draft.requested, |panel| {
+                                panel.child(self.label(Key::ProfessionalPreference)).child(
+                                    div()
+                                        .text_sm()
+                                        .child(self.staff_name(&appointment.staff_id)),
+                                )
+                            })
+                            .child(div().text_sm().child(self.t(Key::AppointmentNoteReview)))
+                            .when(can_review, |panel| {
+                                panel.child(
+                                    self.button(
+                                        "keep-service-note-draft",
+                                        self.t(Key::AppointmentNoteKeepDraft),
+                                        Kind::Ghost,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(draft) = this.draft()
+                                                && draft.revision() == reviewed_version
+                                                && draft.pending.is_none()
+                                                && draft.refreshing.is_none()
+                                                && draft.rejected.is_none()
+                                            {
+                                                draft.reviewed_note = draft.saved_note().to_owned();
+                                                draft.reviewed_preference =
+                                                    draft.saved_preference().map(str::to_owned);
+                                                draft.reviewed_staff = reviewed_staff.clone();
+                                                draft.preserve_note_edit =
+                                                    draft.text(cx) != draft.reviewed_note;
+                                                draft.preference_edited =
+                                                    draft.request_change(&reviewed_staff).is_some();
+                                                draft.error = None;
+                                                cx.notify();
+                                            }
+                                        }),
+                                    )
+                                    .debug_selector(|| "keep-service-note-draft".to_owned()),
+                                )
+                            }),
+                    )
+                }),
+        )
+        .child(
             div()
                 .flex()
                 .items_center()
                 .flex_wrap()
                 .gap_2()
                 .child(self.label(Key::ProfessionalPreference))
-                .when(!can_change_preference, |row| row.child(preference))
-                .when(can_change_preference, |row| {
+                .when(!can_edit, |row| row.child(preference))
+                .when(can_edit, |row| {
                     row.child(
                         self.button(
                             "toggle-service-preference",
@@ -604,12 +851,18 @@ impl Root {
                             } else {
                                 Kind::Ghost
                             },
-                            cx.listener(|this, _, _, cx| {
+                            cx.listener(move |this, _, _, cx| {
                                 if let Some(draft) = this.draft()
                                     && draft.pending.is_none()
-                                    && !draft.conflicted
                                 {
+                                    if !draft.preference_edited {
+                                        draft.reviewed_staff = staff_id.clone();
+                                        draft.reviewed_preference =
+                                            draft.saved_preference().map(str::to_owned);
+                                    }
                                     draft.requested = !draft.requested;
+                                    draft.preference_edited =
+                                        draft.requested != draft.saved_requested();
                                     cx.notify();
                                 }
                             }),
@@ -685,7 +938,7 @@ impl Root {
                                     .split('\n')
                                     .map(|line| note_field(line, false, cx))
                                     .collect();
-                                if !draft.conflicted {
+                                if draft.rejected.is_none() {
                                     draft.error = None;
                                 }
                             }
@@ -693,7 +946,7 @@ impl Root {
                         }
                     }),
                 ))
-                .when(draft.conflicted, |actions| {
+                .when(review_required || draft.rejected.is_some(), |actions| {
                     actions.child(self.button(
                         "copy-note-draft",
                         self.t(Key::CopyNoteDraft),
@@ -729,7 +982,7 @@ impl Root {
                             && let Some(Annotations::Editing(draft)) = details.annotations.take()
                         {
                             details.annotations = Some(Annotations::Ready(draft.notes));
-                            if draft.conflicted {
+                            if draft.rejected.is_some() {
                                 this.open_annotations(cx);
                             } else {
                                 this.refresh_open_annotations(false, cx);
@@ -738,7 +991,7 @@ impl Root {
                         }
                     }),
                 ))
-                .when(!draft.conflicted, |actions| {
+                .when(draft.rejected.is_none(), |actions| {
                     actions.child(
                         self.button(
                             "save-internal-note",
@@ -750,6 +1003,7 @@ impl Root {
                                 }
                             }),
                         )
+                        .debug_selector(|| "save-service-note".to_owned())
                         .when(!can_save, |button| button.opacity(0.55).cursor_default()),
                     )
                 }),
@@ -761,6 +1015,68 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn service_notes_review_a_live_conflict_and_keep_an_independent_preference(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(880.), px(880.)));
+        let snapshot = |visit_version, line_version, preference: Option<&str>, note: &str| {
+            serde_json::from_value::<AppointmentAnnotations>(serde_json::json!({
+                "appointmentVersion": visit_version,
+                "canEdit": true,
+                "rows": [{
+                    "servicePosition": 0,
+                    "version": line_version,
+                    "requestedStaffId": preference,
+                    "internalNote": note
+                }]
+            }))
+            .unwrap()
+        };
+        root.update(cx, |root, cx| {
+            let appointment = root.view.as_ref().unwrap().columns[0].items[0]
+                .appointment
+                .clone();
+            root.open_details(&appointment.id, cx);
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment");
+            };
+            details.install_annotation_context(snapshot(3, 1, None, "Original note"));
+            root.edit_service_annotations(0, cx);
+            let draft = root.draft().unwrap();
+            draft.lines[0].update(cx, |field, cx| field.set_text("Local draft", cx));
+            draft.rejected = Some((3, 1));
+            draft.receive(snapshot(3, 1, None, "Original note"), cx);
+            assert_eq!(draft.rejected, Some((3, 1)));
+            draft.receive(
+                snapshot(4, 2, Some(&appointment.staff_id), "Newest saved note"),
+                cx,
+            );
+            assert!(draft.rejected.is_none());
+            draft.receive(snapshot(4, 1, None, "Older read"), cx);
+            assert_eq!(draft.saved_note(), "Newest saved note");
+            assert_eq!(draft.text(cx), "Local draft");
+            assert!(draft.requested);
+            assert!(draft.awaiting_review(&draft.text(cx), &appointment.staff_id));
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let keep = cx.debug_bounds("keep-service-note-draft").unwrap();
+        cx.simulate_click(keep.center(), Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, cx| {
+            let draft = root.draft().unwrap();
+            assert!(!draft.awaiting_review(&draft.text(cx), &draft.reviewed_staff));
+            let payload = draft.update(draft.text(cx)).unwrap();
+            assert_eq!(payload.appointment_version, 4);
+            assert_eq!(payload.version, 2);
+            assert_eq!(payload.requested, None);
+            assert_eq!(payload.internal_note, "Local draft");
+        });
+    }
 
     #[gpui::test]
     async fn the_open_notes_refresh_after_a_synced_change_without_replacing_a_draft(
