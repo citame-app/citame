@@ -25,6 +25,7 @@ import { lockScheduling, type Tx } from "../../tx";
 import { appointmentDepositStatus, protectionView } from "../booking-protection/value";
 import {
   booksyPaymentEvidenceAudit,
+  booksyPaymentSourceDigest,
   sameBooksyPaymentFlags,
 } from "../booksy-transfer/payment-review-audit";
 import {
@@ -529,7 +530,13 @@ export async function importBooksyContext(
               action: booksyPaymentEvidenceAudit,
               entity: "appointment",
               entityId: r.appointmentId,
-              metadata: { contextId: current.id, contextVersion, before, after },
+              metadata: {
+                contextId: current.id,
+                contextVersion,
+                sourceRefDigest: booksyPaymentSourceDigest(r.sourceRef),
+                before,
+                after,
+              },
             });
         }
       } else {

@@ -1429,12 +1429,18 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     } = note;
     if (!sourceRef) throw new Error("Expected the original Booksy service reference");
     const mappedLine = eq(appointmentContext.sourceRef, sourceRef);
-    const applyPaymentCorrection = async (paid: boolean, version: number) => {
-      const now = new Date(booking.startsAt);
+    const onAppointment = new Date(booking.startsAt);
+    const beforeAppointment = new Date(onAppointment.getTime() - 1);
+    const applyPaymentCorrection = async (
+      paid: boolean,
+      version: number,
+      reviewedSourceRef = sourceRef,
+      now = onAppointment,
+    ) => {
       const input = {
         rows: [
           {
-            sourceRef,
+            sourceRef: reviewedSourceRef,
             servicePosition,
             requestedStaffId,
             internalNote,
@@ -1465,6 +1471,13 @@ test("candidate reconciliation rejects invented processing and an inactive staff
       "unknown_amount",
       "unknown_booksy_payment",
     ]);
+    const otherSourceRef = `${sourceRef}:different-source`;
+    await applyPaymentCorrection(false, 3, otherSourceRef, beforeAppointment);
+    await applyPaymentCorrection(true, 4, otherSourceRef, beforeAppointment);
+    await applyPaymentCorrection(true, 5, sourceRef, beforeAppointment);
+    await expect(inspectBilling()).rejects.toThrow("Imported payment audit differs");
+    await applyPaymentCorrection(false, 6);
+    expect((await report()).nativeFieldsVerified).toBe(true);
 
     await db
       .update(appointmentService)

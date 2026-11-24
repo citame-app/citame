@@ -1,9 +1,14 @@
+import { createHash } from "node:crypto";
 import { auditLog } from "@sob/db";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import type { Tx } from "../../tx";
 
 export const booksyPaymentEvidenceAudit = "appointment.booksy_payment_evidence_corrected";
+
+export function booksyPaymentSourceDigest(sourceRef: string) {
+  return createHash("sha256").update(sourceRef).digest("hex");
+}
 
 const paymentFlagsSchema = z.object({
   paid: z.boolean().nullable(),
@@ -15,6 +20,7 @@ export type BooksyPaymentFlags = z.infer<typeof paymentFlagsSchema>;
 const correctionSchema = z.object({
   contextId: z.uuid(),
   contextVersion: z.number().int().positive(),
+  sourceRefDigest: z.string().regex(/^[a-f0-9]{64}$/),
   before: paymentFlagsSchema,
   after: paymentFlagsSchema,
 });
@@ -30,7 +36,12 @@ export function sameBooksyPaymentFlags(a: BooksyPaymentFlags, b: BooksyPaymentFl
 /** Replays reviewed flag changes from the archive to the current imported service row. */
 export async function verifyBooksyPaymentCorrections(
   tx: Tx,
-  contexts: (BooksyPaymentFlags & { id: string; appointmentId: string; version: number })[],
+  contexts: (BooksyPaymentFlags & {
+    id: string;
+    appointmentId: string;
+    version: number;
+    sourceRef: string | null;
+  })[],
   archivedFlags: ReadonlyMap<string, BooksyPaymentFlags>,
 ) {
   const actual = new Map(contexts.map((row) => [row.id, row]));
@@ -45,7 +56,12 @@ export async function verifyBooksyPaymentCorrections(
     const parsed = correctionSchema.safeParse(metadata);
     if (!parsed.success) throw mismatch();
     const row = actual.get(parsed.data.contextId);
-    if (!row || row.appointmentId !== appointmentId) throw mismatch();
+    if (
+      !row?.sourceRef ||
+      row.appointmentId !== appointmentId ||
+      parsed.data.sourceRefDigest !== booksyPaymentSourceDigest(row.sourceRef)
+    )
+      throw mismatch();
     return parsed.data;
   });
   const verified = new Map<string, { flags: BooksyPaymentFlags; version: number }>();

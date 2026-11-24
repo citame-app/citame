@@ -779,6 +779,7 @@ async function verifyReviewedPaymentEvidence(tx: Tx, plan: NativePlan) {
       id: appointmentContext.id,
       appointmentId: appointmentContext.appointmentId,
       servicePosition: appointmentContext.servicePosition,
+      sourceRef: appointmentContext.sourceRef,
       version: appointmentContext.version,
       paid: appointmentContext.paid,
       invoiced: appointmentContext.invoiced,
