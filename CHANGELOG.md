@@ -19,6 +19,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Desktop appointment details show the server-confirmed deposit state and payment deadlines, including the last synced state when offline. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
 
+- Desktop edits general appointment notes in the detail panel, including offline. Drafts rejected during sync can be compared with the current note and submitted again after review.
+
 - Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
 
 - Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
@@ -121,7 +123,6 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
 - A rejected move, cancellation or attendance change clears its local calendar preview while preserving newer revisions and other changes received live.
-- Desktop edits general appointment notes inside the detail panel, including offline. Drafts rejected during sync can be compared with the current note and submitted again after review.
 
 - Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.
 
