@@ -226,15 +226,24 @@ export function authorizeReportQuery(principal: Principal, query: ReportQuery): 
 export function authorizeCalendarQuery(
   principal: Principal,
   query: Partial<CalendarQuery>,
-): { staffIds?: string[]; includeBilling: boolean } {
+): { staffIds?: string[]; includeBilling: boolean; visitCheckoutScope?: string } {
   requireRole(principal, "owner", "staff");
-  const { allCalendars, commerce } = permissionsFor(principal.role, principal.accessPreset);
+  const { allCalendars, allSales, commerce } = permissionsFor(
+    principal.role,
+    principal.accessPreset,
+  );
   if (query.resourceOccupancy && !allCalendars)
     throw forbidden("Resource occupancy requires access to all calendars");
-  if (allCalendars) return { staffIds: query.staffIds, includeBilling: commerce };
+  const visitCheckoutScope = commerce
+    ? allCalendars && allSales
+      ? "all"
+      : (principal.staffId ?? undefined)
+    : undefined;
+  if (allCalendars)
+    return { staffIds: query.staffIds, includeBilling: commerce, visitCheckoutScope };
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {
     throw forbidden("Staff can only see their own calendar");
   }
-  return { staffIds: [principal.staffId], includeBilling: commerce };
+  return { staffIds: [principal.staffId], includeBilling: commerce, visitCheckoutScope };
 }

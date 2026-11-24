@@ -2,6 +2,7 @@ import type { CalendarQuery, CalendarResponse } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
+  appointmentVisitPart,
   clientProfile,
   type Database,
   service,
@@ -9,7 +10,22 @@ import {
   timeOff,
   workingHours,
 } from "@sob/db";
-import { and, asc, eq, getTableColumns, gt, inArray, isNull, lt } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  exists,
+  getTableColumns,
+  gt,
+  inArray,
+  isNull,
+  lt,
+  ne,
+  notExists,
+  or,
+  sql,
+} from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { workingWindows } from "../availability/windows";
@@ -25,7 +41,51 @@ type CalendarScope = {
   staffIds?: string[];
   includeBilling: boolean;
   includeInactiveStaff?: boolean;
+  visitCheckoutScope?: string;
 };
+
+function groupedCheckout(db: Database | Tx, scope?: string) {
+  if (!scope) return sql<boolean>`false`;
+  const sibling = alias(appointment, "visit_checkout_sibling");
+  const part = alias(appointmentVisitPart, "visit_checkout_part");
+  const member = and(isNull(sibling.deletedAt), ne(sibling.id, appointment.id));
+  const outsideScope = or(
+    ne(sibling.clientId, appointment.clientId),
+    scope === "all" ? undefined : ne(sibling.staffId, scope),
+  );
+  const nativeMembers = (denied: boolean) =>
+    db
+      .select({ id: sibling.id })
+      .from(part)
+      .innerJoin(sibling, eq(part.appointmentId, sibling.id))
+      .where(
+        and(
+          eq(part.visitId, appointmentVisitPart.visitId),
+          member,
+          denied ? outsideScope : undefined,
+        ),
+      );
+  const importedMembers = (denied: boolean) =>
+    db
+      .select({ id: sibling.id })
+      .from(sibling)
+      .where(
+        and(
+          eq(sibling.visitGroupId, appointment.visitGroupId),
+          member,
+          denied ? outsideScope : undefined,
+        ),
+      );
+  // Keep both lookups on their group indexes. Ungrouped rows need neither lookup.
+  const eligible = sql<boolean>`CASE
+    WHEN ${appointmentVisitPart.visitId} IS NOT NULL THEN ${and(exists(nativeMembers(false)), notExists(nativeMembers(true)))}
+    WHEN ${appointment.visitGroupId} IS NOT NULL THEN ${and(exists(importedMembers(false)), notExists(importedMembers(true)))}
+    ELSE false END`;
+  return sql<boolean>`(${and(
+    scope === "all" ? undefined : eq(appointment.staffId, scope),
+    eligible,
+  )})`;
+}
 
 export async function getCalendarWithResourceOccupancy(
   db: Database,
@@ -98,9 +158,15 @@ export async function getCalendar(
 
   const [rows, offs, hours, dated] = await Promise.all([
     db
-      .select({ row: appointment, clientName: clientProfile.name })
+      .select({
+        row: appointment,
+        clientName: clientProfile.name,
+        itineraryId: appointmentVisitPart.visitId,
+        hasVisitCheckout: groupedCheckout(db, scope.visitCheckoutScope),
+      })
       .from(appointment)
       .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
+      .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
       .where(
         and(
           inArray(appointment.staffId, staffIds),
@@ -177,7 +243,7 @@ export async function getCalendar(
     from: query.from,
     to: query.to,
     staff: columns,
-    appointments: rows.map(({ row, clientName }) => {
+    appointments: rows.map(({ row, clientName, itineraryId, hasVisitCheckout }) => {
       const own = (serviceSnapshots.get(row.id) ?? []).sort((a, b) => a.position - b.position);
       const context = badges.get(row.id);
       const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
@@ -185,6 +251,8 @@ export async function getCalendar(
         ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
         ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
         ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
+        ...(itineraryId ? { itineraryId } : {}),
+        ...(hasVisitCheckout ? { hasVisitCheckout: true as const } : {}),
         ...(row.combinationId ? { combinationId: row.combinationId } : {}),
         id: row.id,
         staffId: row.staffId,

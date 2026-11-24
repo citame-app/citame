@@ -25,6 +25,26 @@ export const commerceEn = {
   "commerce.membership": "Membership visit",
   "commerce.gift_card": "Gift card",
   "commerce.record": "Record payment",
+  "commerce.visit.review": "Review visit payment",
+  "commerce.visit.hide": "Hide visit payment",
+  "commerce.visit.title": "Visit payment",
+  "commerce.visit.back": "Back to the visit",
+  "commerce.visit.externallySettled": "Already settled externally",
+  "commerce.visit.prepareError":
+    "The visit could not be prepared. Check your access and review any imported charges.",
+  "commerce.visit.recorded": "Visit payment recorded · {amount}",
+  "commerce.visit.recordedPart": "{amount} recorded",
+  "commerce.visit.noPayment":
+    "No amount can be collected together now. Check any price reviews or pending payments on the receipts.",
+  "commerce.visit.changed":
+    "The payment was rejected. Review the latest amounts and cash register status before recording it again.",
+  "commerce.visit.reconnect": "Reconnect to continue with this payment.",
+  "commerce.visit.reload": "Review current balances",
+  "commerce.visit.recording": "Recording the visit payment…",
+  "commerce.visit.uncertain":
+    "The result is still unconfirmed. Retry the original request to check it without recording the payment twice.",
+  "commerce.visit.retry": "Retry same payment · {amount}",
+  "commerce.visit.record": "Record payment · {amount}",
   "commerce.continue": "Continue to payment",
   "commerce.bankSubmit": "Pay securely with Redsys",
   "commerce.resumeBank": "Open pending bank payment",
@@ -126,6 +146,26 @@ export const commerceEsAR: Record<keyof typeof commerceEn, string> = {
   "commerce.membership": "Visita de membresía",
   "commerce.gift_card": "Tarjeta regalo",
   "commerce.record": "Registrar cobro",
+  "commerce.visit.review": "Revisar pago de la visita",
+  "commerce.visit.hide": "Ocultar pago de la visita",
+  "commerce.visit.title": "Pago de la visita",
+  "commerce.visit.back": "Volver a la visita",
+  "commerce.visit.externallySettled": "Ya liquidado fuera de Citame",
+  "commerce.visit.prepareError":
+    "No se pudo preparar la visita. Comprueba tus permisos y revisa los cargos importados.",
+  "commerce.visit.recorded": "Pago de la visita registrado · {amount}",
+  "commerce.visit.recordedPart": "{amount} registrado",
+  "commerce.visit.noPayment":
+    "Ahora no hay un importe que se pueda cobrar en conjunto. Comprueba los precios por revisar y los pagos pendientes en los recibos.",
+  "commerce.visit.changed":
+    "Se rechazó el pago. Revisa los importes y el estado de caja antes de volver a registrarlo.",
+  "commerce.visit.reconnect": "Vuelve a conectarte para continuar con el pago.",
+  "commerce.visit.reload": "Revisar saldos actuales",
+  "commerce.visit.recording": "Registrando el pago de la visita…",
+  "commerce.visit.uncertain":
+    "El resultado sigue sin confirmar. Reintenta la solicitud original para comprobarlo sin duplicar el pago.",
+  "commerce.visit.retry": "Reintentar el mismo pago · {amount}",
+  "commerce.visit.record": "Registrar pago · {amount}",
   "commerce.continue": "Continuar al pago",
   "commerce.bankSubmit": "Pagar de forma segura con Redsys",
   "commerce.resumeBank": "Abrir pago bancario pendiente",

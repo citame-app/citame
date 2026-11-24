@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { checkoutSchema, visitCheckoutSchema, visitPaymentSchema } from "@sob/contracts";
+import {
+  calendarResponseSchema,
+  checkoutSchema,
+  visitCheckoutSchema,
+  visitPaymentSchema,
+} from "@sob/contracts";
 import {
   appointment,
   appointmentContext,
@@ -93,6 +98,25 @@ async function group(source: "itinerary" | "import") {
 function prepare(id: string, who = owner) {
   return json(t.app, `/admin/commerce/visits/${id}/checkouts`, "POST", undefined, who.cookie);
 }
+
+test.each(["itinerary", "import"] as const)(
+  "the calendar exposes the %s checkout only to an operator who can review the whole visit",
+  async (source) => {
+    const { first, groupId } = await group(source);
+    const path = "/appointments/calendar?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+    const [full, own] = await Promise.all(
+      [owner, staff].map(async ({ cookie }) =>
+        calendarResponseSchema.parse(
+          await (await json(t.app, path, "GET", undefined, cookie)).json(),
+        ),
+      ),
+    );
+    const item = full?.appointments.find(({ id }) => id === first);
+    expect(item?.hasVisitCheckout).toBe(true);
+    expect(item?.[source === "itinerary" ? "itineraryId" : "visitGroupId"]).toBe(groupId);
+    expect(own?.appointments.find(({ id }) => id === first)?.hasVisitCheckout).toBeUndefined();
+  },
+);
 
 function collect(id: string, body: object, who = owner) {
   return json(t.app, `/admin/commerce/visits/${id}/payments`, "POST", body, who.cookie);

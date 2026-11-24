@@ -12,6 +12,7 @@ import {
   checkout,
   checkoutPayment,
   type Database,
+  staffProfile,
   visitPayment,
 } from "@sob/db";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
@@ -123,10 +124,16 @@ async function visitReview(
     );
 
   const appointments: VisitCheckout["appointments"] = [];
+  const staff = await tx
+    .select({ id: staffProfile.id, name: staffProfile.displayName })
+    .from(staffProfile)
+    .where(inArray(staffProfile.id, [...new Set(bookings.map(({ staffId }) => staffId))]));
+  const staffNames = new Map(staff.map(({ id, name }) => [id, name]));
   for (const booking of bookings) {
     appointments.push({
       appointmentId: booking.id,
       staffId: booking.staffId,
+      staffName: staffNames.get(booking.staffId) ?? "",
       startsAt: booking.startsAt.toISOString(),
       status: booking.status,
       settledExternally: settled.has(booking.id),

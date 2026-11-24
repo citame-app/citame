@@ -82,6 +82,7 @@ export const billingReviewReasonsSchema = z.array(billingReviewReasonSchema).min
 
 export const calendarAppointmentSchema = appointmentSchema.extend({
   clientName: z.string(),
+  hasVisitCheckout: z.literal(true).optional(),
   serviceBadges: z.array(calendarServiceBadgesSchema).optional(),
   serviceColors: z.record(idSchema, z.string().regex(/^#[0-9a-fA-F]{6}$/)).optional(),
   resources: z

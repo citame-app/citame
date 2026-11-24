@@ -50,8 +50,11 @@ its token and an idempotency key to `POST /admin/commerce/visits/:appointmentId/
 cash or a card payment already taken on an external terminal. The command validates the current
 visit and receipts, creates one allocation per payable receipt, and commits the group in one
 transaction. A lost response can replay the same command from any appointment in the visit.
-Existing refunds continue to apply to the individual payments. Web and Desktop controls and
-an aggregate hosted card or Bizum payment remain pending.
+Existing refunds continue to apply to the individual payments. In the Web calendar, open a
+grouped appointment and choose **Review visit payment**. The details show each professional,
+service and amount, with access to open receipts. An uncertain request can be retried from
+another appointment in the same group on the same browser tab and account. Desktop controls
+and an aggregate hosted card or Bizum payment remain pending.
 
 ## Verification — 2026-11-17
 
