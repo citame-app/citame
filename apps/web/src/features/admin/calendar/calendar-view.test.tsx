@@ -3,8 +3,8 @@ import type { CalendarAppointment, CalendarResponse } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../../test/render";
+import { isLocalCalendarWrite } from "./appointment-writes";
 import { CalendarView } from "./calendar-view";
-import { isLocalCalendarMove } from "./move-requests";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
@@ -340,18 +340,26 @@ describe("CalendarView", () => {
       fireEvent.keyDown(original, { key: "ArrowDown", altKey: true });
       await waitFor(() => expect(patches).toHaveLength(1));
       expect(
-        isLocalCalendarMove(queryClient, {
-          ...lucia,
-          version: 3,
-          startsAt: "2026-03-09T13:15:00Z",
-        }),
+        isLocalCalendarWrite(
+          queryClient,
+          {
+            ...lucia,
+            version: 3,
+            startsAt: "2026-03-09T13:15:00Z",
+          },
+          "rescheduled",
+        ),
       ).toBe(true);
       expect(
-        isLocalCalendarMove(queryClient, {
-          ...lucia,
-          version: 4,
-          startsAt: "2026-03-09T13:15:00Z",
-        }),
+        isLocalCalendarWrite(
+          queryClient,
+          {
+            ...lucia,
+            version: 4,
+            startsAt: "2026-03-09T13:15:00Z",
+          },
+          "rescheduled",
+        ),
       ).toBe(false);
       fireEvent.click(screen.getByRole("button", { name: "Remount" }));
       const current = await screen.findByRole("button", { name: /Lucia/ });
@@ -392,6 +400,7 @@ describe("CalendarView", () => {
         fireEvent.click(block);
         const drawer = await screen.findByRole("dialog", { name: "Lucia" });
         expect(within(drawer).getByRole("button", { name: "Reschedule" })).toBeDisabled();
+        expect(within(drawer).getByRole("button", { name: "Mark no-show" })).toBeDisabled();
         fireEvent.click(within(drawer).getByRole("button", { name: "Close panel" }));
 
         if (movedElsewhere)

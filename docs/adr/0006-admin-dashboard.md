@@ -52,7 +52,7 @@ Recharts 3 supports React 19 (peer range checked) and enables its keyboard/scree
 
 ### Mutations and feedback
 
-Status changes use optimistic query updates. [ADR 0026](0026-calendar-move-preview.md) supersedes the snapshot rollback decision for moves. Other mutations show a toast on success and a friendly message on failure. Destructive actions (cancel, delete client, deactivate service or staff, remove time off) use `ConfirmDialog`. Forms with edits (client, hours, settings) register an `UnsavedGuard` (router blocker plus `beforeunload`); sheets ask before discarding.
+[ADR 0026](0026-calendar-move-preview.md) supersedes the snapshot rollback decision for moves and status changes. Other mutations show a toast on success and a friendly message on failure. Destructive actions (cancel, delete client, deactivate service or staff, remove time off) use `ConfirmDialog`. Forms with edits (client, hours, settings) register an `UnsavedGuard` (router blocker plus `beforeunload`); sheets ask before discarding.
 
 ### Staff deactivation
 

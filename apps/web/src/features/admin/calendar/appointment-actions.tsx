@@ -8,43 +8,27 @@ import { useI18n } from "~/i18n/react";
 import { api } from "~/lib/api/instance";
 import { formatTime } from "~/lib/format";
 import { describeProblem } from "../problems";
-import { invalidateCalendarData, mergeAppointment, patchAppointment } from "./cache";
+import {
+  type CalendarStatusChange,
+  calendarWriteKey,
+  startCalendarWrite,
+  usePendingCalendarWrites,
+} from "./appointment-writes";
+import { invalidateCalendarData, mergeAppointment } from "./cache";
 import { availableActions } from "./logic";
 
-type Transition = "completed" | "no_show" | "cancelled";
-
+type Transition = CalendarStatusChange["status"];
 const CALENDAR_KEY = ["admin", "calendar"] as const;
 
-/** Every cached calendar window, so an edit shows up in the day, week and today views at once. */
-function snapshot(queryClient: ReturnType<typeof useQueryClient>) {
-  return queryClient.getQueriesData<CalendarResponse>({ queryKey: CALENDAR_KEY });
-}
-
-/** Changes an appointment status with an optimistic update, rollback and a friendly error. */
 export function useStatusChange() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const { t } = useI18n();
-  return useMutation({
-    mutationFn: ({
-      appointment,
-      status,
-    }: {
-      appointment: CalendarAppointment;
-      status: Transition;
-    }) => api().appointments.update(appointment.id, { version: appointment.version, status }),
-    onMutate: async ({ appointment, status }) => {
-      await queryClient.cancelQueries({ queryKey: CALENDAR_KEY });
-      const previous = snapshot(queryClient);
-      queryClient.setQueriesData<CalendarResponse>({ queryKey: CALENDAR_KEY }, (data) =>
-        data ? patchAppointment(data, appointment.id, { status }) : data,
-      );
-      return { previous };
-    },
-    onError: (error, _vars, context) => {
-      for (const [key, data] of context?.previous ?? []) queryClient.setQueryData(key, data);
-      toast.error(t(describeProblem(error).messageKey));
-    },
+  const change = useMutation({
+    mutationKey: calendarWriteKey,
+    mutationFn: ({ appointment, status }: CalendarStatusChange) =>
+      api().appointments.update(appointment.id, { version: appointment.version, status }),
+    onError: (error) => toast.error(t(describeProblem(error).messageKey)),
     onSuccess: (saved, { status }) => {
       queryClient.setQueriesData<CalendarResponse>({ queryKey: CALENDAR_KEY }, (data) =>
         data ? mergeAppointment(data, saved) : data,
@@ -59,8 +43,15 @@ export function useStatusChange() {
         ),
       );
     },
-    onSettled: () => invalidateCalendarData(queryClient),
+    onSettled: () => {
+      void invalidateCalendarData(queryClient);
+    },
   });
+  return {
+    ...change,
+    mutate: (request: CalendarStatusChange, options?: Parameters<typeof change.mutate>[1]) =>
+      startCalendarWrite(queryClient, request, (command) => change.mutate(command, options)),
+  };
 }
 
 export function AppointmentActions({
@@ -84,8 +75,13 @@ export function AppointmentActions({
 }) {
   const { t, locale } = useI18n();
   const change = useStatusChange();
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const writePending = usePendingCalendarWrites().has(appointment.id);
+  const [cancelReview, setCancelReview] = useState<CalendarAppointment | null>(null);
   const actions = availableActions(role, appointment, now, ownStaffId, !readOnly);
+  const reviewedCancellation =
+    cancelReview?.id === appointment.id && cancelReview.version === appointment.version
+      ? cancelReview
+      : null;
 
   const run = (status: Transition) =>
     change.mutate({ appointment, status }, { onSuccess: onChanged });
@@ -93,20 +89,30 @@ export function AppointmentActions({
   return (
     <div className={layout === "stack" ? "flex flex-col gap-2" : "flex flex-wrap gap-2"}>
       {actions.complete && (
-        <Button variant="primary" loading={change.isPending} onClick={() => run("completed")}>
+        <Button
+          variant="primary"
+          disabled={writePending}
+          loading={change.isPending}
+          onClick={() => run("completed")}
+        >
           {t("calendar.action.complete")}
         </Button>
       )}
       {actions.noShow && (
-        <Button variant="secondary" loading={change.isPending} onClick={() => run("no_show")}>
+        <Button
+          variant="secondary"
+          disabled={writePending}
+          loading={change.isPending}
+          onClick={() => run("no_show")}
+        >
           {t("calendar.action.noShow")}
         </Button>
       )}
       {actions.cancel && (
         <Button
           variant="secondary"
-          disabled={change.isPending}
-          onClick={() => setConfirmingCancel(true)}
+          disabled={writePending}
+          onClick={() => setCancelReview(appointment)}
         >
           {t("calendar.action.cancel")}
         </Button>
@@ -115,30 +121,38 @@ export function AppointmentActions({
         <p className="basis-full text-sm text-muted">{t("calendar.action.notStarted")}</p>
       )}
       <ConfirmDialog
-        open={confirmingCancel}
-        onOpenChange={setConfirmingCancel}
+        open={cancelReview !== null}
+        onOpenChange={(open) => !open && setCancelReview(null)}
         destructive
         pending={change.isPending}
+        confirmDisabled={writePending || !actions.cancel || !reviewedCancellation}
         title={t("calendar.cancel.title")}
         description={t("calendar.cancel.body", {
-          client: appointment.clientName,
-          time: formatTime(appointment.startsAt, timeZone, locale),
+          client: cancelReview?.clientName ?? appointment.clientName,
+          time: formatTime(cancelReview?.startsAt ?? appointment.startsAt, timeZone, locale),
         })}
         confirmLabel={t("calendar.cancel.confirm")}
         cancelLabel={t("calendar.cancel.keep")}
         onConfirm={() => {
+          if (!reviewedCancellation || !actions.cancel) return;
           change.mutate(
-            { appointment, status: "cancelled" },
+            { appointment: reviewedCancellation, status: "cancelled" },
             {
               onSuccess: () => {
-                setConfirmingCancel(false);
+                setCancelReview(null);
                 onChanged?.();
               },
-              onError: () => setConfirmingCancel(false),
+              onError: () => setCancelReview(null),
             },
           );
         }}
-      />
+      >
+        {cancelReview && !reviewedCancellation && (
+          <p role="status" className="mt-3 text-sm text-danger-fg">
+            {t("problem.versionConflict")}
+          </p>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

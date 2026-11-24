@@ -1,37 +1,33 @@
 import type { CalendarResponse } from "@sob/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
 import { describeProblem, type Problem } from "../problems";
-import { invalidateCalendarData, mergeAppointment } from "./cache";
 import {
   type CalendarMove,
-  calendarMoveKey,
+  calendarWriteKey,
   persistCalendarMove,
-  startCalendarMove,
-  usePendingCalendarMoves,
-} from "./move-requests";
+  startCalendarWrite,
+  usePendingCalendarWrites,
+} from "./appointment-writes";
+import { invalidateCalendarData, mergeAppointment } from "./cache";
 
 export interface Conflict {
   appointmentId: string;
   problem: Problem;
 }
 
-/** Projects reviewed moves over the latest calendar without rewriting the server cache. */
-export function useMoveAppointment() {
+/** Projects pending writes over the current version of each appointment. */
+export function useCalendarWrites() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const { t } = useI18n();
   const [conflict, setConflict] = useState<Conflict | null>(null);
-  const pendingMoves = usePendingCalendarMoves();
-  const pendingById = useMemo(
-    () => new Map(pendingMoves.map((move) => [move.appointment.id, move])),
-    [pendingMoves],
-  );
+  const pendingById = usePendingCalendarWrites();
 
   const { mutate } = useMutation({
-    mutationKey: calendarMoveKey,
+    mutationKey: calendarWriteKey,
     mutationFn: persistCalendarMove,
     onError: (error, { appointment }) => {
       setConflict({ appointmentId: appointment.id, problem: describeProblem(error) });
@@ -49,13 +45,13 @@ export function useMoveAppointment() {
 
   const move = useCallback(
     (proposal: Omit<CalendarMove, "override">) =>
-      startCalendarMove(queryClient, { ...proposal, override: true }, (command) => {
+      startCalendarWrite(queryClient, { ...proposal, override: true }, (command) => {
         setConflict(null);
         mutate(command);
       }),
     [mutate, queryClient],
   );
-  const projectPendingMoves = useCallback(
+  const projectPendingWrites = useCallback(
     (data: CalendarResponse | undefined) => {
       if (!data || data.importSnapshot || pendingById.size === 0) return data;
       return {
@@ -63,6 +59,7 @@ export function useMoveAppointment() {
         appointments: data.appointments.map((appointment) => {
           const pending = pendingById.get(appointment.id);
           if (pending?.appointment.version !== appointment.version) return appointment;
+          if ("status" in pending) return { ...appointment, status: pending.status };
           const duration = Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt);
           return {
             ...appointment,
@@ -75,11 +72,11 @@ export function useMoveAppointment() {
     [pendingById],
   );
 
-  const isMovePending = useCallback((id: string) => pendingById.has(id), [pendingById]);
+  const isWritePending = useCallback((id: string) => pendingById.has(id), [pendingById]);
   return {
     move,
-    projectPendingMoves,
-    isMovePending,
+    projectPendingWrites,
+    isWritePending,
     conflict,
     clearConflict: () => setConflict(null),
   };

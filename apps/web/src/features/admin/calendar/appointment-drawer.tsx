@@ -26,14 +26,14 @@ import { VisitCheckout } from "../commerce/visit-checkout";
 import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
 import { AppointmentContext } from "./appointment-context";
+import {
+  calendarWriteKey,
+  persistCalendarMove,
+  startCalendarWrite,
+  usePendingCalendarWrites,
+} from "./appointment-writes";
 import { invalidateCalendarData, mergeAppointment } from "./cache";
 import { availableActions } from "./logic";
-import {
-  calendarMoveKey,
-  persistCalendarMove,
-  startCalendarMove,
-  usePendingCalendarMoves,
-} from "./move-requests";
 import { StatusBadge } from "./status-badge";
 
 const PAGE = 10;
@@ -161,11 +161,9 @@ function DrawerBody({
   });
   const notesConflict = saveNotes.isError && describeProblem(saveNotes.error).recovery === "reload";
 
-  const movePending = usePendingCalendarMoves().some(
-    (request) => request.appointment.id === appointment.id,
-  );
+  const movePending = usePendingCalendarWrites().has(appointment.id);
   const move = useMutation({
-    mutationKey: calendarMoveKey,
+    mutationKey: calendarWriteKey,
     mutationFn: persistCalendarMove,
     onSuccess: (saved) => {
       setProblem(null);
@@ -540,7 +538,7 @@ function DrawerBody({
                 loading={move.isPending}
                 onClick={() =>
                   slot &&
-                  startCalendarMove(
+                  startCalendarWrite(
                     queryClient,
                     { appointment, to: slot, override, includeStaff: true },
                     move.mutate,
