@@ -25,6 +25,7 @@ import {
 } from "../commerce/appointment-billing";
 import { repackResourceUnits } from "../resources/plan";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
+import { collectImportedBillingReview } from "./billing-review";
 import { booksyLocalDayBounds } from "./local-day";
 import { readBooksyPaymentEvidence, reviewBooksyPaymentEvidence } from "./payment-evidence";
 import { planBooksyTransfer, sourceUuid, stableJson, summarizeTransferIssues } from "./plan";
@@ -821,6 +822,7 @@ export async function inspectNativeBooksy(
     priceHolds?: "day" | "all";
     paymentEvidence?: boolean;
     preparedCopy?: boolean;
+    billingReview?: boolean;
   } = {},
 ) {
   return db.transaction(
@@ -842,7 +844,7 @@ export async function inspectNativeBooksy(
         capacity,
         options.preparedCopy,
       );
-      if (options.paymentEvidence || options.preparedCopy)
+      if (options.paymentEvidence || options.preparedCopy || options.billingReview)
         await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);
       const waitlistRows = await tx.select().from(waitlistSourceEntry);
@@ -961,6 +963,19 @@ export async function inspectNativeBooksy(
           : {}),
         ...(options.bookingLinks
           ? { bookingLinks: verifiedBookingLinks(plan.visits, servicePositions) }
+          : {}),
+        ...(options.billingReview
+          ? {
+              billingReview: await collectImportedBillingReview(
+                tx,
+                plan.visits.map(({ item, sourceBookingRef, sourceLineRef }) => ({
+                  appointmentId: item.id,
+                  sourceBookingRef,
+                  sourceLineRef,
+                })),
+                model.base.timezone,
+              ),
+            }
           : {}),
         ...(options.priceHolds
           ? {

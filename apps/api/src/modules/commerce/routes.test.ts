@@ -31,6 +31,7 @@ import {
   setupApiTest,
 } from "../../../test/helpers";
 import { redsysSignature } from "../../payments/redsys";
+import { collectImportedBillingReview } from "../booksy-transfer/billing-review";
 
 const bankSecret = "sq7HjrUOBfKmC576ILgskD5srU870gJ7"; // Official public test fixture.
 let t: Awaited<ReturnType<typeof setupApiTest>>;
@@ -203,6 +204,55 @@ test("a Booksy charge indicator prevents a duplicate appointment checkout", asyn
     billingReview: [{ id: appointmentId, reasons: ["paid_in_booksy", "invoiced_in_booksy"] }],
   });
   expect(JSON.stringify(body)).not.toContain("Private billing note");
+});
+
+test("the private import report agrees with checkout holds and omits reconciled payments", async () => {
+  await t.db
+    .update(appointment)
+    .set({
+      startsAt: new Date("2026-03-09T23:30:00Z"),
+      endsAt: new Date("2026-03-10T00:30:00Z"),
+    })
+    .where(eq(appointment.id, appointmentId));
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "synthetic-private-source",
+    paid: null,
+    internalNote: "Private billing note",
+  });
+  const source = {
+    appointmentId,
+    sourceBookingRef: "source-visit",
+    sourceLineRef: "source-service",
+  };
+  const read = () => collectImportedBillingReview(t.db, [source], "Europe/Madrid");
+  const report = await read();
+  expect(report).toEqual({
+    pendingAppointments: 1,
+    pendingByDate: [{ date: "2026-03-10", appointments: 1 }],
+    rows: [
+      {
+        ...source,
+        calendarDate: "2026-03-10",
+        calendarPath: `/admin/calendar?date=2026-03-10&view=day&appointment=${appointmentId}`,
+        reasons: ["unknown_booksy_payment"],
+      },
+    ],
+  });
+  expect(JSON.stringify(report)).not.toContain("Private billing note");
+  const confirmed = await call(
+    owner,
+    `/admin/commerce/appointments/${appointmentId}/imported-unpaid`,
+    "PUT",
+    {
+      appointmentVersion: 1,
+      reference: "Synthetic payment evidence",
+    },
+  );
+  expect(confirmed.status, await confirmed.clone().text()).toBe(200);
+  expect(await read()).toEqual({ pendingAppointments: 0, pendingByDate: [], rows: [] });
 });
 
 test("an undocumented Booksy payment is held until the owner records evidence of no prior charge", async () => {

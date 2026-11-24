@@ -175,8 +175,11 @@ export async function updateAppointmentContext(
 /** Batched annotation flags with optional financial state. */
 export async function calendarBadges(
   db: Connection,
-  visits: (typeof appointment.$inferSelect)[],
-  snapshots: (typeof appointmentService.$inferSelect)[],
+  visits: Pick<typeof appointment.$inferSelect, "id" | "requestedStaffId" | "customerComment">[],
+  snapshots: Pick<
+    typeof appointmentService.$inferSelect,
+    "appointmentId" | "position" | "sourceUnpriced" | "reviewedPriceCents"
+  >[],
   { includeBilling }: { includeBilling: boolean },
 ) {
   const result = new Map<

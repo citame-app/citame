@@ -16,8 +16,9 @@ import { checkContainer } from "./booksy-backup";
 
 if (import.meta.main) {
   try {
-    const [hash, date, option, path, ...extra] = process.argv.slice(2);
-    const preparedCopy = option === "--prepared-copy";
+    const [hash, date, option, path, billingContainer, ...extra] = process.argv.slice(2);
+    const reviewBilling = option === "--billing-review";
+    const preparedCopy = option === "--prepared-copy" || (reviewBilling && !!billingContainer);
     const connection = process.env.BOOKSY_REHEARSAL_DATABASE_URL;
     if (
       !hash ||
@@ -25,15 +26,21 @@ if (import.meta.main) {
       !date ||
       !connection ||
       extra.length ||
+      (billingContainer !== undefined && !reviewBilling) ||
       (option !== undefined &&
         (!path ||
-          !["--booking-links", "--price-review", "--price-review-all", "--prepared-copy"].includes(
-            option,
-          )))
+          ![
+            "--booking-links",
+            "--price-review",
+            "--price-review-all",
+            "--prepared-copy",
+            "--billing-review",
+          ].includes(option)))
     ) {
       throw new Error("Expected the private connection file, snapshot hash and a calendar date");
     }
-    const directory = option === "--booking-links" ? await realpath(path!) : undefined;
+    const directory =
+      path && (option === "--booking-links" || reviewBilling) ? await realpath(path) : undefined;
     if (directory) {
       const info = await stat(directory);
       if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
@@ -51,7 +58,11 @@ if (import.meta.main) {
     ) {
       throw new Error("Expected an isolated local Booksy copy");
     }
-    const container = preparedCopy ? path : candidate && `citame-booksy-rehearsal-${candidate[1]}`;
+    const container = preparedCopy
+      ? reviewBilling
+        ? billingContainer
+        : path
+      : candidate && `citame-booksy-rehearsal-${candidate[1]}`;
     if (!container || !/^citame-booksy-rehearsal-\d{8}$/.test(container))
       throw new Error("Expected the private rehearsal container");
     await checkContainer(url, container);
@@ -61,11 +72,17 @@ if (import.meta.main) {
     if (snapshot && snapshot.hash !== hash) throw new Error("Price review snapshot differs");
     const { db, close } = await connectToNamedDatabase(url.toString(), NO_DB_TIMEOUTS);
     try {
-      const { bookingLinks, priceHolds, ...report } = await inspectNativeBooksy(db, hash, date, {
-        bookingLinks: !!directory,
-        priceHolds: priceScope,
-        preparedCopy,
-      });
+      const { bookingLinks, priceHolds, billingReview, ...report } = await inspectNativeBooksy(
+        db,
+        hash,
+        date,
+        {
+          bookingLinks: option === "--booking-links",
+          priceHolds: priceScope,
+          preparedCopy,
+          billingReview: reviewBilling,
+        },
+      );
       if (directory && bookingLinks) {
         await privateWriteVerified(
           join(directory, `native-booking-links-${hash}.json`),
@@ -79,6 +96,20 @@ if (import.meta.main) {
             null,
             2,
           ),
+        );
+      }
+      let billingReviewReceipt: string | undefined;
+      if (directory && billingReview) {
+        const receipt = {
+          snapshotHash: hash,
+          database,
+          ...billingReview,
+          canCutOver: false,
+        };
+        billingReviewReceipt = `native-billing-review-${fingerprint(receipt)}.json`;
+        await privateWriteVerified(
+          join(directory, billingReviewReceipt),
+          JSON.stringify(receipt, null, 2),
         );
       }
       let priceReviewReceipt: string | undefined;
@@ -105,7 +136,19 @@ if (import.meta.main) {
           JSON.stringify(receipt, null, 2),
         );
       }
-      console.log(JSON.stringify({ ...report, priceReviewReceipt, priceReviewServices }, null, 2));
+      console.log(
+        JSON.stringify(
+          {
+            ...report,
+            priceReviewReceipt,
+            priceReviewServices,
+            billingReviewReceipt,
+            billingReviewPending: billingReview?.pendingAppointments,
+          },
+          null,
+          2,
+        ),
+      );
     } finally {
       await close();
     }
