@@ -262,7 +262,7 @@ test("an external reschedule keeps the open note draft across dates", async ({
   const { promise: firstRead, resolve: sawFirstRead } = Promise.withResolvers<void>();
   const { promise: heldResponse, resolve: releaseFirstRead } = Promise.withResolvers<void>();
   let entryReads = 0;
-  await page.route("**/calendar-entry", async (route) => {
+  await page.route((url) => url.pathname === `${endpoint}/calendar-entry`, async (route) => {
     if (++entryReads !== 1) return route.continue();
     const beforeEdit = await route.fetch();
     sawFirstRead();
