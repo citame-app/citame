@@ -237,7 +237,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
         deps.db,
         checkoutId(c.req.param("appointmentId")),
         principal,
-        { now: deps.now?.() ?? new Date(), generation: deps.config.syncReplicaGeneration },
+        { now: deps.now ?? (() => new Date()), generation: deps.config.syncReplicaGeneration },
       );
       return c.json(
         {
@@ -258,7 +258,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
           checkoutId(c.req.param("appointmentId")),
           parseOrThrow(visitPaymentInputSchema, await readJson(c)),
           c.get("principal"),
-          { now: deps.now?.() ?? new Date(), generation: deps.config.syncReplicaGeneration },
+          { now: deps.now ?? (() => new Date()), generation: deps.config.syncReplicaGeneration },
         ),
         201,
         { "Cache-Control": "private, no-store" },

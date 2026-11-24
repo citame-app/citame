@@ -6,9 +6,12 @@ import {
   appointmentService,
   appointmentVisit,
   appointmentVisitPart,
+  auditLog,
   cashMovement,
   checkout,
   checkoutPayment,
+  retailProduct,
+  user,
   visitPayment,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -20,6 +23,8 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { loadPrincipal } from "../../auth/principal";
+import { collectVisitPayment } from "./visit-checkouts";
 
 let t: Awaited<ReturnType<typeof setupApiTest>>;
 let f: Fixtures;
@@ -127,6 +132,12 @@ test("one cash payment records both receipt allocations and replays from either 
   const payments = await t.db.select().from(checkoutPayment);
   expect(payments.map((p) => p.amountCents).sort((a, b) => a - b)).toEqual([1200, 1900]);
   expect(await t.db.select().from(cashMovement)).toHaveLength(2);
+  expect(
+    await t.db
+      .select()
+      .from(auditLog)
+      .where(eq(auditLog.action, "commerce.visit_payment_recorded")),
+  ).toHaveLength(1);
   expect((await collect(first, { ...input, method: "external_card" })).status).toBe(409);
   expect((await t.db.select().from(checkoutPayment)).length).toBe(2);
 });
@@ -162,6 +173,69 @@ test("separate simultaneous confirmations cannot record the same visit twice", a
   expect(results.map(({ status }) => status).sort()).toEqual([201, 409]);
   expect(await t.db.select().from(visitPayment)).toHaveLength(1);
   expect(await t.db.select().from(checkoutPayment)).toHaveLength(2);
+});
+
+test("an operator whose role changed after the request began cannot record a visit payment", async () => {
+  const { first } = await group("itinerary");
+  const reviewToken = await paymentReview(first);
+  const prior = await loadPrincipal(t.db, owner.userId);
+  if (!prior) throw new Error("Missing operator");
+  await t.db.update(user).set({ role: "client" }).where(eq(user.id, owner.userId));
+  const result = collectVisitPayment(
+    t.db,
+    first,
+    { method: "external_card", reviewToken, idempotencyKey: crypto.randomUUID() },
+    prior,
+    { now: () => new Date(), generation: t.config.syncReplicaGeneration },
+  );
+  await expect(result).rejects.toMatchObject({ code: "forbidden" });
+  expect(await t.db.select().from(visitPayment)).toHaveLength(0);
+});
+
+test("settling a visit with retail items can run alongside a counter receipt for the same customer", async () => {
+  const { first, second } = await group("itinerary");
+  const [product] = await t.db
+    .insert(retailProduct)
+    .values({
+      sku: "VISIT-TEST",
+      name: "Test product",
+      priceCents: 500,
+      stockOnHand: 3,
+      idempotencyKey: crypto.randomUUID(),
+      requestHash: "fixture",
+    })
+    .returning();
+  if (!product) throw new Error("Missing test product");
+  const lines = [{ kind: "product", productId: product.id, quantity: 1 }];
+  const create = (input: { appointmentId: string } | { clientId: string }) =>
+    json(
+      t.app,
+      "/admin/commerce/checkouts",
+      "POST",
+      {
+        ...input,
+        lines,
+        idempotencyKey: crypto.randomUUID(),
+      },
+      owner.cookie,
+    );
+  const retail = await create({ appointmentId: second });
+  expect(retail.status, await retail.clone().text()).toBe(201);
+  const visit = visitCheckoutSchema.parse(await (await prepare(first)).json());
+  expect(visit.paymentReview?.totalCents).toBe(3600);
+  if (!visit.paymentReview) throw new Error("Missing payment review");
+  const [payment, walkIn] = await Promise.all([
+    collect(first, {
+      method: "external_card",
+      reviewToken: visit.paymentReview.token,
+      idempotencyKey: crypto.randomUUID(),
+    }),
+    create({ clientId: f.clientId }),
+  ]);
+  expect(payment.status, await payment.clone().text()).toBe(201);
+  expect(walkIn.status, await walkIn.clone().text()).toBe(201);
+  const [stock] = await t.db.select().from(retailProduct).where(eq(retailProduct.id, product.id));
+  expect(stock).toMatchObject({ stockOnHand: 2, stockReserved: 1 });
 });
 
 test("a balance changed after review prevents all visit payments", async () => {

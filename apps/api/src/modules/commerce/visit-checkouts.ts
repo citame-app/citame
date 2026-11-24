@@ -15,13 +15,15 @@ import {
   visitPayment,
 } from "@sob/db";
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { recordAudit } from "../../audit";
 import { canReviewVisitCheckouts } from "../../auth/policy";
-import type { Principal } from "../../auth/principal";
+import { loadPrincipal, type Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { appointmentBillingHolds, externallySettledAppointments } from "./appointment-billing";
 import {
   createCheckoutInTransaction,
+  lockVisitPaymentPrerequisites,
   readAppointmentCheckout,
   requireOperator,
   saleRow,
@@ -31,8 +33,15 @@ import {
 type VisitGroup = Pick<VisitCheckout, "groupId" | "source"> & {
   bookings: (typeof appointment.$inferSelect)[];
 };
-type VisitReviewContext = { now: Date; generation: string };
+type VisitReviewContext = { now: () => Date; generation: string };
 const digest = (input: unknown) => createHash("sha256").update(JSON.stringify(input)).digest("hex");
+
+async function currentOperator(tx: Tx, userId: string) {
+  const principal = await loadPrincipal(tx, userId);
+  if (!principal) throw new DomainError("forbidden", "Account unavailable");
+  requireOperator(principal);
+  return principal;
+}
 
 async function loadVisitGroup(
   tx: Tx,
@@ -97,7 +106,7 @@ async function visitReview(
   tx: Tx,
   { groupId, source, bookings }: VisitGroup,
   principal: Principal,
-  context: VisitReviewContext,
+  generation: string,
   receiptFor: (id: string, billable: boolean) => Promise<Checkout | null>,
 ) {
   const settled = await externallySettledAppointments(
@@ -132,7 +141,7 @@ async function visitReview(
       ? {
           totalCents,
           token: digest([
-            context.generation,
+            generation,
             principal.userId,
             groupId,
             source,
@@ -147,23 +156,25 @@ async function visitReview(
 export async function prepareVisitCheckouts(
   db: Database,
   appointmentId: string,
-  principal: Principal,
+  p: Principal,
   context: VisitReviewContext,
 ): Promise<VisitCheckout> {
-  requireOperator(principal);
+  requireOperator(p);
   return db.transaction(async (tx) => {
     // Creation follows the individual checkout order and never locks an existing receipt.
     await lockScheduling(tx);
+    const principal = await currentOperator(tx, p.userId);
     const group = await loadVisitGroup(tx, appointmentId, principal);
-    const { visit } = await visitReview(tx, group, principal, context, (id, billable) =>
+    const now = context.now();
+    const { visit } = await visitReview(tx, group, principal, context.generation, (id, billable) =>
       billable
         ? createCheckoutInTransaction(
             tx,
             createCheckoutSchema.parse({ appointmentId: id, idempotencyKey: crypto.randomUUID() }),
             principal,
-            { now: context.now },
+            { now },
           )
-        : readAppointmentCheckout(tx, id, principal, context.now),
+        : readAppointmentCheckout(tx, id, principal, now),
     );
     return visit;
   });
@@ -208,14 +219,14 @@ export async function collectVisitPayment(
   db: Database,
   appointmentId: string,
   input: VisitPaymentInput,
-  principal: Principal,
+  p: Principal,
   context: VisitReviewContext,
 ): Promise<VisitPayment> {
-  requireOperator(principal);
+  requireOperator(p);
   return db.transaction(async (tx) => {
-    const requestLock = `visit-payment:${principal.userId}:${input.idempotencyKey}`;
+    const requestLock = `visit-payment:${p.userId}:${input.idempotencyKey}`;
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${requestLock}, 0))`);
-    const initial = await loadVisitGroup(tx, appointmentId, principal);
+    const initial = await loadVisitGroup(tx, appointmentId, p);
     const initialIds = initial.bookings.map(({ id }) => id);
     // Individual payments and refunds lock their receipt before scheduling. Lock every
     // active receipt in a stable order before taking scheduling for the group.
@@ -226,7 +237,8 @@ export async function collectVisitPayment(
       .orderBy(asc(checkout.id))
       .for("update");
     await lockScheduling(tx);
-    const group = await loadVisitGroup(tx, appointmentId, principal);
+    const before = await currentOperator(tx, p.userId);
+    const group = await loadVisitGroup(tx, appointmentId, before);
     const bookingIds = new Set(group.bookings.map(({ id }) => id));
     const requestHash = digest([group.groupId, group.source, input.method, input.reviewToken]);
     const [previous] = await tx
@@ -234,7 +246,7 @@ export async function collectVisitPayment(
       .from(visitPayment)
       .where(
         and(
-          eq(visitPayment.actorUserId, principal.userId),
+          eq(visitPayment.actorUserId, before.userId),
           eq(visitPayment.idempotencyKey, input.idempotencyKey),
         ),
       );
@@ -244,16 +256,35 @@ export async function collectVisitPayment(
           "invalid_state",
           "Idempotency key already belongs to a different request",
         );
+      for (const id of bookingIds) await readAppointmentCheckout(tx, id, before, context.now());
       return recordedVisitPayment(
         tx,
         { id: previous.id, method: input.method },
-        principal,
+        before,
         bookingIds,
       );
     }
 
-    const { visit, allocations } = await visitReview(tx, group, principal, context, (id) =>
-      readAppointmentCheckout(tx, id, principal, context.now),
+    await lockVisitPaymentPrerequisites(
+      tx,
+      input.method,
+      locked.map(({ id }) => id),
+    );
+    const principal = await currentOperator(tx, p.userId);
+    if (
+      !canReviewVisitCheckouts(
+        principal,
+        group.bookings.map(({ staffId }) => staffId),
+      )
+    )
+      throw new DomainError("not_found", "Visit not found");
+    const now = context.now();
+    const { visit, allocations } = await visitReview(
+      tx,
+      group,
+      principal,
+      context.generation,
+      (id) => readAppointmentCheckout(tx, id, principal, now),
     );
     if (visit.paymentReview?.token !== input.reviewToken) throw reviewChanged();
     const lockedById = new Map(locked.map((row) => [row.id, row]));
@@ -277,14 +308,22 @@ export async function collectVisitPayment(
         sale,
         { method: input.method, amountCents, idempotencyKey: `visit-${operation.id}` },
         principal,
-        { now: context.now, visitPaymentId: operation.id },
+        { now, visitPaymentId: operation.id },
       );
     }
-    return recordedVisitPayment(
+    const result = await recordedVisitPayment(
       tx,
       { id: operation.id, method: input.method },
       principal,
       bookingIds,
     );
+    await recordAudit(tx, {
+      actorUserId: principal.userId,
+      action: "commerce.visit_payment_recorded",
+      entity: "visit_payment",
+      entityId: result.id,
+      metadata: { method: result.method, amountCents: result.totalCents },
+    });
+    return result;
   });
 }

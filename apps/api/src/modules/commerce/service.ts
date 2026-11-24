@@ -53,6 +53,7 @@ import {
 import {
   consumeReservedInventory,
   loadCheckoutProducts,
+  lockVisitCheckoutProducts,
   releaseCheckoutInventory,
   reserveCheckoutProducts,
 } from "../inventory/reservations";
@@ -846,6 +847,17 @@ export async function startPayment(
       recurring,
     }),
   );
+}
+
+export async function lockVisitPaymentPrerequisites(
+  tx: Tx,
+  method: "cash" | "external_card",
+  receiptIds: string[],
+) {
+  // Match a single cash payment: register before fulfillment. Lock the grouped stock
+  // before the first receipt can take any CRM or loyalty locks.
+  if (method === "cash") await openSession(tx);
+  await lockVisitCheckoutProducts(tx, receiptIds);
 }
 
 /** The caller has authorized and locked the receipt before taking the scheduling lock. */

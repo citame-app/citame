@@ -43,7 +43,9 @@ exists. An unresolved imported charge requires review before the visit can be pr
 need access to every calendar and receipt in the group.
 As in individual checkout, preparing a zero-total receipt with final prices settles it for zero.
 
-The prepared visit includes a payment review if it has an amount payable now. Staff can submit
+The prepared visit includes a payment review if it has an amount payable now and every open
+receipt can be reviewed. Complete outstanding price reviews and reconcile pending bank payments
+before recording the visit payment. Staff can submit
 its token and an idempotency key to `POST /admin/commerce/visits/:appointmentId/payments` to record
 cash or a card payment already taken on an external terminal. The command validates the current
 visit and receipts, creates one allocation per payable receipt, and commits the group in one
