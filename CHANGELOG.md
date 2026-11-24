@@ -13,6 +13,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - The commerce API prepares the individual receipts for native and imported multi-professional visits in one transaction, including existing collections and cancelled parts.
 - The commerce API can record one reviewed cash or external-terminal payment across the payable receipts of a visit, with atomic allocation and safe retries.
 - Web calendar details show the grouped payment review and distinguish a confirmed payment, a changed balance and an uncertain result that can be retried.
+- Desktop calendar details match the grouped visit payment review. A pending confirmation can be recovered from another appointment in the visit and after restarting the app.
 
 - Desktop appointment details show the server-confirmed deposit state and payment deadlines, including the last synced state when offline. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
 

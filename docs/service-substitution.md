@@ -53,13 +53,19 @@ transaction. A lost response can replay the same command from any appointment in
 Existing refunds continue to apply to the individual payments. In the Web calendar, open a
 grouped appointment and choose **Review visit payment**. The details show each professional,
 service and amount, with access to open receipts. An uncertain request can be retried from
-another appointment in the same group on the same browser tab and account. Desktop controls
-and an aggregate hosted card or Bizum payment remain pending.
+another appointment in the same group on the same browser tab and account. Desktop offers the
+same review in the appointment details. An uncertain Desktop payment can be retried after
+restart or from another part of the visit under the same account and server profile.
+An aggregate hosted card or Bizum payment remains pending.
 
 Web saves the retry details before sending a new payment. If the browser blocks site storage,
 no payment is submitted. A local browser run with synthetic records verified a committed
 payment followed by a lost response, a retry from the other appointment, and access to its
 two receipts from the confirmation on mobile.
+
+Desktop saves the original command in SQLite before its first submission and requires an
+explicit retry. It validates the receipt IDs and the amount assigned to each receipt before
+acknowledging the saved command. The live review and receipt display require connectivity.
 
 ## Verification — 2026-11-17
 

@@ -28,6 +28,7 @@ import {
   importedPartialPayments,
 } from "../commerce/appointment-billing";
 import { saleRow } from "../commerce/service";
+import { hasGroupedCheckout } from "./visit-checkout-access";
 
 type Connection = Database | Tx;
 const conflict = () =>
@@ -46,9 +47,10 @@ async function authorizedAppointment(db: Connection, id: string, principal: Prin
 export async function getAppointmentContext(db: Connection, id: string, principal: Principal) {
   const visit = await authorizedAppointment(db, id, principal);
   const { commerce, editCalendar } = permissionsFor(principal.role, principal.accessPreset);
-  const [rows, protection] = await Promise.all([
+  const [rows, protection, hasVisitCheckout] = await Promise.all([
     db.select().from(appointmentContext).where(eq(appointmentContext.appointmentId, id)),
     protectionView(db, id),
+    hasGroupedCheckout(db, id, authorizeCalendarQuery(principal, {}).visitCheckoutScope),
   ]);
   const receipt =
     commerce && protection
@@ -61,6 +63,7 @@ export async function getAppointmentContext(db: Connection, id: string, principa
     appointmentVersion: visit.version,
     canEdit: editCalendar,
     defaultRequested: visit.requestedStaffId !== null,
+    ...(hasVisitCheckout ? { hasVisitCheckout: true as const } : {}),
     ...(protection
       ? {
           protection: {

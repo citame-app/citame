@@ -115,6 +115,12 @@ test.each(["itinerary", "import"] as const)(
     expect(item?.hasVisitCheckout).toBe(true);
     expect(item?.[source === "itinerary" ? "itineraryId" : "visitGroupId"]).toBe(groupId);
     expect(own?.appointments.find(({ id }) => id === first)?.hasVisitCheckout).toBeUndefined();
+    const context = async ({ cookie }: Actor) =>
+      (await (await json(t.app, `/appointments/${first}/context`, "GET", undefined, cookie)).json()) as {
+        hasVisitCheckout?: boolean;
+      };
+    expect((await context(owner)).hasVisitCheckout).toBe(true);
+    expect((await context(staff)).hasVisitCheckout).toBeUndefined();
   },
 );
 
