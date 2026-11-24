@@ -34,6 +34,23 @@ pub(super) struct Inbox {
 }
 
 impl Root {
+    fn deny_calendar_inbox(&mut self, cx: &mut Context<Self>) {
+        let _ = self.svc.store.clear_calendar_inbox_cache();
+        self.calendar_badge.request = None;
+        self.calendar_badge.count = 0;
+        if let Overlay::Inbox(inbox) = &mut self.overlay
+            && inbox.rewards.is_none()
+        {
+            self.inbox_generation = self.inbox_generation.wrapping_add(1);
+            inbox.page = None;
+            inbox.cached = false;
+            inbox.busy = false;
+            inbox.refreshing = false;
+            inbox.error = Some(Key::InboxUnavailable);
+        }
+        cx.notify();
+    }
+
     fn refresh_calendar_badge(&mut self, status: &SyncStatus, cx: &mut Context<Self>) {
         let scope = self.svc.store.calendar_cache_scope().ok();
         let badge = &mut self.calendar_badge;
@@ -98,19 +115,8 @@ impl Root {
                 let count = match result {
                     Ok(page) => page.total,
                     Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => {
-                        let _ = root.svc.store.clear_calendar_inbox_cache();
-                        if let Overlay::Inbox(inbox) = &mut root.overlay
-                            && inbox.rewards.is_none()
-                        {
-                            root.inbox_generation = root.inbox_generation.wrapping_add(1);
-                            inbox.page = None;
-                            inbox.cached = false;
-                            inbox.busy = false;
-                            inbox.refreshing = false;
-                            inbox.error = Some(Key::InboxUnavailable);
-                            cx.notify();
-                        }
-                        0
+                        root.deny_calendar_inbox(cx);
+                        return;
                     }
                     Err(_) => badge.count,
                 };
@@ -279,18 +285,15 @@ impl Root {
                 if this.svc.store.calendar_cache_scope().ok().as_ref() != Some(&scope) {
                     return;
                 }
-                let access_denied = matches!(
+                if matches!(
                     &result,
                     Err(TransportError::Unauthorized | TransportError::Forbidden(_))
-                );
-                if access_denied {
-                    let _ = this.svc.store.clear_calendar_inbox_cache();
-                    this.calendar_badge.request = None;
-                    this.calendar_badge.count = 0;
-                } else if changed {
-                    let _ = this.svc.store.invalidate_calendar_inbox_filters(&affected);
+                ) {
+                    this.deny_calendar_inbox(cx);
+                    return;
                 }
-                if changed && !access_denied {
+                if changed {
+                    let _ = this.svc.store.invalidate_calendar_inbox_filters(&affected);
                     this.calendar_badge.request = None;
                     this.calendar_badge.requested_cursor = None;
                     if let Ok(page) = &result
@@ -311,7 +314,7 @@ impl Root {
                 };
                 inbox.busy = false;
                 inbox.refreshing = false;
-                if access_denied || changed {
+                if changed {
                     inbox.page = None;
                     inbox.cached = false;
                 }
@@ -692,7 +695,7 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn native_inbox_opens_its_private_cache_without_a_connection(cx: &mut TestAppContext) {
+    async fn native_inbox_opens_its_private_cache_and_clears_it_on_denial(cx: &mut TestAppContext) {
         let (_dir, window) = super::super::tests::open(cx);
         window
             .update(cx, |root, _, cx| {
@@ -729,6 +732,24 @@ mod tests {
                 assert_eq!(inbox.kind, Some(CalendarNoticeKind::New));
                 assert_eq!(inbox.page, Some(cache));
                 assert!(matches!(inbox.error, Some(Key::InboxUnavailable)));
+
+                let request_generation = root.inbox_generation;
+                root.calendar_badge.count = 1;
+                root.calendar_badge.request = Some(Arc::new(()));
+                root.deny_calendar_inbox(cx);
+                assert_ne!(root.inbox_generation, request_generation);
+                assert_eq!(root.calendar_badge.count, 0);
+                assert!(root.calendar_badge.request.is_none());
+                assert!(matches!(&root.overlay, Overlay::Inbox(inbox)
+                    if inbox.page.is_none() && !inbox.cached && !inbox.busy && !inbox.refreshing
+                    && matches!(inbox.error, Some(Key::InboxUnavailable))));
+                assert!(
+                    root.svc
+                        .store
+                        .calendar_inbox_cache(true, Some(CalendarNoticeKind::New))
+                        .unwrap()
+                        .is_none()
+                );
             })
             .unwrap();
     }
