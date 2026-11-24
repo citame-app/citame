@@ -362,7 +362,7 @@ test("an uncertain waitlist booking keeps the reviewed request through a list re
   expect(waiver).toHaveValue("Synthetic owner approved waiver");
 
   const accept = screen.getByRole("button", { name: "Accept and book this time" });
-  await waitFor(() => expect(accept).toBeEnabled());
+  await waitFor(() => expect((accept as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(accept);
   const retry = await screen.findByRole("button", { name: "Verify or retry booking" });
   expect(waiver).toBeDisabled();
@@ -384,12 +384,12 @@ test("an uncertain waitlist booking keeps the reviewed request through a list re
   fireEvent.click(retry);
   await waitFor(() => expect(attempts).toHaveLength(2));
   expect(retry).toBeDisabled();
-  await waitFor(() => expect(retry).toBeEnabled(), { timeout: 3000 });
+  await waitFor(() => expect((retry as HTMLButtonElement).disabled).toBe(false), { timeout: 3000 });
   expect(waiver).toBeDisabled();
   fireEvent.click(retry);
   await waitFor(() => {
     expect(attempts).toHaveLength(3);
-    expect(retry).toBeEnabled();
+    expect((retry as HTMLButtonElement).disabled).toBe(false);
   });
   expect(waiver).toBeDisabled();
   fireEvent.click(retry);
