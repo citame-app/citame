@@ -1,4 +1,4 @@
-import type { Appointment } from "@sob/contracts";
+import type { Appointment, AppointmentContextUpdate } from "@sob/contracts";
 import { type Mutation, type QueryClient, useMutationState } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { api } from "~/lib/api/instance";
@@ -16,12 +16,26 @@ export type CalendarStatusChange = {
   status: "completed" | "no_show" | "cancelled";
 };
 
-type CalendarWrite = CalendarMove | CalendarStatusChange;
+export type CalendarNoteChange = {
+  appointment: Pick<Appointment, "id" | "version">;
+  notes: string;
+};
+
+export type CalendarServiceContextChange = {
+  appointment: Pick<Appointment, "id" | "version">;
+  context: Omit<AppointmentContextUpdate, "appointmentVersion">;
+};
+
+type CalendarWrite =
+  | CalendarMove
+  | CalendarStatusChange
+  | CalendarNoteChange
+  | CalendarServiceContextChange;
 
 export const calendarWriteKey = ["appointments", "calendar-write"] as const;
 const writeFilter = { mutationKey: calendarWriteKey, exact: true };
 
-// Writers sharing this key use one of the two reviewed commands.
+// Writers sharing this key use a reviewed appointment command.
 const requestFor = (mutation: Mutation) => mutation.state.variables as CalendarWrite;
 
 export function usePendingCalendarWrites() {
@@ -75,6 +89,7 @@ export function isLocalCalendarWrite(
       if ("status" in write)
         return kind === "cancelled" && committed?.status === appointment.status;
       return (
+        "to" in write &&
         kind === "rescheduled" &&
         (committed?.staffId ?? write.to.staffId) === appointment.staffId &&
         Date.parse(committed?.startsAt ?? write.to.startsAt) === Date.parse(appointment.startsAt)

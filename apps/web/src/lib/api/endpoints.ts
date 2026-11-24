@@ -23,6 +23,7 @@ import {
   type CreateServiceRequest,
   type CreateStaffAccountRequest,
   type CreateTimeOffRequest,
+  calendarAppointmentSchema,
   calendarResponseSchema,
   changeRoleResponseSchema,
   clientControlsSchema,
@@ -276,6 +277,8 @@ export function createEndpoints(client: ApiClient) {
     },
     appointments: {
       catalog: () => client.get("/appointments/catalog", listServicesResponseSchema),
+      calendarEntry: (id: string, signal?: AbortSignal) =>
+        client.get(`/appointments/${id}/calendar-entry`, calendarAppointmentSchema, { signal }),
       context: (id: string) => client.get(`/appointments/${id}/context`, appointmentContextSchema),
       updateContext: (id: string, request: AppointmentContextUpdate) =>
         client.patch(`/appointments/${id}/context`, request, appointmentContextSchema),

@@ -39,7 +39,7 @@ import { quoteBookingPromotion } from "../rewards/booking";
 import { bookingCombinationCatalogue } from "../services/combinations";
 import { listServices } from "../services/service";
 import { getRescheduleAvailability } from "./availability";
-import { getCalendar, getCalendarWithResourceOccupancy } from "./calendar";
+import { getCalendar, getCalendarAppointment, getCalendarWithResourceOccupancy } from "./calendar";
 import {
   getAppointmentContext,
   importBooksyContext,
@@ -320,6 +320,12 @@ export function appointmentsRoutes({
         return c.json(
           booksyNativePreview ? { ...calendar, importSnapshot: booksyNativePreview } : calendar,
         );
+      })
+      .get("/:id/calendar-entry", async (c) => {
+        const id = parseOrThrow(idSchema, c.req.param("id"));
+        const scope = authorizeCalendarQuery(c.get("principal"), {});
+        if (booksyNativePreview) throw new DomainError("not_found", "Appointment not found");
+        return c.json(await getCalendarAppointment(db, id, scope));
       })
       .post("/", create(false))
       .post("/desktop-booking", create(true))

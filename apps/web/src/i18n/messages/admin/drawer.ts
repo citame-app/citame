@@ -48,6 +48,11 @@ export const drawerEn = {
   "drawer.client.visits": "{count} visits",
   "drawer.notes": "Appointment notes",
   "drawer.notes.save": "Save notes",
+  "drawer.notes.changed":
+    "This note changed while you were editing. Review the saved note before keeping your draft.",
+  "drawer.notes.current": "Current saved note",
+  "drawer.notes.empty": "The saved note is empty.",
+  "drawer.notes.keepDraft": "Keep my draft",
   "drawer.reschedule.open": "Reschedule",
   "drawer.reschedule.title": "Move appointment",
   "drawer.reschedule.hint": "Pick a new date and time. The services stay the same.",
@@ -111,6 +116,11 @@ export const drawerEsAR: Record<keyof typeof drawerEn, string> = {
   "drawer.client.visits": "{count} visitas",
   "drawer.notes": "Notas del turno",
   "drawer.notes.save": "Guardar notas",
+  "drawer.notes.changed":
+    "La nota cambió mientras la editabas. Revisa la nota guardada antes de conservar tu borrador.",
+  "drawer.notes.current": "Nota guardada actualmente",
+  "drawer.notes.empty": "La nota guardada está vacía.",
+  "drawer.notes.keepDraft": "Conservar mi borrador",
   "drawer.reschedule.open": "Reprogramar",
   "drawer.reschedule.title": "Mover turno",
   "drawer.reschedule.hint": "Elige una nueva fecha y hora. Los servicios no cambian.",

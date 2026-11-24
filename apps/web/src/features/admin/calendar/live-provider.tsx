@@ -85,6 +85,8 @@ export function CalendarLiveProvider({
               (queryKey[1] === "transactions" || queryKey[1] === "unpaid")) ||
             (queryKey[0] === "admin" &&
               (queryKey[1] === "calendar" ||
+                queryKey[1] === "calendar-entry" ||
+                queryKey[1] === "appointment-context" ||
                 queryKey[1] === "report" ||
                 queryKey[1] === "staff" ||
                 queryKey[1] === "staff-access" ||

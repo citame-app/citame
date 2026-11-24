@@ -60,6 +60,7 @@ export function useCalendarWrites() {
           const pending = pendingById.get(appointment.id);
           if (pending?.appointment.version !== appointment.version) return appointment;
           if ("status" in pending) return { ...appointment, status: pending.status };
+          if (!("to" in pending)) return appointment;
           const duration = Date.parse(appointment.endsAt) - Date.parse(appointment.startsAt);
           return {
             ...appointment,

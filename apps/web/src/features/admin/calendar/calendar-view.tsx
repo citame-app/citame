@@ -23,7 +23,8 @@ import {
 } from "~/components/ui/icons";
 import { EmptyState, ErrorState, Skeleton } from "~/components/ui/states";
 import { useI18n } from "~/i18n/react";
-import { adminStaffQuery, calendarQuery } from "~/lib/admin-queries";
+import { adminStaffQuery, calendarEntryQuery, calendarQuery } from "~/lib/admin-queries";
+import { ApiError } from "~/lib/api/client";
 import { addDaysLocal, formatDateLong, formatTime, localDateOf } from "~/lib/format";
 import { salonQuery } from "~/lib/queries";
 import { zonedInstant } from "~/lib/zoned";
@@ -59,6 +60,10 @@ function isTyping(target: EventTarget | null): boolean {
   return (
     !!el?.tagName && (["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || el.isContentEditable)
   );
+}
+
+function isUnavailableCalendarEntry(error: unknown) {
+  return error instanceof ApiError && [401, 403, 404].includes(error.status);
 }
 
 export function CalendarView({
@@ -231,7 +236,39 @@ export function CalendarView({
       })),
     [staff, search.date, calendar?.workingWindows, timeZone, locale],
   );
-  const openAppointment = calendar?.appointments.find((a) => a.id === openId) ?? null;
+  const visibleAppointment = query.data?.appointments.find((a) => a.id === openId);
+  const [lastDrawerEntry, setLastDrawerEntry] = useState<{
+    appointment: CalendarAppointment;
+    accessScope?: string;
+  } | null>(null);
+  const entry = useQuery({
+    ...calendarEntryQuery(openId ?? "", accessScope),
+    enabled: Boolean(openId && !consultation && !visibleAppointment),
+    ...(live ? { refetchInterval: false } : {}),
+    retry: (attempt, error) => attempt < 2 && !isUnavailableCalendarEntry(error),
+  });
+  const entryUnavailable = isUnavailableCalendarEntry(entry.error);
+  const directEntry = consultation || entryUnavailable ? undefined : entry.data;
+  const retainedEntry =
+    !consultation &&
+    !entryUnavailable &&
+    lastDrawerEntry?.accessScope === accessScope &&
+    lastDrawerEntry?.appointment.id === openId
+      ? lastDrawerEntry.appointment
+      : undefined;
+  const confirmedEntry =
+    visibleAppointment && (!directEntry || visibleAppointment.version >= directEntry.version)
+      ? visibleAppointment
+      : directEntry;
+  const openAppointment =
+    retainedEntry && (!confirmedEntry || retainedEntry.version > confirmedEntry.version)
+      ? retainedEntry
+      : (confirmedEntry ?? null);
+  useEffect(() => {
+    if (openAppointment && openAppointment !== retainedEntry)
+      setLastDrawerEntry({ appointment: openAppointment, accessScope });
+    else if (!openId || entryUnavailable) setLastDrawerEntry(null);
+  }, [openAppointment, retainedEntry, openId, accessScope, entryUnavailable]);
   const onOpenAppointment = useCallback((appointment: CalendarAppointment) => {
     setOpenId(appointment.id);
   }, []);
@@ -857,7 +894,9 @@ export function CalendarView({
       <AppointmentDrawer
         appointment={openAppointment}
         staffName={
-          calendar?.staff.find((s) => s.id === openAppointment?.staffId)?.displayName ?? ""
+          calendar?.staff.find((s) => s.id === openAppointment?.staffId)?.displayName ??
+          allStaff.data?.find((s) => s.id === openAppointment?.staffId)?.displayName ??
+          ""
         }
         onClose={() => {
           setOpenId(null);
