@@ -14,6 +14,7 @@ import {
   salonSettings,
   staffReservation,
   stockMovement,
+  user,
 } from "@sob/db";
 import { createTestDatabase, type TestDatabase } from "@sob/db/testing";
 import { eq, sql } from "drizzle-orm";
@@ -32,6 +33,7 @@ import {
   appendVisibleBooking,
   verifyReviewedVisibleBooking,
 } from "../../scripts/booksy-review-visible-booking";
+import { importBooksyContext, previewBooksyContext } from "../appointments/context";
 import { transferFixture } from "./fixtures";
 import {
   countCapacityConflicts,
@@ -1405,6 +1407,64 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     await expect(inspectBilling()).rejects.toThrow();
     await db.update(appointmentService).set({ reviewedPriceCents: null }).where(savedLine);
     await db.delete(auditLog).where(eq(auditLog.id, auditedPriceReviewId));
+
+    const owner: Principal = {
+      userId: "synthetic-payment-review",
+      role: "owner",
+      email: "synthetic-payment-review@example.invalid",
+      name: "Synthetic payment reviewer",
+      staffId: null,
+      clientId: null,
+    };
+    await db
+      .insert(user)
+      .values({ id: owner.userId, role: owner.role, email: owner.email, name: owner.name });
+    const {
+      sourceRef,
+      servicePosition,
+      requestedStaffId,
+      internalNote,
+      customerComment,
+      invoiced,
+    } = note;
+    if (!sourceRef) throw new Error("Expected the original Booksy service reference");
+    const mappedLine = eq(appointmentContext.sourceRef, sourceRef);
+    const applyPaymentCorrection = async (paid: boolean, version: number) => {
+      const now = new Date(booking.startsAt);
+      const input = {
+        rows: [
+          {
+            sourceRef,
+            servicePosition,
+            requestedStaffId,
+            internalNote,
+            customerComment,
+            invoiced,
+            paid,
+            appointmentId: booking.id,
+            appointmentVersion: version,
+            contextVersion: version,
+            paymentEvidenceChanged: true as const,
+          },
+        ],
+      };
+      const { reviewHash } = await previewBooksyContext(db, input, owner, now);
+      await importBooksyContext(db, input, reviewHash, owner, now);
+    };
+    await applyPaymentCorrection(true, 1);
+    const paid = await inspectBilling();
+    expect(paid.billingReview?.rows[0]?.reasons).toContain("paid_in_booksy");
+    expect(paid.day.billingEvidence).toEqual(billingEvidence);
+    expect(paid.canCutOver).toBe(false);
+    await expect(inspectPreparedCopy()).rejects.toThrow("did not reconcile the source schedule");
+    await db.update(appointmentContext).set({ paid: false }).where(mappedLine);
+    await expect(inspectBilling()).rejects.toThrow("Imported payment audit differs");
+    await db.update(appointmentContext).set({ paid: true }).where(mappedLine);
+    await applyPaymentCorrection(false, 2);
+    expect((await inspectBilling()).billingReview?.rows[0]?.reasons).toEqual([
+      "unknown_amount",
+      "unknown_booksy_payment",
+    ]);
 
     await db
       .update(appointmentService)

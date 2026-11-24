@@ -24,6 +24,10 @@ import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
 import { appointmentDepositStatus, protectionView } from "../booking-protection/value";
 import {
+  booksyPaymentEvidenceAudit,
+  sameBooksyPaymentFlags,
+} from "../booksy-transfer/payment-review-audit";
+import {
   booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPaymentReviews,
@@ -503,10 +507,31 @@ export async function importBooksyContext(
         ...(needsPaymentHold ? { sourcePaymentUnverified: true } : {}),
       };
       if (current) {
+        const contextVersion = current.version + 1;
         await tx
           .update(appointmentContext)
-          .set({ ...values, source: "booksy", version: current.version + 1, updatedAt: now })
+          .set({ ...values, source: "booksy", version: contextVersion, updatedAt: now })
           .where(eq(appointmentContext.id, current.id));
+        if (current.source === "booksy" && current.sourceRef === r.sourceRef) {
+          const before = {
+            paid: current.paid,
+            invoiced: current.invoiced,
+            sourcePaymentUnverified: current.sourcePaymentUnverified,
+          };
+          const after = {
+            paid: r.paid,
+            invoiced: r.invoiced,
+            sourcePaymentUnverified: needsPaymentHold || before.sourcePaymentUnverified,
+          };
+          if (!sameBooksyPaymentFlags(before, after))
+            await recordAudit(tx, {
+              actorUserId: principal.userId,
+              action: booksyPaymentEvidenceAudit,
+              entity: "appointment",
+              entityId: r.appointmentId,
+              metadata: { contextId: current.id, contextVersion, before, after },
+            });
+        }
       } else {
         await tx.insert(appointmentContext).values({ ...values, source: "booksy", updatedAt: now });
       }

@@ -29,6 +29,7 @@ import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
 import { collectImportedBillingReview, verifyImportedPriceReviews } from "./billing-review";
 import { booksyLocalDayBounds } from "./local-day";
 import { readBooksyPaymentEvidence, reviewBooksyPaymentEvidence } from "./payment-evidence";
+import { type BooksyPaymentFlags, verifyBooksyPaymentCorrections } from "./payment-review-audit";
 import { planBooksyTransfer, sourceUuid, stableJson, summarizeTransferIssues } from "./plan";
 import { reviewBooksyCombinations, verifyBookedBooksyCombinations } from "./source-combinations";
 import {
@@ -516,7 +517,7 @@ async function verifyNativeProjection(
     importedResourceUnits,
     resourceLimits,
   }: Awaited<ReturnType<typeof expectedNativeCapacity>>,
-  { preparedCopy = false, acceptReviewedPrices = false } = {},
+  { preparedCopy = false, acceptBillingReviews = false } = {},
 ) {
   const bookedServiceRows = plan.visits.reduce((total, v) => total + v.services.length, 0);
   const occupiedResources = plan.visits.filter((v) => v.resource).length;
@@ -541,7 +542,7 @@ async function verifyNativeProjection(
     })
     .from(appointment);
   const services = await tx.select(archivedServiceColumns).from(appointmentService);
-  if (acceptReviewedPrices) await verifyImportedPriceReviews(tx, services);
+  if (acceptBillingReviews) await verifyImportedPriceReviews(tx, services);
   const servicePositions = new Map(
     services.map((row) => [`${row.appointmentId}/${row.position}`, row.id]),
   );
@@ -607,7 +608,7 @@ async function verifyNativeProjection(
         row.processingStartMinutes !== null ||
         row.processingMinutes !== null ||
         row.priceCents !== expected.priceCents ||
-        (!acceptReviewedPrices && row.reviewedPriceCents !== null) ||
+        (!acceptBillingReviews && row.reviewedPriceCents !== null) ||
         (preparedCopy && (row.priceType !== "fixed" || row.peakSurchargeCents !== null)) ||
         row.sourceUnpriced !== (expected.sourceUnpriced === true) ||
         row.currency !== expected.currency
@@ -623,8 +624,8 @@ async function verifyNativeProjection(
         row.internalNote !== expected.internalNote ||
         row.customerComment !== expected.customerComment ||
         row.requestedStaffId !== expected.requestedStaffId ||
-        row.paid !== expected.paid ||
-        row.invoiced !== expected.invoiced
+        (!acceptBillingReviews &&
+          (row.paid !== expected.paid || row.invoiced !== expected.invoiced))
       );
     }) ||
     staffWork.length !== plan.visits.length ||
@@ -771,6 +772,33 @@ async function verifyNativePaymentEvidence(tx: Tx, plan: NativePlan) {
     throw new Error("Native payment holds differ from the archived reservation evidence");
 }
 
+async function verifyReviewedPaymentEvidence(tx: Tx, plan: NativePlan) {
+  const visits = new Map(plan.visits.map((visit) => [visit.item.id, visit]));
+  const contexts = await tx
+    .select({
+      id: appointmentContext.id,
+      appointmentId: appointmentContext.appointmentId,
+      servicePosition: appointmentContext.servicePosition,
+      version: appointmentContext.version,
+      paid: appointmentContext.paid,
+      invoiced: appointmentContext.invoiced,
+      sourcePaymentUnverified: appointmentContext.sourcePaymentUnverified,
+    })
+    .from(appointmentContext);
+  const archived = new Map<string, BooksyPaymentFlags>();
+  for (const row of contexts) {
+    const visit = visits.get(row.appointmentId);
+    const flags = visit?.context.rows[row.servicePosition];
+    if (!visit || !flags) throw new Error("A verified payment context is missing from the archive");
+    archived.set(row.id, {
+      paid: flags.paid,
+      invoiced: flags.invoiced,
+      sourcePaymentUnverified: visit.sourcePaymentUnverified,
+    });
+  }
+  await verifyBooksyPaymentCorrections(tx, contexts, archived);
+}
+
 /** Fill missing payment provenance from archived evidence on the isolated local copies. */
 export async function restoreLegacyBooksyPaymentEvidence(db: Database, snapshotHash: string) {
   return db.transaction(async (tx) => {
@@ -841,11 +869,13 @@ export async function inspectNativeBooksy(
       const base = await verifyBooksyProjection(tx, model.base, { candidate: true });
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
+      const acceptBillingReviews = options.preparedCopy && options.billingReview;
       const servicePositions = await verifyNativeProjection(tx, plan, capacity, {
         preparedCopy: options.preparedCopy,
-        acceptReviewedPrices: options.preparedCopy && options.billingReview,
+        acceptBillingReviews,
       });
-      if (options.paymentEvidence || options.preparedCopy || options.billingReview)
+      if (acceptBillingReviews) await verifyReviewedPaymentEvidence(tx, plan);
+      else if (options.paymentEvidence || options.preparedCopy || options.billingReview)
         await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);
       const waitlistRows = await tx.select().from(waitlistSourceEntry);

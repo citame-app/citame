@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+Prepared Booksy billing reports include owner-reviewed payment corrections when the audit trail connects the archived flags to the current appointment service.
+
 The import reconciliation command identifies an incompatible migration ledger without printing private database errors. It directs operators to check the migration history before restoring or upgrading a separate copy.
 
 WhatsApp Embedded Signup rejects malformed phone and account selections and lets the owner retry when the Meta sign-in window closes early.
