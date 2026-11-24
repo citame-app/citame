@@ -97,7 +97,21 @@ impl Root {
                 badge.next_poll = Some(Instant::now() + REFRESH_INTERVAL);
                 let count = match result {
                     Ok(page) => page.total,
-                    Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => 0,
+                    Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => {
+                        let _ = root.svc.store.clear_calendar_inbox_cache();
+                        if let Overlay::Inbox(inbox) = &mut root.overlay
+                            && inbox.rewards.is_none()
+                        {
+                            root.inbox_generation = root.inbox_generation.wrapping_add(1);
+                            inbox.page = None;
+                            inbox.cached = false;
+                            inbox.busy = false;
+                            inbox.refreshing = false;
+                            inbox.error = Some(Key::InboxUnavailable);
+                            cx.notify();
+                        }
+                        0
+                    }
                     Err(_) => badge.count,
                 };
                 if count != badge.count {
@@ -271,8 +285,23 @@ impl Root {
                 );
                 if access_denied {
                     let _ = this.svc.store.clear_calendar_inbox_cache();
+                    this.calendar_badge.request = None;
+                    this.calendar_badge.count = 0;
                 } else if changed {
                     let _ = this.svc.store.invalidate_calendar_inbox_filters(&affected);
+                }
+                if changed && !access_denied {
+                    this.calendar_badge.request = None;
+                    this.calendar_badge.requested_cursor = None;
+                    if let Ok(page) = &result
+                        && !archived
+                        && kind.is_none()
+                    {
+                        this.calendar_badge.count = page.total;
+                    } else {
+                        this.refresh_calendar_badge(&this.svc.status(), cx);
+                    }
+                    cx.notify();
                 }
                 if generation != this.inbox_generation {
                     return;
@@ -285,6 +314,9 @@ impl Root {
                 if access_denied || changed {
                     inbox.page = None;
                     inbox.cached = false;
+                }
+                if changed {
+                    inbox.requested_page = 1;
                 }
                 match result {
                     Ok(page) => {
@@ -627,6 +659,37 @@ impl Root {
 mod tests {
     use super::*;
     use gpui::TestAppContext;
+
+    #[gpui::test]
+    async fn fresh_inbox_position_requires_the_corresponding_local_appointment(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                let appointment = root.view.as_ref().unwrap().columns[0].items[0]
+                    .appointment
+                    .clone();
+                root.open_inbox(false, 1, cx);
+                let day = root.date;
+                let moved = appointment.starts_at + chrono::Duration::days(2);
+                assert!(!root.open_notice_appointment(
+                    &appointment.id,
+                    Some((moved, &appointment.staff_id)),
+                    cx
+                ));
+                assert_eq!(root.date, day);
+                assert!(matches!(&root.overlay, Overlay::Inbox(_)));
+                assert!(root.open_notice_appointment(
+                    &appointment.id,
+                    Some((appointment.starts_at, &appointment.staff_id)),
+                    cx
+                ));
+                assert!(root.overview_staff.contains(&appointment.staff_id));
+                assert!(matches!(&root.overlay, Overlay::Details(_)));
+            })
+            .unwrap();
+    }
 
     #[gpui::test]
     async fn native_inbox_opens_its_private_cache_without_a_connection(cx: &mut TestAppContext) {

@@ -72,14 +72,26 @@ impl Root {
         let Ok(Some(appointment)) = calendar::effective_appointment(&self.svc.store, id) else {
             return false;
         };
+        if let Some((starts, staff)) = placement
+            && (starts != appointment.starts_at || staff != appointment.staff_id)
+        {
+            let local_move = self.svc.store.appointment(id).is_ok_and(|saved| {
+                saved.is_some_and(|saved| {
+                    saved.starts_at != appointment.starts_at
+                        || saved.staff_id != appointment.staff_id
+                })
+            });
+            if !local_move {
+                return false;
+            }
+        }
         self.pending_local_today = false;
         self.calendar_mode = CalendarMode::Day;
         self.overview_staff.clear();
-        let starts_at = placement.map_or(appointment.starts_at, |(starts, _)| starts);
-        if let Some((_, staff)) = placement {
-            self.overview_staff.insert(staff.to_owned());
+        if placement.is_some() {
+            self.overview_staff.insert(appointment.staff_id);
         }
-        self.date = starts_at.with_timezone(&self.tz).date_naive();
+        self.date = appointment.starts_at.with_timezone(&self.tz).date_naive();
         self.reload(cx);
         self.open_details(id, cx);
         true

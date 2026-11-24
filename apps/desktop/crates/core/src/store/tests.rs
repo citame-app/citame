@@ -1077,6 +1077,14 @@ fn calendar_inbox_preserves_unaffected_filters_and_clears_pages_on_visibility_ch
             .unwrap()
             .is_none()
     );
+    assert!(
+        !store
+            .cache_calendar_inbox(&scope, true, Some(CalendarNoticeKind::Cancelled), &archived)
+            .unwrap()
+    );
+    store
+        .apply_visibility_scopes(Some(true), Some("all"), INITIAL_GENERATION)
+        .unwrap();
     let scope = store.calendar_cache_scope().unwrap();
     store
         .cache_calendar_inbox(&scope, true, Some(CalendarNoticeKind::Cancelled), &archived)
