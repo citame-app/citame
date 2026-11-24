@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { booksyLocalDayBounds } from "./local-day";
+import { booksyLocalDayBounds, importedAppointmentCalendarLink } from "./local-day";
 import { readBooksyPaymentEvidence } from "./payment-evidence";
 import { fingerprint } from "./plan";
 import {
@@ -213,23 +213,17 @@ export function prepareBooksyPriceReview(model: BooksySourceReadModel) {
       appointment.services.flatMap((service, position) => {
         if (!service.sourceUnpriced) return [];
         const label = screen?.financialHold.displayedService ?? sources.get(ref)?.service_price;
-        const calendarDate = Temporal.Instant.from(appointment.startsAt)
-          .toZonedDateTimeISO(model.base.timezone)
-          .toPlainDate()
-          .toString();
-        const search = new URLSearchParams({
-          date: calendarDate,
-          view: "day",
-          appointment: appointment.id,
-        });
         return [
           {
             itemRef: ref,
             servicePosition: position,
             appointmentId: appointment.id,
             startsAt: appointment.startsAt,
-            calendarDate,
-            calendarPath: `/admin/calendar?${search}`,
+            ...importedAppointmentCalendarLink(
+              appointment.id,
+              appointment.startsAt,
+              model.base.timezone,
+            ),
             evidence: screen
               ? "discounted_screen"
               : label === BOOKSY_HIDDEN_PRICE

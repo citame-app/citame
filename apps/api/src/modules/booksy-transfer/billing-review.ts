@@ -1,8 +1,11 @@
-import { appointment, appointmentService, type Database } from "@sob/db";
-import { inArray } from "drizzle-orm";
+import { moneyCentsSchema } from "@sob/contracts";
+import { appointment, appointmentService, auditLog, type Database } from "@sob/db";
+import { and, eq, inArray } from "drizzle-orm";
+import { z } from "zod";
 import type { Tx } from "../../tx";
 import { calendarBadges } from "../appointments/context";
-import { sourceCalendarDate } from "./calendar-intervals";
+import { importedPriceReviewAudit } from "../commerce/appointment-billing";
+import { importedAppointmentCalendarLink } from "./local-day";
 
 type ImportedBillingReference = {
   appointmentId: string;
@@ -56,14 +59,12 @@ export async function collectImportedBillingReview(
       !state.reasons.length
     )
       return [];
-    const calendarDate = sourceCalendarDate(visit.startsAt.toISOString(), timezone);
-    const query = new URLSearchParams({ date: calendarDate, view: "day", appointment: visit.id });
-    pendingByDate.set(calendarDate, (pendingByDate.get(calendarDate) ?? 0) + 1);
+    const link = importedAppointmentCalendarLink(visit.id, visit.startsAt.toISOString(), timezone);
+    pendingByDate.set(link.calendarDate, (pendingByDate.get(link.calendarDate) ?? 0) + 1);
     return [
       {
         ...reference,
-        calendarDate,
-        calendarPath: `/admin/calendar?${query}`,
+        ...link,
         reasons: state.reasons,
       },
     ];
@@ -79,4 +80,59 @@ export async function collectImportedBillingReview(
         a.appointmentId.localeCompare(b.appointmentId),
     ),
   };
+}
+
+const reviewedLines = z.array(z.object({ id: z.uuid(), amountCents: moneyCentsSchema })).min(1);
+
+/** Reviewed amounts live alongside the immutable source price and require matching audit evidence. */
+export async function verifyImportedPriceReviews(
+  tx: Tx,
+  services: Pick<
+    typeof appointmentService.$inferSelect,
+    "id" | "appointmentId" | "sourceUnpriced" | "reviewedPriceCents"
+  >[],
+) {
+  if (!services.length) return;
+  const ids = [...new Set(services.map(({ appointmentId }) => appointmentId))];
+  const records = await tx
+    .select({ appointmentId: auditLog.entityId, metadata: auditLog.metadata })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entity, "appointment"),
+        eq(auditLog.action, importedPriceReviewAudit),
+        inArray(auditLog.entityId, ids),
+      ),
+    );
+  const audits = new Map<string, number>();
+  const reviewedAppointments = new Set<string>();
+  const unpricedByAppointment = new Map<string, Set<string>>();
+  for (const { id, appointmentId, sourceUnpriced } of services) {
+    if (!sourceUnpriced) continue;
+    const ids = unpricedByAppointment.get(appointmentId) ?? new Set<string>();
+    ids.add(id);
+    unpricedByAppointment.set(appointmentId, ids);
+  }
+  for (const { appointmentId, metadata } of records) {
+    const parsed = reviewedLines.safeParse(metadata.lines);
+    const lines = appointmentId && unpricedByAppointment.get(appointmentId);
+    if (
+      !appointmentId ||
+      reviewedAppointments.has(appointmentId) ||
+      !parsed.success ||
+      !lines ||
+      lines.size !== parsed.data.length
+    )
+      throw new Error("Imported price audit differs from the reviewed services");
+    for (const { id, amountCents } of parsed.data) {
+      if (!lines.has(id) || audits.has(id))
+        throw new Error("Imported price audit differs from the reviewed services");
+      audits.set(id, amountCents);
+    }
+    reviewedAppointments.add(appointmentId);
+  }
+  if (
+    services.some(({ id, reviewedPriceCents }) => reviewedPriceCents !== (audits.get(id) ?? null))
+  )
+    throw new Error("Imported price audit differs from the reviewed services");
 }

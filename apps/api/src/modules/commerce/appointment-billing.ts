@@ -25,7 +25,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling } from "../../tx";
 
-const nativePriceAudit = "commerce.imported_price_reviewed";
+export const importedPriceReviewAudit = "commerce.imported_price_reviewed";
 const importedSettlementAudit = "commerce.imported_settlement_recorded";
 const importedPartialAudit = "commerce.imported_partial_payment_recorded";
 const importedUnpaidAudit = "commerce.imported_unpaid_confirmed";
@@ -553,7 +553,7 @@ export async function reviewImportedAppointmentPrice(
       const [previous] = await tx
         .select({ metadata: auditLog.metadata })
         .from(auditLog)
-        .where(and(eq(auditLog.action, nativePriceAudit), eq(auditLog.entityId, id)));
+        .where(and(eq(auditLog.action, importedPriceReviewAudit), eq(auditLog.entityId, id)));
       if (previous?.metadata.reference === input.reference) return { ok: true as const };
     }
     if (
@@ -583,7 +583,7 @@ export async function reviewImportedAppointmentPrice(
       .where(eq(appointment.id, id));
     await recordAudit(tx, {
       actorUserId: principal.userId,
-      action: nativePriceAudit,
+      action: importedPriceReviewAudit,
       entity: "appointment",
       entityId: id,
       metadata: { reference: input.reference, lines: input.lines },

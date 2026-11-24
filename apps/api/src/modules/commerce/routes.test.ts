@@ -228,6 +228,10 @@ test("the private import report agrees with checkout holds and omits reconciled 
     sourceLineRef: "source-service",
   };
   const read = () => collectImportedBillingReview(t.db, [source], "Europe/Madrid");
+  const desk =
+    "/admin/commerce/unpaid?from=2026-03-09T23:00:00Z&to=2026-03-10T23:00:00Z&booksyPaymentReview=1";
+  const readDesk = async () =>
+    unpaidAppointmentsSchema.parse(await (await call(owner, desk)).json());
   const report = await read();
   expect(report).toEqual({
     pendingAppointments: 1,
@@ -241,6 +245,9 @@ test("the private import report agrees with checkout holds and omits reconciled 
       },
     ],
   });
+  expect((await readDesk()).billingReview).toMatchObject([
+    { id: appointmentId, reasons: report.rows[0]?.reasons },
+  ]);
   expect(JSON.stringify(report)).not.toContain("Private billing note");
   const confirmed = await call(
     owner,
@@ -253,6 +260,7 @@ test("the private import report agrees with checkout holds and omits reconciled 
   );
   expect(confirmed.status, await confirmed.clone().text()).toBe(200);
   expect(await read()).toEqual({ pendingAppointments: 0, pendingByDate: [], rows: [] });
+  expect((await readDesk()).billingReview).toBeUndefined();
 });
 
 test("an undocumented Booksy payment is held until the owner records evidence of no prior charge", async () => {

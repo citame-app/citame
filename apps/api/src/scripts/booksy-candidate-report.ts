@@ -16,9 +16,10 @@ import { checkContainer } from "./booksy-backup";
 
 if (import.meta.main) {
   try {
-    const [hash, date, option, path, billingContainer, ...extra] = process.argv.slice(2);
+    const [hash, date, option, optionValue, billingContainer, ...extra] = process.argv.slice(2);
     const reviewBilling = option === "--billing-review";
-    const preparedCopy = option === "--prepared-copy" || (reviewBilling && !!billingContainer);
+    const preparedContainer = option === "--prepared-copy" ? optionValue : billingContainer;
+    const preparedCopy = preparedContainer !== undefined;
     const connection = process.env.BOOKSY_REHEARSAL_DATABASE_URL;
     if (
       !hash ||
@@ -28,7 +29,7 @@ if (import.meta.main) {
       extra.length ||
       (billingContainer !== undefined && !reviewBilling) ||
       (option !== undefined &&
-        (!path ||
+        (!optionValue ||
           ![
             "--booking-links",
             "--price-review",
@@ -40,7 +41,9 @@ if (import.meta.main) {
       throw new Error("Expected the private connection file, snapshot hash and a calendar date");
     }
     const directory =
-      path && (option === "--booking-links" || reviewBilling) ? await realpath(path) : undefined;
+      optionValue && (option === "--booking-links" || reviewBilling)
+        ? await realpath(optionValue)
+        : undefined;
     if (directory) {
       const info = await stat(directory);
       if (!info.isDirectory() || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0)
@@ -58,17 +61,14 @@ if (import.meta.main) {
     ) {
       throw new Error("Expected an isolated local Booksy copy");
     }
-    const container = preparedCopy
-      ? reviewBilling
-        ? billingContainer
-        : path
-      : candidate && `citame-booksy-rehearsal-${candidate[1]}`;
+    const container = preparedContainer ?? (candidate && `citame-booksy-rehearsal-${candidate[1]}`);
     if (!container || !/^citame-booksy-rehearsal-\d{8}$/.test(container))
       throw new Error("Expected the private rehearsal container");
     await checkContainer(url, container);
     const priceScope =
       option === "--price-review-all" ? "all" : option === "--price-review" ? "day" : undefined;
-    const snapshot = priceScope ? await readPrivateBooksySnapshot(path!) : null;
+    const snapshot =
+      priceScope && optionValue ? await readPrivateBooksySnapshot(optionValue) : null;
     if (snapshot && snapshot.hash !== hash) throw new Error("Price review snapshot differs");
     const { db, close } = await connectToNamedDatabase(url.toString(), NO_DB_TIMEOUTS);
     try {

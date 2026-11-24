@@ -1378,6 +1378,34 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     const primary = savedServices.find(({ position }) => position === 0);
     if (!primary) throw new Error("Missing frozen primary service fixture");
     const savedLine = eq(appointmentService.id, primary.id);
+    const inspectBilling = () =>
+      inspectNativeBooksy(db, hash, source.fromDate, { preparedCopy: true, billingReview: true });
+    expect((await inspectBilling()).billingReview?.rows[0]?.reasons).toEqual([
+      "unknown_amount",
+      "unknown_booksy_payment",
+    ]);
+    await db.update(appointmentService).set({ reviewedPriceCents: 4300 }).where(savedLine);
+    await expect(inspectBilling()).rejects.toThrow();
+    const auditedPriceReviewId = crypto.randomUUID();
+    await db.insert(auditLog).values({
+      id: auditedPriceReviewId,
+      action: "commerce.imported_price_reviewed",
+      entity: "appointment",
+      entityId: booking.id,
+      metadata: {
+        reference: "Synthetic external receipt",
+        lines: [{ id: primary.id, amountCents: 4300 }],
+      },
+    });
+    expect((await inspectBilling()).billingReview?.rows[0]?.reasons).toEqual([
+      "unknown_booksy_payment",
+    ]);
+    await expect(inspectPreparedCopy()).rejects.toThrow("did not reconcile the source schedule");
+    await db.update(appointmentService).set({ reviewedPriceCents: 4301 }).where(savedLine);
+    await expect(inspectBilling()).rejects.toThrow();
+    await db.update(appointmentService).set({ reviewedPriceCents: null }).where(savedLine);
+    await db.delete(auditLog).where(eq(auditLog.id, auditedPriceReviewId));
+
     await db
       .update(appointmentService)
       .set({ processingStartMinutes: 15, processingMinutes: 20 })

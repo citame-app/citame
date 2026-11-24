@@ -25,7 +25,7 @@ import {
 } from "../commerce/appointment-billing";
 import { repackResourceUnits } from "../resources/plan";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
-import { collectImportedBillingReview } from "./billing-review";
+import { collectImportedBillingReview, verifyImportedPriceReviews } from "./billing-review";
 import { booksyLocalDayBounds } from "./local-day";
 import { readBooksyPaymentEvidence, reviewBooksyPaymentEvidence } from "./payment-evidence";
 import { planBooksyTransfer, sourceUuid, stableJson, summarizeTransferIssues } from "./plan";
@@ -515,7 +515,7 @@ async function verifyNativeProjection(
     importedResourceUnits,
     resourceLimits,
   }: Awaited<ReturnType<typeof expectedNativeCapacity>>,
-  preparedCopy = false,
+  { preparedCopy = false, acceptReviewedPrices = false } = {},
 ) {
   const bookedServiceRows = plan.visits.reduce((total, v) => total + v.services.length, 0);
   const occupiedResources = plan.visits.filter((v) => v.resource).length;
@@ -540,6 +540,7 @@ async function verifyNativeProjection(
     })
     .from(appointment);
   const services = await tx.select(archivedServiceColumns).from(appointmentService);
+  if (acceptReviewedPrices) await verifyImportedPriceReviews(tx, services);
   const servicePositions = new Map(
     services.map((row) => [`${row.appointmentId}/${row.position}`, row.id]),
   );
@@ -605,7 +606,7 @@ async function verifyNativeProjection(
         row.processingStartMinutes !== null ||
         row.processingMinutes !== null ||
         row.priceCents !== expected.priceCents ||
-        row.reviewedPriceCents !== null ||
+        (!acceptReviewedPrices && row.reviewedPriceCents !== null) ||
         (preparedCopy && (row.priceType !== "fixed" || row.peakSurchargeCents !== null)) ||
         row.sourceUnpriced !== (expected.sourceUnpriced === true) ||
         row.currency !== expected.currency
@@ -838,12 +839,10 @@ export async function inspectNativeBooksy(
       const base = await verifyBooksyProjection(tx, model.base, { candidate: true });
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
-      const servicePositions = await verifyNativeProjection(
-        tx,
-        plan,
-        capacity,
-        options.preparedCopy,
-      );
+      const servicePositions = await verifyNativeProjection(tx, plan, capacity, {
+        preparedCopy: options.preparedCopy,
+        acceptReviewedPrices: options.preparedCopy && options.billingReview,
+      });
       if (options.paymentEvidence || options.preparedCopy || options.billingReview)
         await verifyNativePaymentEvidence(tx, plan);
       const waitlist = await planBooksyWaitlist(tx, model);
