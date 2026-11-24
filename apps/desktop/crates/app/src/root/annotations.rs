@@ -139,6 +139,12 @@ impl NoteDraft {
         })
     }
 
+    fn needs_current_assignment(&self, appointment: &Appointment) -> bool {
+        self.preference_edited
+            && self.requested
+            && self.notes.appointment_version != Some(appointment.version)
+    }
+
     fn receive(&mut self, notes: AppointmentAnnotations, cx: &mut Context<Root>) {
         if Self::context_revision(&notes, self.position) < self.revision() {
             return;
@@ -165,6 +171,12 @@ impl NoteDraft {
                     .map(|line| note_field(line, false, cx))
                     .collect();
             }
+        }
+        if self.preference_edited
+            && self.requested == self.saved_requested()
+            && (!self.requested || self.saved_preference() == Some(self.reviewed_staff.as_str()))
+        {
+            self.preference_edited = false;
         }
         if !self.preference_edited {
             self.original_requested = self.saved_requested();
@@ -194,6 +206,18 @@ pub(super) fn note_field(text: &str, multiline: bool, cx: &mut Context<Root>) ->
 }
 
 impl Root {
+    fn editable_service_appointment(&self) -> Option<Appointment> {
+        let Overlay::Details(details) = &self.overlay else {
+            return None;
+        };
+        self.svc
+            .store
+            .appointment(&details.id)
+            .ok()
+            .flatten()
+            .filter(|appointment| self.can_edit_staff_calendar(&appointment.staff_id))
+    }
+
     pub(super) fn refresh_open_annotations(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
         if force_refresh
             && let Overlay::Details(details) = &mut self.overlay
@@ -266,6 +290,9 @@ impl Root {
     }
 
     fn edit_service_annotations(&mut self, position: usize, cx: &mut Context<Self>) {
+        let Some(appointment) = self.editable_service_appointment() else {
+            return;
+        };
         let Overlay::Details(details) = &mut self.overlay else {
             return;
         };
@@ -279,17 +306,6 @@ impl Root {
             return;
         };
         if !can_edit_service_annotations(notes, &self.time_off_scope) {
-            return;
-        }
-        let Ok(Some(appointment)) = self.svc.store.appointment(&details.id) else {
-            return;
-        };
-        if !self.calendar_edits_allowed
-            || !ops::calendar_scope_permits_edit(
-                self.calendar_scope.as_deref(),
-                Some(&appointment.staff_id),
-            )
-        {
             return;
         }
         let row = notes
@@ -336,6 +352,9 @@ impl Root {
     }
 
     fn save_service_annotations(&mut self, cx: &mut Context<Self>) {
+        let Some(appointment) = self.editable_service_appointment() else {
+            return;
+        };
         let transport = self
             .svc
             .transport()
@@ -369,18 +388,8 @@ impl Root {
             return;
         };
         let internal_note = draft.text(cx);
-        let Ok(Some(appointment)) = self.svc.store.appointment(&details.id) else {
-            return;
-        };
-        if !self.calendar_edits_allowed
-            || !ops::calendar_scope_permits_edit(
-                self.calendar_scope.as_deref(),
-                Some(&appointment.staff_id),
-            )
-            || draft.awaiting_review(&internal_note, &appointment.staff_id)
-            || (draft.preference_edited
-                && draft.requested
-                && draft.notes.appointment_version != Some(appointment.version))
+        if draft.awaiting_review(&internal_note, &appointment.staff_id)
+            || draft.needs_current_assignment(&appointment)
         {
             return;
         }
@@ -433,7 +442,6 @@ impl Root {
                     }
                     Ok(None) => {
                         draft.rejected = Some(attempted);
-                        draft.error = Some(Key::AppointmentNoteRefreshRequired);
                         this.open_annotations(cx);
                     }
                     Err(_) => draft.error = Some(Key::InternalNoteSaveFailed),
@@ -442,6 +450,35 @@ impl Root {
             });
         })
         .detach();
+    }
+
+    fn cancel_service_annotations(&mut self, cx: &mut Context<Self>) {
+        let Overlay::Details(details) = &mut self.overlay else {
+            return;
+        };
+        if !matches!(&details.annotations, Some(Annotations::Editing(draft)) if draft.pending.is_none())
+        {
+            return;
+        }
+        let Some(Annotations::Editing(draft)) = details.annotations.take() else {
+            return;
+        };
+        if let Some(request) = draft.refreshing {
+            details.annotations = Some(Annotations::Loading {
+                request,
+                previous: Some(draft.notes),
+            });
+        } else {
+            details.annotations = Some(Annotations::Ready(draft.notes));
+            if self.status.connectivity != Connectivity::Offline
+                && (draft.rejected.is_some() || draft.error == Some(Key::InternalNoteSaveFailed))
+            {
+                self.open_annotations(cx);
+            } else {
+                self.refresh_open_annotations(false, cx);
+            }
+        }
+        cx.notify();
     }
 
     pub(super) fn open_annotations(&mut self, cx: &mut Context<Self>) {
@@ -738,9 +775,7 @@ impl Root {
             && can_edit_service_annotations(&draft.notes, &self.time_off_scope);
         let text = draft.text(cx);
         let review_required = draft.awaiting_review(&text, &appointment.staff_id);
-        let waiting_for_assignment = draft.preference_edited
-            && draft.requested
-            && draft.notes.appointment_version != Some(appointment.version);
+        let waiting_for_assignment = draft.needs_current_assignment(appointment);
         let can_review = can_edit
             && draft.refreshing.is_none()
             && draft.rejected.is_none()
@@ -759,20 +794,23 @@ impl Root {
                 })
                 .when(
                     draft.rejected.is_some() || waiting_for_assignment,
+                    |panel| panel.child(self.t(Key::AppointmentNoteRefreshRequired)),
+                )
+                .when(
+                    draft.refreshing.is_none()
+                        && (draft.rejected.is_some()
+                            || waiting_for_assignment
+                            || draft.error == Some(Key::InternalNoteSaveFailed)),
                     |panel| {
-                        panel
-                            .child(self.t(Key::AppointmentNoteRefreshRequired))
-                            .when(draft.refreshing.is_none(), |row| {
-                                row.child(self.button(
-                                    "refresh-service-note",
-                                    self.t(Key::AppointmentAnnotationsRetry),
-                                    Kind::Ghost,
-                                    cx.listener(|this, _, _, cx| {
-                                        this.svc.wake(Wake::Manual);
-                                        this.open_annotations(cx);
-                                    }),
-                                ))
-                            })
+                        panel.child(self.button(
+                            "refresh-service-note",
+                            self.t(Key::AppointmentAnnotationsRetry),
+                            Kind::Ghost,
+                            cx.listener(|this, _, _, cx| {
+                                this.svc.wake(Wake::Manual);
+                                this.open_annotations(cx);
+                            }),
+                        ))
                     },
                 )
                 .when(review_required, |panel| {
@@ -977,19 +1015,7 @@ impl Root {
                     "cancel-note-edit",
                     self.t(Key::Cancel),
                     Kind::Ghost,
-                    cx.listener(|this, _, _, cx| {
-                        if let Overlay::Details(details) = &mut this.overlay
-                            && let Some(Annotations::Editing(draft)) = details.annotations.take()
-                        {
-                            details.annotations = Some(Annotations::Ready(draft.notes));
-                            if draft.rejected.is_some() {
-                                this.open_annotations(cx);
-                            } else {
-                                this.refresh_open_annotations(false, cx);
-                            }
-                            cx.notify();
-                        }
-                    }),
+                    cx.listener(|this, _, _, cx| this.cancel_service_annotations(cx)),
                 ))
                 .when(draft.rejected.is_none(), |actions| {
                     actions.child(
@@ -1075,6 +1101,14 @@ mod tests {
             assert_eq!(payload.version, 2);
             assert_eq!(payload.requested, None);
             assert_eq!(payload.internal_note, "Local draft");
+            let staff = draft.reviewed_staff.clone();
+            draft.requested = false;
+            draft.preference_edited = true;
+            draft.receive(snapshot(5, 3, None, "Newest saved note"), cx);
+            assert!(!draft.preference_edited);
+            draft.receive(snapshot(6, 4, Some(&staff), "Newest saved note"), cx);
+            assert!(draft.requested);
+            assert_eq!(draft.update(draft.text(cx)).unwrap().requested, None);
         });
     }
 
@@ -1133,6 +1167,11 @@ mod tests {
                     .unwrap();
                 root.refresh_open_annotations(false, cx);
                 assert_eq!(root.draft().unwrap().text(cx), "Unsaved private draft");
+                let request = root.draft().unwrap().refreshing.clone().unwrap();
+                root.cancel_service_annotations(cx);
+                assert!(matches!(&root.overlay, Overlay::Details(details)
+                    if matches!(&details.annotations, Some(Annotations::Loading { request: current, previous: Some(_) })
+                        if Arc::ptr_eq(current, &request))));
 
                 ready(root);
                 root.refresh_open_annotations(false, cx);
