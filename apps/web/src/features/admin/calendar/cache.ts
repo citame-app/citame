@@ -22,16 +22,24 @@ export function patchAppointment(
   };
 }
 
-/** Applies an `Appointment` returned by the API, keeping the joined client and service names. */
+function keepsLatestRevision(current: CalendarAppointment, saved: Appointment): boolean {
+  return current.version <= saved.version;
+}
+
+/** Merges a confirmed write without losing the joined calendar fields or a newer server version. */
+export function mergeCalendarAppointment(
+  current: CalendarAppointment,
+  saved: Appointment,
+): CalendarAppointment {
+  return keepsLatestRevision(current, saved) ? { ...current, ...saved } : current;
+}
+
 export function mergeAppointment(
   calendar: CalendarResponse,
   appointment: Appointment,
 ): CalendarResponse {
-  return patchAppointment(
-    calendar,
-    appointment.id,
-    appointment,
-    (current) => current.version <= appointment.version,
+  return patchAppointment(calendar, appointment.id, appointment, (current) =>
+    keepsLatestRevision(current, appointment),
   );
 }
 

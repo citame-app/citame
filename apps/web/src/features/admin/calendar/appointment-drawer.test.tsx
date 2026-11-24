@@ -38,17 +38,29 @@ const appointment: CalendarAppointment = {
 };
 
 let patches: unknown[];
+let pendingPatch: Promise<void> | undefined;
 let patchReply: { status: number; body: unknown };
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 beforeEach(() => {
   patches = [];
+  pendingPatch = undefined;
   patchReply = { status: 200, body: { ...appointment, version: 4 } };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === `/api/appointments/${appointment.id}/context`)
-      return json({ rows: [], customerComment: null });
+    if (url.pathname === `/api/appointments/${appointment.id}/context`) {
+      if (init?.method === "PATCH") {
+        const input = JSON.parse(String(init.body));
+        patches.push(input);
+        return json({
+          rows: [],
+          customerComment: null,
+          appointmentVersion: input.appointmentVersion + 1,
+        });
+      }
+      return json({ rows: [], customerComment: null, appointmentVersion: appointment.version });
+    }
     if (url.pathname === `/api/admin/clients/${CLIENT}`) {
       return json({
         client: {
@@ -88,6 +100,7 @@ beforeEach(() => {
     }
     if (init?.method === "PATCH") {
       patches.push(JSON.parse(String(init.body)));
+      if (pendingPatch) await pendingPatch;
       return json(patchReply.body, patchReply.status);
     }
     return json({}, 404);
@@ -110,12 +123,16 @@ const open = (props: Partial<Parameters<typeof AppointmentDrawer>[0]> = {}) =>
     />,
   );
 
-function LiveUpdateHarness() {
+function LiveUpdateHarness({ remoteNotes = appointment.notes }: { remoteNotes?: string | null }) {
   const [version, setVersion] = useState(appointment.version);
   return (
     <>
       <AppointmentDrawer
-        appointment={{ ...appointment, version }}
+        appointment={{
+          ...appointment,
+          version,
+          notes: version === 4 ? remoteNotes : appointment.notes,
+        }}
         staffName="Ana"
         onClose={() => {}}
         role="owner"
@@ -185,6 +202,57 @@ describe("AppointmentDrawer", () => {
     );
   });
 
+  test("rescheduling and service annotation saves wait for the pending note save", async () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    pendingPatch = promise;
+    try {
+      open();
+      fireEvent.change(await screen.findByLabelText("Appointment notes"), {
+        target: { value: "Prefers fragrance-free products" },
+      });
+      fireEvent.change(await screen.findByLabelText("Internal notes"), {
+        target: { value: "Confirm preferred styling" },
+      });
+      const serviceSave = () =>
+        screen.getByRole<HTMLButtonElement>("button", { name: "Save service details" });
+      expect(serviceSave().disabled).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+      const move = () => screen.getByRole<HTMLButtonElement>("button", { name: "Reschedule" });
+      await waitFor(() => {
+        expect(move().disabled).toBe(true);
+        expect(serviceSave().disabled).toBe(true);
+      });
+      expect(patches).toEqual([{ version: 3, notes: "Prefers fragrance-free products" }]);
+      resolve();
+      await waitFor(() => {
+        expect(move().disabled).toBe(false);
+        expect(serviceSave().disabled).toBe(false);
+      });
+      expect(screen.getByLabelText("Internal notes")).toHaveValue("Confirm preferred styling");
+    } finally {
+      resolve();
+    }
+  });
+
+  test("an unchanged service draft can use the newer appointment revision", async () => {
+    renderApp(<LiveUpdateHarness />);
+    const note = await screen.findByLabelText("Internal notes");
+    fireEvent.change(note, { target: { value: "Confirm preferred styling" } });
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(note).toHaveValue("Confirm preferred styling");
+    fireEvent.click(screen.getByRole("button", { name: "Save service details" }));
+    await waitFor(() =>
+      expect(patches).toEqual([
+        {
+          appointmentVersion: 4,
+          servicePosition: 0,
+          version: 0,
+          internalNote: "Confirm preferred styling",
+        },
+      ]),
+    );
+  });
+
   test("a version conflict explains itself and offers to reload", async () => {
     patchReply = { status: 409, body: { error: { code: "version_conflict", message: "stale" } } };
     const onReload = mock();
@@ -197,12 +265,42 @@ describe("AppointmentDrawer", () => {
     expect(onReload).toHaveBeenCalledTimes(1);
   });
 
+  test("a fresh revision clears the reload prompt while preserving notes", async () => {
+    patchReply = { status: 409, body: { error: { code: "version_conflict", message: "stale" } } };
+    renderApp(<LiveUpdateHarness />);
+    const notes = await screen.findByLabelText("Appointment notes");
+    fireEvent.change(notes, { target: { value: "Draft after conflict" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("button", { name: "Reload latest" })).toBeVisible();
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(notes).toHaveValue("Draft after conflict");
+    expect(screen.getByRole("button", { name: "Save notes" })).toBeEnabled();
+  });
+
   test("an unrelated live update keeps the draft and allows it to save on the latest revision", async () => {
     renderApp(<LiveUpdateHarness />);
     const notes = await screen.findByLabelText("Appointment notes");
     fireEvent.change(notes, { target: { value: "My appointment draft" } });
     fireEvent.click(screen.getByText("Receive remote calendar update"));
     expect(notes).toHaveValue("My appointment draft");
+    fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
+    await waitFor(() => expect(patches).toEqual([{ version: 4, notes: "My appointment draft" }]));
+  });
+
+  test("a newer note stays visible while the operator reviews a preserved draft", async () => {
+    renderApp(<LiveUpdateHarness remoteNotes="Note saved in Desktop" />);
+    const notes = await screen.findByLabelText("Appointment notes");
+    fireEvent.change(notes, { target: { value: "My appointment draft" } });
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(notes).toHaveValue("My appointment draft");
+    expect(screen.getByText("Note saved in Desktop")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save notes" })).toBeDisabled();
+    expect(patches).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Keep my draft" }));
+    expect(notes).toHaveValue("My appointment draft");
+    expect(patches).toHaveLength(0);
     fireEvent.click(screen.getByRole("button", { name: "Save notes" }));
     await waitFor(() => expect(patches).toEqual([{ version: 4, notes: "My appointment draft" }]));
   });

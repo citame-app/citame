@@ -1,5 +1,6 @@
 import type { SyncEntity, SyncLiveView } from "@sob/contracts";
 import {
+  calendarEntryQueryKey,
   calendarResourceQueryKey,
   inventoryNumberingQueryKey,
   teamShiftWeekKey,
@@ -13,7 +14,7 @@ import {
   stampProgramQueryKey,
 } from "~/lib/api/reward-endpoints";
 
-const calendar = [["admin", "calendar"], ["availability"]] as const;
+const calendar = [["admin", "calendar"], calendarEntryQueryKey(), ["availability"]] as const;
 const report = ["admin", "report"] as const;
 const staffSchedule = [
   ...calendar,
