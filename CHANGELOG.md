@@ -8,6 +8,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Business profiles retain multiline descriptions up to 2,000 characters in Web and Desktop.
+
 - Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
 
 - Web and Desktop can issue gift cards for selected treatments and show the terms on vouchers and when checking balances. Checkout verifies the eligible amount even for mixed payments.

@@ -232,7 +232,7 @@ fn description_line(value: &str, cx: &mut Context<Root>) -> Entity<TextField> {
                     lines.iter().map(|line| description_line(line, cx)),
                 );
             }
-            FieldEvent::PasteLines(_) | FieldEvent::PasteTooLong => {
+            FieldEvent::PasteLines(_) | FieldEvent::PasteTooLong | FieldEvent::InvalidPaste => {
                 desk.notice = Some(Key::CombinationInvalid);
             }
             FieldEvent::Changed => {}
