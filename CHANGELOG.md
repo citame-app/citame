@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+The web calendar inbox refreshes during the first load when a new notice arrives. It clears saved notices and counts after access changes and keeps archive results scoped to the account that submitted them.
+
 Desktop keeps appointment creation, moves, cancellations and attendance changes inside the account's writable calendars. A read-only agenda still opens appointment details.
 
 Reviewed client identity links now join duplicate salon profiles while preserving original history, balances, expiry dates and permissions. The EN/ES review supports uncertain-request recovery; search, CSV review, private history and offline pickers recognize surviving identities. [Operation and limits](docs/client-merging.md).

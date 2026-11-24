@@ -77,6 +77,7 @@ export function CalendarInbox({
       >
         {open && (
           <InboxSections
+            key={userId}
             userId={userId}
             accessScope={accessScope}
             rewardAccess={rewardAccess}
@@ -151,7 +152,7 @@ function InboxContents({
     mutationFn: (request: { ids: string[]; userId: string; archived: boolean }) =>
       api().calendarInbox.archive(request.ids, request.archived),
     onSuccess: (_, request) => {
-      if (request.userId === userId) setPage(1);
+      setPage(1);
       void queries.invalidateQueries({ queryKey: calendarInboxUserKey(request.userId) });
     },
     onError: async (error, request) => {
