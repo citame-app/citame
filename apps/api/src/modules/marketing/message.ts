@@ -1,3 +1,9 @@
+import {
+  type CampaignEmailLayout,
+  campaignEmailLayoutSchema,
+  campaignEmailLayoutText,
+} from "@sob/contracts";
+
 const escapeHtml = (text: string) =>
   text.replace(
     /[&<>"']/g,
@@ -5,9 +11,39 @@ const escapeHtml = (text: string) =>
       ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] ?? char,
   );
 
+function renderEmailLayout(
+  layout: CampaignEmailLayout,
+  renderText: (text: string) => string,
+  replace: (text: string) => string,
+  bookingHref: string,
+) {
+  const preheader = layout.preheader
+    ? `<div aria-hidden="true" style="display:none;max-height:0;overflow:hidden">${escapeHtml(replace(layout.preheader))}</div>`
+    : "";
+  const header = layout.heading
+    ? `<header style="padding:24px;background:#f8edf2;color:#321223"><h1 style="margin:0;font-size:26px">${renderText(layout.heading)}</h1></header>`
+    : "";
+  const blocks = layout.blocks.map((block) => {
+    if (block.kind === "heading")
+      return `<h2 style="font-size:20px">${renderText(block.text)}</h2>`;
+    if (block.kind === "booking")
+      return `<p><a href="${bookingHref}" style="display:inline-block;padding:12px 18px;background:#70264d;color:#fff;border-radius:6px">${escapeHtml(replace(block.label))}</a></p>`;
+    const text = renderText(block.text);
+    const content =
+      block.emphasis === "strong"
+        ? `<strong>${text}</strong>`
+        : block.emphasis === "italic"
+          ? `<em>${text}</em>`
+          : text;
+    return `<p>${content}</p>`;
+  });
+  return `${preheader}<div style="max-width:600px;margin:auto;font:16px/1.5 Arial,sans-serif">${header}<div style="padding:16px 24px">${blocks.join("")}</div></div>`;
+}
+
 export function renderCampaignMessage(input: {
   subject: string;
   emailBody: string;
+  emailLayout?: unknown;
   smsBody: string;
   name: string;
   firstName?: string;
@@ -24,12 +60,18 @@ export function renderCampaignMessage(input: {
           ? input.salonName
           : input.bookingUrl,
     );
-  const body = replace(input.emailBody);
+  const layout =
+    input.emailLayout == null ? null : campaignEmailLayoutSchema.parse(input.emailLayout);
+  const body = replace(layout ? campaignEmailLayoutText(layout) : input.emailBody);
   const bookingHref = escapeHtml(input.bookingUrl);
-  const htmlBody = input.emailBody
-    .split("{{booking_url}}")
-    .map((part) => escapeHtml(replace(part)).replace(/\n/g, "<br>"))
-    .join(`<a href="${bookingHref}">${bookingHref}</a>`);
+  const renderText = (text: string) =>
+    text
+      .split("{{booking_url}}")
+      .map((part) => escapeHtml(replace(part)).replace(/\n/g, "<br>"))
+      .join(`<a href="${bookingHref}">${bookingHref}</a>`);
+  const htmlBody = layout
+    ? renderEmailLayout(layout, renderText, replace, bookingHref)
+    : `<p>${renderText(input.emailBody)}</p>`;
   const reviewText = input.reviewUrl ? `\n\n${input.reviewUrl}` : "";
   const reviewLink = input.reviewUrl
     ? `<p><a href="${escapeHtml(input.reviewUrl)}">${escapeHtml(input.reviewUrl)}</a></p>`
@@ -41,7 +83,7 @@ export function renderCampaignMessage(input: {
   return {
     subject: replace(input.subject).replace(/[\r\n]/g, " "),
     text: `${body}${reviewText}\n\nUnsubscribe / Darse de baja: ${unsubscribeText}`,
-    html: `<!doctype html><html><body><p>${htmlBody}</p>${reviewLink}<p>${unsubscribe}</p></body></html>`,
+    html: `<!doctype html><html><body>${htmlBody}${reviewLink}<p>${unsubscribe}</p></body></html>`,
     sms: `${replace(input.smsBody)}\n${unsubscribeText}`,
   };
 }

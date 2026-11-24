@@ -542,7 +542,14 @@ impl Root {
                         }
                         None
                     }
-                    Ok(Loaded::Written(campaign)) => {
+                    Ok(Loaded::Written(mut campaign)) => {
+                        if !saving
+                            && let Some((current, _)) = &desk.detail
+                            && current.id == campaign.id
+                            && desk.generation == generation
+                        {
+                            campaign.email_layout.clone_from(&current.email_layout);
+                        }
                         desk.editor = None;
                         desk.action = None;
                         desk.uncertain = false;
@@ -871,6 +878,7 @@ impl Root {
                 .child(
                     div()
                         .id("marketing-body")
+                        .debug_selector(|| "marketing-body".into())
                         .min_h_0()
                         .overflow_y_scroll()
                         .child(body),
@@ -1264,16 +1272,19 @@ impl Root {
             .when_some(campaign.scheduled_for, |panel, date| {
                 panel.child(self.date_time_label(date))
             })
-            .children(
-                [
-                    campaign.subject.as_str(),
-                    campaign.email_body.as_str(),
-                    campaign.sms_body.as_str(),
-                ]
-                .into_iter()
-                .filter(|text| !text.is_empty())
-                .map(|text| div().text_sm().child(text.to_owned())),
+            .when(!campaign.subject.is_empty(), |panel| {
+                panel.child(div().text_sm().child(campaign.subject.clone()))
+            })
+            .when_some(campaign.email_layout.as_ref(), |panel, layout| {
+                panel.child(self.render_email_layout_preview(layout))
+            })
+            .when(
+                campaign.email_layout.is_none() && !campaign.email_body.is_empty(),
+                |panel| panel.child(div().text_sm().child(campaign.email_body.clone())),
             )
+            .when(!campaign.sms_body.is_empty(), |panel| {
+                panel.child(div().text_sm().child(campaign.sms_body.clone()))
+            })
             .when(!campaign.audience.tags.is_empty(), |panel| {
                 panel.child(campaign.audience.tags.join(", "))
             })

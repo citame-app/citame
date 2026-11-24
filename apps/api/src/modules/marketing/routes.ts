@@ -2,6 +2,7 @@ import {
   campaignCancelSchema,
   campaignComparisonQuerySchema,
   campaignCreateSchema,
+  campaignDetailQuerySchema,
   campaignQuerySchema,
   campaignQueueSchema,
   campaignTestEmailReceiptSchema,
@@ -93,7 +94,14 @@ export function marketingAdminRoutes(deps: AppDeps, { emailTests = false } = {})
       return c.json(await compareCampaigns(deps.db, ids, c.get("principal")));
     })
     .get("/campaigns/:id", async (c) =>
-      c.json(await getCampaign(deps.db, id(c.req.param("id")), c.get("principal"))),
+      c.json(
+        await getCampaign(
+          deps.db,
+          id(c.req.param("id")),
+          c.get("principal"),
+          parseOrThrow(campaignDetailQuerySchema, c.req.query()).emailLayout === "1",
+        ),
+      ),
     )
     .patch("/campaigns/:id", async (c) =>
       c.json(

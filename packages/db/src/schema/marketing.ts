@@ -47,6 +47,7 @@ export const marketingCampaign = pgTable(
     channel: text().$type<"email" | "sms" | "optimized">().notNull(),
     subject: text().notNull().default(""),
     emailBody: text().notNull().default(""),
+    emailLayout: bunJsonb<Record<string, unknown>>(),
     smsBody: text().notNull().default(""),
     audience: bunJsonb<{
       tags: string[];
@@ -86,6 +87,10 @@ export const marketingCampaign = pgTable(
           else false end
         else ${t.purpose} in ('campaign','review_request') and not (${t.audience} ? 'selectedClientIds')
         end`,
+    ),
+    check(
+      "marketing_campaign_email_layout_valid",
+      sql`${t.emailLayout} is null or (${t.channel} <> 'sms' and jsonb_typeof(${t.emailLayout}) = 'object')`,
     ),
     check(
       "marketing_campaign_valid",
