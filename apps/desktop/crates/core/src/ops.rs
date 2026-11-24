@@ -767,18 +767,14 @@ pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
 pub fn appointment_outcome_options(
     appointment: &crate::model::Appointment,
     now: DateTime<Utc>,
-    calendar_scope: Option<&str>,
+    can_correct: bool,
 ) -> &'static [AppointmentStatus] {
     match appointment.status {
         AppointmentStatus::Booked if appointment.starts_at <= now => {
             &[AppointmentStatus::Completed, AppointmentStatus::NoShow]
         }
-        AppointmentStatus::Completed if calendar_scope == Some("all") => {
-            &[AppointmentStatus::NoShow]
-        }
-        AppointmentStatus::NoShow if calendar_scope == Some("all") => {
-            &[AppointmentStatus::Completed]
-        }
+        AppointmentStatus::Completed if can_correct => &[AppointmentStatus::NoShow],
+        AppointmentStatus::NoShow if can_correct => &[AppointmentStatus::Completed],
         _ => &[],
     }
 }
@@ -798,7 +794,9 @@ pub fn set_appointment_status(
     }
     let current = writable_appointment(store, id)?;
     let scope = store.get_meta("calendar_scope")?;
-    if !appointment_outcome_options(&current, now, scope.as_deref()).contains(&status) {
+    if !appointment_outcome_options(&current, now, scope.as_deref() == Some("all"))
+        .contains(&status)
+    {
         return Err(match current.status {
             AppointmentStatus::Booked => CoreError::Invalid(
                 "an outcome can only be recorded once the appointment starts".into(),
