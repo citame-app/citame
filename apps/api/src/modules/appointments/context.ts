@@ -27,6 +27,7 @@ import {
   booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPaymentReviews,
+  invalidateImportedUnpaidPayments,
   reopenImportedPartialPayments,
 } from "../commerce/appointment-billing";
 import { saleRow } from "../commerce/service";
@@ -299,7 +300,7 @@ export async function calendarBadges(
   return result;
 }
 const digest = (input: unknown) => createHash("sha256").update(JSON.stringify(input)).digest("hex");
-function sameContext(
+function sameSourceAnnotations(
   a: typeof appointmentContext.$inferSelect | undefined,
   b: BooksyContextImport["rows"][number],
 ) {
@@ -309,10 +310,14 @@ function sameContext(
       a.sourceRef === b.sourceRef &&
       a.requestedStaffId === b.requestedStaffId &&
       a.internalNote === b.internalNote &&
-      a.customerComment === b.customerComment &&
-      a.invoiced === b.invoiced &&
-      a.paid === b.paid,
+      a.customerComment === b.customerComment,
   );
+}
+function sameContext(
+  a: typeof appointmentContext.$inferSelect | undefined,
+  b: BooksyContextImport["rows"][number],
+) {
+  return sameSourceAnnotations(a, b) && a?.invoiced === b.invoiced && a?.paid === b.paid;
 }
 async function prepareImport(
   db: Connection,
@@ -347,24 +352,52 @@ async function prepareImport(
   const bySource = new Map(
     contexts.filter((c) => c.source === "booksy" && c.sourceRef).map((c) => [c.sourceRef, c]),
   );
-  const positions = new Set(snapshots.map((s) => `${s.appointmentId}:${s.position}`));
+  const services = new Map(snapshots.map((s) => [`${s.appointmentId}:${s.position}`, s.name]));
   const staffIds = new Set(staff.map((s) => s.id));
-  const marked = input.rows.flatMap((row) =>
-    row.paymentEvidenceChanged ? [row.appointmentId] : [],
+  const financialChanges = new Set<string>();
+  for (const r of input.rows) {
+    const current = byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
+    if (
+      r.paymentEvidenceChanged ||
+      current?.source !== "booksy" ||
+      current.sourceRef !== r.sourceRef ||
+      current.paid !== r.paid ||
+      current.invoiced !== r.invoiced
+    )
+      financialChanges.add(r.appointmentId);
+  }
+  const affected = [...financialChanges];
+  const [partial, unpaid, settled] = await Promise.all([
+    importedPartialPaymentReviews(db, affected),
+    booksyPaymentReviews(db, affected),
+    externallySettledAppointments(db, affected),
+  ]);
+  const reopenPartial = [...partial].flatMap(([id, review]) => (review.current ? [id] : []));
+  const reopenUnpaid = [...unpaid].flatMap(([id, state]) =>
+    state === "confirmed_unpaid" && !partial.has(id) && !settled.has(id) ? [id] : [],
   );
-  const reopen = new Set(
-    [...(await importedPartialPaymentReviews(db, marked))].flatMap(([id, review]) =>
-      review.current ? [id] : [],
-    ),
-  );
+  const reopen = new Set([...reopenPartial, ...reopenUnpaid]);
+  const items = [];
   for (const r of input.rows) {
     const key = `${r.appointmentId}:${r.servicePosition}`;
     const visit = byId.get(r.appointmentId);
     const current = byPosition.get(key);
     const linked = bySource.get(r.sourceRef);
-    if (visit && visit.startsAt <= now)
-      throw new DomainError("validation_error", "Only future appointments can be imported");
-    if (!visit || !positions.has(key) || (r.requestedStaffId && !staffIds.has(r.requestedStaffId)))
+    const serviceName = services.get(key);
+    if (
+      visit &&
+      visit.startsAt <= now &&
+      (!r.paymentEvidenceChanged || !sameSourceAnnotations(current, r))
+    )
+      throw new DomainError(
+        "validation_error",
+        "Past appointments accept only payment evidence corrections",
+      );
+    if (
+      !visit ||
+      serviceName === undefined ||
+      (r.requestedStaffId && !staffIds.has(r.requestedStaffId))
+    )
       throw new DomainError(
         "validation_error",
         "Explicit appointment, booked service and professional mappings are required",
@@ -377,33 +410,30 @@ async function prepareImport(
         "invalid_state",
         "This Booksy service is already mapped to another appointment",
       );
-    if (sameContext(current, r) && !(r.paymentEvidenceChanged && reopen.has(r.appointmentId)))
-      continue;
-    if (visit.version !== r.appointmentVersion || (current?.version ?? 0) !== r.contextVersion)
+    const unchanged =
+      sameContext(current, r) && !(r.paymentEvidenceChanged && reopen.has(r.appointmentId));
+    if (
+      !unchanged &&
+      (visit.version !== r.appointmentVersion || (current?.version ?? 0) !== r.contextVersion)
+    )
       throw conflict();
+    items.push({
+      appointmentId: r.appointmentId,
+      servicePosition: r.servicePosition,
+      sourceRef: r.sourceRef,
+      serviceName,
+      startsAt: visit.startsAt.toISOString(),
+      action: unchanged ? ("unchanged" as const) : current ? ("update" as const) : ("add" as const),
+    });
   }
   return {
     visits,
     byPosition,
     reopen,
+    reopenPartial,
+    reopenUnpaid,
     review: {
-      items: input.rows.map((r) => ({
-        appointmentId: r.appointmentId,
-        servicePosition: r.servicePosition,
-        sourceRef: r.sourceRef,
-        serviceName:
-          snapshots.find(
-            (s) => s.appointmentId === r.appointmentId && s.position === r.servicePosition,
-          )?.name ?? "",
-        startsAt: byId.get(r.appointmentId)!.startsAt.toISOString(),
-        action:
-          sameContext(byPosition.get(`${r.appointmentId}:${r.servicePosition}`), r) &&
-          !(r.paymentEvidenceChanged && reopen.has(r.appointmentId))
-            ? ("unchanged" as const)
-            : byPosition.has(`${r.appointmentId}:${r.servicePosition}`)
-              ? ("update" as const)
-              : ("add" as const),
-      })),
+      items,
       reviewHash: digest(input),
       appointments: ids.length,
       services: input.rows.length,
@@ -438,7 +468,6 @@ export async function importBooksyContext(
     await lockScheduling(tx);
     const prepared = await prepareImport(tx, input, principal, now);
     const changed = new Set(prepared.reopen);
-    const financialChanges = new Set<string>();
     for (const r of input.rows) {
       const current = prepared.byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
       if (sameContext(current, r)) continue;
@@ -449,23 +478,17 @@ export async function importBooksyContext(
         ...values
       } = r;
       if (current) {
-        const [updated] = await tx
+        await tx
           .update(appointmentContext)
           .set({ ...values, source: "booksy", version: current.version + 1, updatedAt: now })
-          .where(eq(appointmentContext.id, current.id))
-          .returning({ billingVersion: appointmentContext.billingVersion });
-        if (!updated || updated.billingVersion !== current.billingVersion)
-          financialChanges.add(r.appointmentId);
+          .where(eq(appointmentContext.id, current.id));
       } else {
         await tx.insert(appointmentContext).values({ ...values, source: "booksy", updatedAt: now });
-        financialChanges.add(r.appointmentId);
       }
       changed.add(r.appointmentId);
     }
-    await reopenImportedPartialPayments(tx, [...financialChanges], principal.userId, {
-      legacyOnly: true,
-    });
-    await reopenImportedPartialPayments(tx, [...prepared.reopen], principal.userId);
+    await reopenImportedPartialPayments(tx, prepared.reopenPartial, principal.userId);
+    await invalidateImportedUnpaidPayments(tx, prepared.reopenUnpaid);
     for (const visit of prepared.visits.filter((v) => changed.has(v.id))) {
       const updated = await tx
         .update(appointment)

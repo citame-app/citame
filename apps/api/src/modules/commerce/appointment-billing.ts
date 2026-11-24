@@ -22,7 +22,7 @@ import {
   checkoutRefund,
   type Database,
 } from "@sob/db";
-import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
@@ -38,6 +38,10 @@ const importedUnpaidAudit = "commerce.imported_unpaid_confirmed";
 const sourceBilling = and(
   eq(appointmentContext.source, "booksy"),
   or(eq(appointmentContext.paid, true), eq(appointmentContext.invoiced, true)),
+);
+const unverifiedSourcePayment = or(
+  isNull(appointmentContext.paid),
+  eq(appointmentContext.sourcePaymentUnverified, true),
 );
 
 /** Older clients accept only the original hold reasons and must still disable collection. */
@@ -74,12 +78,7 @@ async function booksyPaymentEvidence(
       and(
         inArray(appointmentContext.appointmentId, ids),
         eq(appointmentContext.source, "booksy"),
-        unknownOnly
-          ? or(
-              isNull(appointmentContext.paid),
-              eq(appointmentContext.sourcePaymentUnverified, true),
-            )
-          : undefined,
+        unknownOnly ? unverifiedSourcePayment : undefined,
       ),
     )
     .orderBy(asc(appointmentContext.id));
@@ -120,6 +119,21 @@ export async function booksyPaymentReviews(db: Pick<Database, "select">, ids: st
     }
   }
   return states;
+}
+
+/** Retain prior unpaid confirmations in history while invalidating their evidence snapshot. */
+export async function invalidateImportedUnpaidPayments(tx: Tx, ids: string[]) {
+  if (!ids.length) return;
+  await tx
+    .update(appointmentContext)
+    .set({ billingVersion: sql`${appointmentContext.billingVersion} + 1` })
+    .where(
+      and(
+        inArray(appointmentContext.appointmentId, ids),
+        eq(appointmentContext.source, "booksy"),
+        unverifiedSourcePayment,
+      ),
+    );
 }
 
 export async function externallySettledAppointments(db: Pick<Database, "select">, ids: string[]) {
@@ -421,6 +435,15 @@ async function assertNativeCollectionReconciled(
   return receipt?.id;
 }
 
+async function lockActiveAppointmentCheckout(tx: Tx, id: string) {
+  const [receipt] = await tx
+    .select({ id: checkout.id })
+    .from(checkout)
+    .where(and(eq(checkout.appointmentId, id), activeAppointmentCheckout))
+    .for("update");
+  return receipt?.id;
+}
+
 /** Acknowledges a full settlement in the source system without generating a new sale. */
 export async function confirmImportedSettlement(
   db: Database,
@@ -431,6 +454,7 @@ export async function confirmImportedSettlement(
 ) {
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
+    const lockedCheckoutId = await lockActiveAppointmentCheckout(tx, id);
     await lockScheduling(tx);
     const [booking] = await tx
       .select()
@@ -469,6 +493,8 @@ export async function confirmImportedSettlement(
     const refundedCheckoutId = await assertNativeCollectionReconciled(tx, id, {
       allowFullyRefunded: true,
     });
+    if (refundedCheckoutId && refundedCheckoutId !== lockedCheckoutId)
+      throw new DomainError("version_conflict", "Reload the checkout before reconciling");
     const lines = await tx
       .select()
       .from(appointmentService)
@@ -622,11 +648,7 @@ export async function confirmImportedPartialPayment(
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
     // Payment and refund operations lock the receipt before scheduling.
-    const [locked] = await tx
-      .select({ id: checkout.id })
-      .from(checkout)
-      .where(and(eq(checkout.appointmentId, id), activeAppointmentCheckout))
-      .for("update");
+    const lockedCheckoutId = await lockActiveAppointmentCheckout(tx, id);
     await lockScheduling(tx);
     const [booking] = await tx
       .select()
@@ -665,7 +687,7 @@ export async function confirmImportedPartialPayment(
     };
     const evidence = await booksyPaymentEvidence(tx, [id]);
     if (refundedCheckoutId) {
-      if (refundedCheckoutId !== locked?.id)
+      if (refundedCheckoutId !== lockedCheckoutId)
         throw new DomainError("version_conflict", "Reload the checkout before reconciling");
       await tx
         .update(checkout)
