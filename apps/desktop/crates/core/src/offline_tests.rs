@@ -1203,6 +1203,12 @@ fn a_personal_calendar_rejects_reassigning_an_appointment_outside_its_scope() {
     assert!(store.outbox(10).unwrap().is_empty());
 
     let start = at("2026-03-09T17:00:00Z");
+    store.set_meta("time_off_scope", "none").unwrap();
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, Some(start), None),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+
     store.set_meta("viewer_edit_calendar", "0").unwrap();
     assert!(matches!(
         reschedule_appointment(&mut store, EXISTING, Some(start), None),

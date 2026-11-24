@@ -41,6 +41,8 @@ server audit trail.
 
 The response includes the current `clientDirectory` permission and `calendarScope` even when the cursor is already at the log head. `calendarScope` is `all`, `none`, or a staff ID. When either scope changes, the native client clears its previous mirror and cached views before pulling a new snapshot from zero. It keeps its outbox and conflict records. Older servers can omit these fields.
 
+`viewerEditCalendar` carries the current calendar edit permission, including on empty pulls. Desktop saves this decision and uses it separately from `calendarScope`, which controls visible appointments. A denied edit or a reassignment outside the visible scope cannot enter the local reschedule queue. Older servers can omit the permission. Desktop keeps the last explicit value when available and otherwise recognizes restricted personal calendars through `timeOffScope: "none"`. Cloud rechecks authorization during replay.
+
 `viewerRole` carries the current staff or owner role. A desktop profile with a different saved role returns to sign-in so it can open the replica for the new role. It keeps the previous profile’s pending edits. A server response denying sync also returns the app to sign-in. A network outage keeps the offline profile open.
 
 Linked Desktop devices load team photo metadata at `GET /admin/staff/portrait-directory`. Reads and uploads use `/admin/staff/:id/portrait`, and publication uses `/admin/staff/:id/portrait/publication`. The same-origin gateway forwards those paths to the authenticated API. The directory uses the staff permissions of the browser API, and `/admin/staff` remains the browser page on Cloud.

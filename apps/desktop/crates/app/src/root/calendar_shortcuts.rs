@@ -284,24 +284,38 @@ impl Root {
                             },
                         ))),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_none()
-                        .justify_between()
-                        .gap_3()
-                        .mt_3()
-                        .pt_3()
-                        .border_t_1()
-                        .border_color(theme::line())
-                        .child(self.t(Key::CalendarMoveFocusedAppointment))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(theme::muted())
-                                .child("Alt + ↑ ↓ ← →"),
-                        ),
-                ),
+                .when(self.calendar_edits_allowed, |body| {
+                    body.child(
+                        div()
+                            .flex()
+                            .flex_none()
+                            .flex_col()
+                            .gap_2()
+                            .pt_3()
+                            .border_t_1()
+                            .border_color(theme::line())
+                            .children(
+                                [
+                                    (Key::CalendarMoveFocusedAppointment, "Alt + ↑ ↓"),
+                                    (Key::CalendarMoveFocusedStaff, "Alt + ← →"),
+                                ]
+                                .into_iter()
+                                .map(|(label, keys)| {
+                                    div()
+                                        .flex()
+                                        .justify_between()
+                                        .gap_3()
+                                        .child(self.t(label))
+                                        .child(
+                                            div()
+                                                .flex_none()
+                                                .text_color(theme::muted())
+                                                .child(keys),
+                                        )
+                                }),
+                            ),
+                    )
+                }),
             px(560.).min((viewport.width - px(24.)).max(px(0.))),
             px(720.).min((viewport.height - px(24.)).max(px(0.))),
             None,

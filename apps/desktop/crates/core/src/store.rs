@@ -469,8 +469,13 @@ impl Store {
     }
 
     pub fn calendar_edits_allowed(&self) -> Result<bool> {
-        // Older backends omit the flag. Keep the server's last explicit decision when present.
-        Ok(self.get_meta("viewer_edit_calendar")?.as_deref() != Some("0"))
+        if let Some(value) = self.get_meta("viewer_edit_calendar")? {
+            return Ok(value == "1");
+        }
+        // Older pulls identify restricted personal calendars through their time-off scope.
+        let calendar_scope = self.get_meta("calendar_scope")?;
+        Ok(calendar_scope.as_deref() == Some("all")
+            || self.get_meta("time_off_scope")?.as_deref() != Some("none"))
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
