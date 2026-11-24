@@ -656,6 +656,114 @@ test.each(["current", "legacy"] as const)(
   },
 );
 
+test("the owner can verify a full Booksy payment after the Citame receipt is fully refunded", async () => {
+  await t.db.insert(appointmentContext).values({
+    appointmentId,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "synthetic-refunded-balance",
+    paid: true,
+  });
+  const base = `/admin/commerce/appointments/${appointmentId}`;
+  expect(
+    (
+      await call(owner, `${base}/imported-partial-payment`, "PUT", {
+        appointmentVersion: 1,
+        amountCents: 3500,
+        reference: "First Booksy receipt",
+      })
+    ).status,
+  ).toBe(200);
+  const sale = await checkout();
+  const paid = await pay(sale.id, "external_card", 6500);
+  expect(paid.status).toBe(201);
+  const { payment } = (await paid.json()) as { payment: { id: string } };
+  const change = {
+    rows: [
+      {
+        appointmentId,
+        appointmentVersion: 2,
+        contextVersion: 1,
+        servicePosition: 0,
+        sourceRef: "synthetic-refunded-balance",
+        requestedStaffId: null,
+        internalNote: null,
+        customerComment: null,
+        invoiced: null,
+        paid: true,
+        paymentEvidenceChanged: true,
+      },
+    ],
+  };
+  const preview = await call(owner, "/appointments/booksy-context/preview", "POST", change);
+  expect(preview.status, await preview.clone().text()).toBe(200);
+  const { reviewHash } = booksyContextReviewSchema.parse(await preview.json());
+  expect(
+    (
+      await call(owner, "/appointments/booksy-context/import", "POST", {
+        input: change,
+        reviewHash,
+      })
+    ).status,
+  ).toBe(200);
+  const command = {
+    appointmentVersion: 3,
+    amountCents: 10000,
+    reference: "Verified full Booksy receipt",
+  };
+  const verify = (who = owner) => call(who, `${base}/imported-settlement`, "PUT", command);
+  expect((await verify()).status).toBe(409);
+  const refund = (amountCents: number) =>
+    call(owner, `/admin/commerce/payments/${payment.id}/refunds`, "POST", {
+      amountCents,
+      reason: "Returned the Citame payment",
+      idempotencyKey: crypto.randomUUID(),
+    });
+  expect((await refund(2000)).status).toBe(201);
+  expect((await verify()).status).toBe(409);
+  expect((await refund(4500)).status).toBe(201);
+  const receiptPath = `/admin/commerce/checkouts/${sale.id}`;
+  const readReceipt = async () =>
+    checkoutSchema.parse(await (await call(owner, receiptPath)).json());
+  const before = await readReceipt();
+  expect(before).toMatchObject({ status: "refunded", paidCents: 6500, refundedCents: 6500 });
+  expect((await verify(staff)).status).toBe(403);
+  const [late] = await t.db
+    .insert(checkoutPayment)
+    .values({
+      checkoutId: sale.id,
+      method: "redsys_card",
+      amountCents: 6500,
+      status: "pending",
+      idempotencyKey: crypto.randomUUID(),
+      requestHash: "synthetic-late-payment",
+    })
+    .returning({ id: checkoutPayment.id });
+  if (!late) throw new Error("Expected a synthetic pending payment");
+  expect((await verify()).status).toBe(409);
+  await t.db
+    .update(checkoutPayment)
+    .set({ status: "failed" })
+    .where(eq(checkoutPayment.id, late.id));
+  const retained = await readReceipt();
+  const recorded = await verify();
+  expect(recorded.status, await recorded.clone().text()).toBe(200);
+  const saved = importedSettlementResponseSchema.parse(await recorded.json());
+  expect(saved).toMatchObject({ appointmentVersion: 4, settlement: { amountCents: 10000 } });
+  expect(await (await verify()).json()).toEqual(saved);
+  expect(await readReceipt()).toEqual(retained);
+  expect(await t.db.select().from(checkoutTable)).toHaveLength(1);
+  expect(await t.db.select().from(checkoutRefund)).toHaveLength(2);
+  const [audit] = await t.db
+    .select({ metadata: auditLog.metadata })
+    .from(auditLog)
+    .where(eq(auditLog.action, "commerce.imported_settlement_recorded"));
+  expect(audit?.metadata.refundedCheckoutId).toBe(sale.id);
+  const due = "/admin/commerce/unpaid?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z";
+  expect(await (await call(owner, due)).json()).toEqual({ appointments: [] });
+  expect((await pay(sale.id, "external_card", 6500)).status).toBe(409);
+});
+
 test("a verified Booksy part-payment leaves only the outstanding balance collectible", async () => {
   await t.db.insert(appointmentContext).values({
     appointmentId,

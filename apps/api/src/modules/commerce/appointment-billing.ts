@@ -17,6 +17,8 @@ import {
   auditLog,
   bookingProtection,
   checkout,
+  checkoutPayment,
+  checkoutRefund,
   type Database,
 } from "@sob/db";
 import { and, asc, eq, inArray, isNull, ne, or } from "drizzle-orm";
@@ -25,6 +27,7 @@ import { requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
+import { completedRefundStatus, recordedPaymentStatuses } from "./money";
 
 export const importedPriceReviewAudit = "commerce.imported_price_reviewed";
 const importedSettlementAudit = "commerce.imported_settlement_recorded";
@@ -318,7 +321,8 @@ async function importedSettlement(db: Pick<Database, "select">, id: string) {
     );
   return row
     ? recordedImportedSettlementSchema.parse({
-        ...row.metadata,
+        amountCents: row.metadata.amountCents,
+        reference: row.metadata.reference,
         recordedAt: row.createdAt.toISOString(),
       })
     : null;
@@ -334,13 +338,63 @@ export async function getImportedSettlement(db: Database, id: string, principal:
   return { appointmentVersion: booking.version, settlement: await importedSettlement(db, id) };
 }
 
-async function assertNoNativeCollection(db: Pick<Database, "select">, id: string) {
+async function checkoutFullyRefunded(db: Pick<Database, "select">, checkoutId: string) {
+  const payments = await db
+    .select({
+      id: checkoutPayment.id,
+      status: checkoutPayment.status,
+      amountCents: checkoutPayment.amountCents,
+    })
+    .from(checkoutPayment)
+    .where(eq(checkoutPayment.checkoutId, checkoutId));
+  if (
+    payments.some(({ status }) => status === "pending") ||
+    !payments.some(({ status }) => recordedPaymentStatuses.includes(status))
+  )
+    return false;
+
+  const refunds = await db
+    .select({
+      paymentId: checkoutRefund.paymentId,
+      amountCents: checkoutRefund.amountCents,
+      status: checkoutRefund.status,
+    })
+    .from(checkoutRefund)
+    .where(
+      inArray(
+        checkoutRefund.paymentId,
+        payments.map(({ id }) => id),
+      ),
+    );
+  const completedByPayment = new Map<string, number>();
+  for (const { paymentId, amountCents, status } of refunds) {
+    if (status === "failed") continue;
+    if (status !== completedRefundStatus) return false;
+    completedByPayment.set(paymentId, (completedByPayment.get(paymentId) ?? 0) + amountCents);
+  }
+  return payments.every(
+    ({ id, status, amountCents }) =>
+      (completedByPayment.get(id) ?? 0) ===
+      (recordedPaymentStatuses.includes(status) ? amountCents : 0),
+  );
+}
+
+async function assertNoNativeCollection(
+  db: Pick<Database, "select">,
+  id: string,
+  { allowFullyRefunded = false } = {},
+) {
   const [receipt] = await db
-    .select({ id: checkout.id })
+    .select({ id: checkout.id, status: checkout.status })
     .from(checkout)
     .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
     .limit(1);
-  if (receipt)
+  if (
+    receipt &&
+    (!allowFullyRefunded ||
+      receipt.status !== "refunded" ||
+      !(await checkoutFullyRefunded(db, receipt.id)))
+  )
     throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
   const [nativeDeposit] = await db
     .select({ id: bookingProtection.appointmentId })
@@ -348,6 +402,7 @@ async function assertNoNativeCollection(db: Pick<Database, "select">, id: string
     .where(eq(bookingProtection.appointmentId, id));
   if (nativeDeposit)
     throw new DomainError("invalid_state", "Reconcile the existing Citame deposit first");
+  return receipt?.id;
 }
 
 /** Acknowledges a full settlement in the source system without generating a new sale. */
@@ -395,7 +450,7 @@ export async function confirmImportedSettlement(
         "invalid_state",
         "This appointment has no Booksy payment or invoice to reconcile",
       );
-    await assertNoNativeCollection(tx, id);
+    const refundedCheckoutId = await assertNoNativeCollection(tx, id, { allowFullyRefunded: true });
     const lines = await tx
       .select()
       .from(appointmentService)
@@ -418,7 +473,7 @@ export async function confirmImportedSettlement(
       action: importedSettlementAudit,
       entity: "appointment",
       entityId: id,
-      metadata: { amountCents, reference },
+      metadata: { amountCents, reference, ...(refundedCheckoutId ? { refundedCheckoutId } : {}) },
     });
     await tx
       .update(appointment)
