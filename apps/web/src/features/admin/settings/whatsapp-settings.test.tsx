@@ -181,7 +181,7 @@ test.each(["stale", "current"] as const)(
   },
 );
 
-test.each(["stale", "successful"] as const)(
+test.each(["stale", "successful", "cancelled"] as const)(
   "Embedded Signup applies the result for a %s popup review",
   async (outcome) => {
     const setup = { appId: "123456", configId: "234567", version: "v27.0" };
@@ -227,6 +227,15 @@ test.each(["stale", "successful"] as const)(
       const view = renderApp(<WhatsAppSettings />);
       fireEvent.click(await screen.findByRole("button", { name: "Load Meta sign-in" }));
       fireEvent.click(await screen.findByRole("button", { name: "Connect WhatsApp Business" }));
+      if (outcome === "cancelled") {
+        await act(async () => finish?.(undefined));
+        expect(await screen.findByRole("alert")).toHaveTextContent(
+          "Meta sign-in ended before the connection was completed",
+        );
+        expect(screen.getByRole("button", { name: "Connect WhatsApp Business" })).toBeEnabled();
+        expect(attempts).toEqual([]);
+        return;
+      }
       if (outcome === "stale") {
         signupRevision = newRevision;
         await act(async () =>

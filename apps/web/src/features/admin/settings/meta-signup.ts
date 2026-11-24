@@ -42,7 +42,7 @@ export function readSignupEvent({ origin, data }: Pick<MessageEvent, "origin" | 
         : Array.isArray(accountIds) && accountIds.length === 1
           ? accountIds[0]
           : undefined;
-    const phoneId = event.data?.phone_number_id ?? undefined;
+    const phoneId = event.data?.phone_number_id;
     if (!numericId(wabaId) || (phoneId !== undefined && !numericId(phoneId)))
       return { type: "invalid" } as const;
     return { type: "success", wabaId, phoneId } as const;

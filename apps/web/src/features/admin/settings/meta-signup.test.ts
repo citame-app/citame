@@ -35,6 +35,9 @@ test("a malformed selected phone cannot be interpreted as an omitted phone", () 
   expect(read({ messaging_account_ids: ["123456"], phone_number_id: 765432 })).toEqual({
     type: "invalid",
   });
+  expect(read({ messaging_account_ids: ["123456"], phone_number_id: null })).toEqual({
+    type: "invalid",
+  });
   expect(read({ messaging_account_ids: "123456", waba_id: "123456" })).toEqual({ type: "invalid" });
   expect(read({ messaging_account_ids: ["123456"] })).toEqual({
     type: "success",
