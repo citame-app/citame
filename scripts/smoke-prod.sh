@@ -554,7 +554,9 @@ assert any(row["entity"] == "appointment" and row["id"] == sys.argv[2]
 PY
 # Web uses the API prefix; connected Desktop uses the same-origin passthrough.
 for sync_prefix in /api ''; do
-  status="$(curl -s -o /dev/null -w '%{http_code}' -b "$cjar" "$BASE$sync_prefix/sync/pull?since=0&limit=1")"
+  status="$(curl -sS --max-time 8 -o /dev/null -w '%{http_code}' -b "$cjar" \
+    "$BASE$sync_prefix/sync/pull?since=0&limit=1")" ||
+    fail "could not check customer scope at $sync_prefix/sync/pull"
   [ "$status" = 403 ] || fail "customer replica denial at $sync_prefix/sync/pull returned $status, expected 403"
 done
 step "the web gateway restarts cleanly with the staff stream open"
