@@ -867,6 +867,7 @@ keys! {
     BusinessDescription => ("Description", "Descripción"),
     BusinessDescriptionAddLine => ("Add line", "Añadir línea"),
     BusinessDescriptionRemoveLine => ("Remove line", "Quitar línea"),
+    BusinessDescriptionPasteAll => ("Replace description from clipboard", "Reemplazar descripción desde el portapapeles"),
     BusinessAddress => ("Public address", "Dirección pública"),
     BusinessPhone => ("Public phone", "Teléfono público"),
     BusinessEmail => ("Public email", "Correo público"),

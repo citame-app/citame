@@ -86,6 +86,12 @@ fn valid_description_text(value: &str) -> bool {
         .any(|ch| ch != '\n' && (ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')))
 }
 
+fn description_within_bounds(value: &str) -> bool {
+    value.split('\n').count() <= DESCRIPTION_LINES
+        && value.encode_utf16().count() <= DESCRIPTION_LIMIT
+        && valid_description_text(value)
+}
+
 struct DescriptionLine {
     input: Entity<TextField>,
     _events: Subscription,
@@ -119,14 +125,20 @@ impl DescriptionEditor {
             .map(|line| line.input.read(cx).text())
             .collect::<Vec<_>>()
             .join("\n");
-        if self.lines.len() > DESCRIPTION_LINES
-            || value.encode_utf16().count() > DESCRIPTION_LIMIT
-            || !valid_description_text(&value)
-        {
+        if !description_within_bounds(&value) {
             return Err(Key::BusinessDescription);
         }
         let value = value.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
         Ok((!value.is_empty()).then(|| value.to_owned()))
+    }
+
+    fn paste_all(&mut self, text: &str, cx: &mut Context<Root>) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if !description_within_bounds(&normalized) {
+            self.paste_rejected = true;
+            return;
+        }
+        *self = Self::new(&normalized, cx);
     }
 
     fn add_line(&mut self, cx: &mut Context<Root>) {
@@ -367,6 +379,38 @@ impl Root {
                     .flex_col()
                     .gap_1()
                     .child(div().text_sm().child(self.t(Key::BusinessDescription)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap_2()
+                            .when(editor.description.remaining.get() > 0, |row| {
+                                row.child(self.button(
+                                    "business-description-add",
+                                    self.t(Key::BusinessDescriptionAddLine),
+                                    Kind::Ghost,
+                                    cx.listener(|root, _, _, cx| {
+                                        root.edit_business_profile(cx, |profile, cx| {
+                                            profile.description.add_line(cx)
+                                        });
+                                    }),
+                                ))
+                            })
+                            .child(self.button(
+                                "business-description-paste-all",
+                                self.t(Key::BusinessDescriptionPasteAll),
+                                Kind::Ghost,
+                                cx.listener(|root, _, _, cx| {
+                                    if let Some(text) =
+                                        cx.read_from_clipboard().and_then(|item| item.text())
+                                    {
+                                        root.edit_business_profile(cx, |profile, cx| {
+                                            profile.description.paste_all(&text, cx)
+                                        });
+                                    }
+                                }),
+                            )),
+                    )
                     .children(
                         editor
                             .description
@@ -393,18 +437,6 @@ impl Root {
                                     })
                             }),
                     )
-                    .when(editor.description.remaining.get() > 0, |row| {
-                        row.child(div().flex().child(self.button(
-                            "business-description-add",
-                            self.t(Key::BusinessDescriptionAddLine),
-                            Kind::Ghost,
-                            cx.listener(|root, _, _, cx| {
-                                root.edit_business_profile(cx, |profile, cx| {
-                                    profile.description.add_line(cx)
-                                });
-                            }),
-                        )))
-                    })
                     .when(
                         invalid == Some(Key::BusinessDescription)
                             || editor.description.paste_rejected,
@@ -543,6 +575,17 @@ mod tests {
             let Overlay::SalonConfiguration(desk) = &mut root.overlay else { panic!("Missing editor") };
             let profile = desk.editor.as_mut().unwrap().profile.as_mut().unwrap();
             assert!(!profile.description.paste_rejected);
+            assert_eq!(profile.description.lines.len(), 3);
+            profile.description.paste_all(&"line\n".repeat(64), cx);
+            assert!(profile.description.paste_rejected);
+            assert_eq!(profile.description.draft(cx).unwrap().as_deref(), Some(description.as_str()));
+            profile.description.paste_all(&format!("{}line", "line\n".repeat(63)), cx);
+            assert_eq!(profile.description.remaining.get(), 0);
+            profile.description.remove_line(0);
+            assert_eq!(profile.description.remaining.get(), 1);
+            profile.description.add_line(cx);
+            assert_eq!(profile.description.remaining.get(), 0);
+            profile.description.paste_all(&description, cx);
             assert_eq!(profile.description.lines.len(), 3);
             let input = |label| profile.inputs[FIELDS.iter().position(|spec| spec.label == label).unwrap()].clone();
             input(Key::BusinessEmail).update(cx, |field, cx| field.set_text("a..b@example.com", cx));
