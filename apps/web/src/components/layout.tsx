@@ -5,6 +5,7 @@ import { CalendarInbox } from "~/features/admin/calendar/inbox";
 import { useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import type { Locale } from "~/i18n";
 import { useI18n } from "~/i18n/react";
+import { calendarScope } from "~/lib/admin-queries";
 import type { Theme } from "~/lib/theme";
 import { LocaleSwitch, ThemeToggle } from "./shell";
 import { buttonClasses } from "./ui/button";
@@ -60,6 +61,7 @@ export function Header({
           {!calendarMode && staff && (
             <CalendarInbox
               userId={session.user.id}
+              accessScope={calendarScope(session)}
               rewardAccess={Boolean(access?.commerce && access.clients)}
             />
           )}
@@ -127,6 +129,7 @@ export function Header({
           {staff && (
             <CalendarInbox
               userId={session.user.id}
+              accessScope={calendarScope(session)}
               rewardAccess={Boolean(access?.commerce && access.clients)}
             />
           )}

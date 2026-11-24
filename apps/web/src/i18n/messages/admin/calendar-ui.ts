@@ -16,6 +16,7 @@ export const calendarUiEn = {
   "calendar.inbox.filter": "Event type",
   "calendar.inbox.all": "All events",
   "calendar.inbox.empty": "No notifications",
+  "calendar.inbox.unavailable": "Notifications are unavailable for this account",
   "calendar.inbox.archive": "Archive",
   "calendar.inbox.archiveDay": "Archive this day",
   "calendar.inbox.restore": "Restore",
@@ -125,6 +126,7 @@ export const calendarUiEsAR: Record<keyof typeof calendarUiEn, string> = {
   "calendar.inbox.empty": "No hay notificaciones",
   "calendar.inbox.archive": "Archivar",
   "calendar.inbox.archiveDay": "Archivar este día",
+  "calendar.inbox.unavailable": "Los avisos no están disponibles para esta cuenta",
   "calendar.inbox.restore": "Restaurar",
 
   "calendar.account": "Cuenta y preferencias",

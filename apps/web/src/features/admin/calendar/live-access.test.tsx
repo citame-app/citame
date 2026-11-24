@@ -4,6 +4,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { calendarQuery, reportQuery } from "~/lib/admin-queries";
 import { renderApp } from "../../../../test/render";
+import { CalendarInbox } from "./inbox";
 import { CalendarLiveProvider } from "./live-provider";
 
 const staffId = "0198f5a0-7b1c-7000-8000-000000000201";
@@ -40,6 +41,17 @@ function CalendarNavigation() {
   ) : (
     <button type="button" onClick={() => setOpened(true)}>
       Open calendar
+    </button>
+  );
+}
+
+function InboxNavigation() {
+  const [open, setOpen] = useState(false);
+  return open ? (
+    <CalendarInbox userId="operator" accessScope="reception" />
+  ) : (
+    <button type="button" onClick={() => setOpen(true)}>
+      Open inbox workspace
     </button>
   );
 }
@@ -135,6 +147,47 @@ test("a live appointment change replaces an in-flight first calendar load", asyn
     expect(calendarRequests).toBe(2);
   } finally {
     staleResponse.resolve(Response.json({}));
+    refresh.mockRestore();
+  }
+});
+
+test("a live appointment notice replaces a pending first inbox read", async () => {
+  globalThis.EventSource = Stream as unknown as typeof EventSource;
+  const pending = Promise.withResolvers<Response>();
+  let requests = 0;
+  let staleSignal: AbortSignal | null | undefined;
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/admin/notifications/inbox")) {
+      if (++requests === 1) {
+        staleSignal = init?.signal;
+        return pending.promise;
+      }
+      return Response.json({ entries: [], total: 2, page: 1, pageSize: 25 });
+    }
+    return Response.json({
+      changes: [{ seq: 11, entity: "appointment", id: staffId, op: "delete", data: null }],
+      nextCursor: 11,
+      headSeq: 11,
+      hasMore: false,
+    });
+  }) as unknown as typeof fetch;
+  const view = renderApp(
+    <CalendarLiveProvider>
+      <InboxNavigation />
+    </CalendarLiveProvider>,
+  );
+  const refresh = spyOn(view.queryClient, "invalidateQueries");
+  try {
+    act(() => Stream.instance.send(10));
+    await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: ["calendar-inbox"] }));
+    fireEvent.click(screen.getByRole("button", { name: "Open inbox workspace" }));
+    expect(requests).toBe(1);
+    act(() => Stream.instance.send(11));
+    expect(await screen.findByRole("button", { name: "Notifications 2" })).toBeVisible();
+    expect(staleSignal?.aborted).toBe(true);
+    expect(requests).toBe(2);
+  } finally {
+    pending.resolve(Response.json({ entries: [], total: 0, page: 1, pageSize: 25 }));
     refresh.mockRestore();
   }
 });

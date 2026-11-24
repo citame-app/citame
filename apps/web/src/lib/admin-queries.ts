@@ -1,9 +1,23 @@
-import type { ClientListQuery, ReportSummaryQuery, ResourceOccupancy } from "@sob/contracts";
+import type {
+  ClientListQuery,
+  MeResponse,
+  ReportSummaryQuery,
+  ResourceOccupancy,
+} from "@sob/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "./api/instance";
 
 /** SSE refreshes the web calendar; focus/interval remain the fallback when disconnected. */
 export const CALENDAR_POLL_MS = 30_000;
+
+export function calendarScope(session: MeResponse) {
+  return JSON.stringify([
+    session.user.id,
+    session.user.role,
+    session.accessPreset,
+    session.staffId,
+  ]);
+}
 
 export const calendarResourceQueryKey = ["admin", "calendar", "resources"] as const;
 

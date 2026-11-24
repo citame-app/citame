@@ -436,6 +436,7 @@ export function CalendarView({
         <div className="calendar-toolbar-actions">
           <CalendarInbox
             userId={userId}
+            accessScope={accessScope}
             rewardAccess={permissions.commerce && permissions.clients}
           />
           {live !== undefined && (

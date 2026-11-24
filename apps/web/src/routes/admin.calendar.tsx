@@ -6,7 +6,12 @@ import { rangeFor } from "~/features/admin/calendar/logic";
 import { type CalendarSearch, validateCalendarSearch } from "~/features/admin/calendar/search";
 import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
-import { calendarQuery, calendarWaitlistQuery, staffQuery } from "~/lib/admin-queries";
+import {
+  calendarQuery,
+  calendarScope,
+  calendarWaitlistQuery,
+  staffQuery,
+} from "~/lib/admin-queries";
 import { localDateOf } from "~/lib/format";
 import { routeEndpoints } from "~/server/request";
 
@@ -64,15 +69,6 @@ export const Route = createFileRoute("/admin/calendar")({
   head: adminHead("calendar.title"),
   component: CalendarPage,
 });
-
-function calendarScope(session: NonNullable<ReturnType<typeof Route.useRouteContext>["session"]>) {
-  return JSON.stringify([
-    session.user.id,
-    session.user.role,
-    session.accessPreset,
-    session.staffId,
-  ]);
-}
 
 function CalendarPage() {
   const { t, timeZone } = useI18n();

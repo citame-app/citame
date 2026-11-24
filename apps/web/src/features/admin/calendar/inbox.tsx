@@ -1,5 +1,11 @@
 import type { CalendarInboxQuery, CalendarNotice } from "@sob/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  type QueryClient,
+  type QueryKey,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { Button } from "~/components/ui/button";
@@ -8,25 +14,56 @@ import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { StampNotices, useStampNoticeCount } from "~/features/notifications/stamp-notices";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
 
-export const calendarInboxQuery = (userId: string, query: CalendarInboxQuery = {}) => ({
-  queryKey: ["calendar-inbox", userId, query],
-  queryFn: () => api().calendarInbox.list(query),
-  refetchInterval: 30_000,
-});
+const inboxKey = (userId: string) => ["calendar-inbox", userId] as const;
+
+function isAccessDenied(error: unknown) {
+  return error instanceof ApiError && (error.status === 401 || error.status === 403);
+}
+
+async function clearInboxAccess(queries: QueryClient, userId: string, failingKey?: QueryKey) {
+  const scope = { queryKey: inboxKey(userId) };
+  // Cancel older reads before they can put the prior pages back in the cache.
+  await queries.cancelQueries({ ...scope, predicate: ({ queryKey }) => queryKey !== failingKey });
+  queries.setQueriesData(scope, null);
+}
+
+function useCalendarInboxQuery(
+  userId: string,
+  accessScope?: string,
+  query: CalendarInboxQuery = {},
+) {
+  const queries = useQueryClient();
+  return useQuery({
+    queryKey: [...inboxKey(userId), accessScope, query],
+    queryFn: async ({ signal, queryKey }) => {
+      try {
+        return await api().calendarInbox.list(query, signal);
+      } catch (error) {
+        if (!isAccessDenied(error)) throw error;
+        await clearInboxAccess(queries, userId, queryKey);
+        return null;
+      }
+    },
+    refetchInterval: 30_000,
+  });
+}
 
 export function CalendarInbox({
   userId,
+  accessScope,
   rewardAccess = false,
 }: {
   userId: string;
+  accessScope?: string;
   rewardAccess?: boolean;
 }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const count = useQuery(calendarInboxQuery(userId));
+  const count = useCalendarInboxQuery(userId, accessScope);
   const rewards = useStampNoticeCount("admin", userId, rewardAccess);
   const total = (count.data?.total ?? 0) + rewards;
   return (
@@ -55,6 +92,7 @@ export function CalendarInbox({
         {open && (
           <InboxSections
             userId={userId}
+            accessScope={accessScope}
             rewardAccess={rewardAccess}
             onNavigate={() => setOpen(false)}
           />
@@ -66,10 +104,12 @@ export function CalendarInbox({
 
 function InboxSections({
   userId,
+  accessScope,
   rewardAccess,
   onNavigate,
 }: {
   userId: string;
+  accessScope?: string;
   rewardAccess: boolean;
   onNavigate: () => void;
 }) {
@@ -94,31 +134,40 @@ function InboxSections({
       {rewards && rewardAccess ? (
         <StampNotices mode="admin" userId={userId} onNavigate={onNavigate} />
       ) : (
-        <InboxContents userId={userId} onNavigate={onNavigate} />
+        <InboxContents userId={userId} accessScope={accessScope} onNavigate={onNavigate} />
       )}
     </div>
   );
 }
 
-function InboxContents({ onNavigate, userId }: { onNavigate: () => void; userId: string }) {
+function InboxContents({
+  onNavigate,
+  userId,
+  accessScope,
+}: {
+  onNavigate: () => void;
+  userId: string;
+  accessScope?: string;
+}) {
   const { t, locale, timeZone } = useI18n();
   const online = useOnline();
   const queries = useQueryClient();
   const [archived, setArchived] = useState(false);
   const [kind, setKind] = useState<CalendarInboxQuery["kind"]>();
   const [page, setPage] = useState(1);
-  const query = useQuery(
-    calendarInboxQuery(userId, {
-      archived: archived ? "true" : "false",
-      ...(kind ? { kind } : {}),
-      page,
-    }),
-  );
+  const query = useCalendarInboxQuery(userId, accessScope, {
+    archived: archived ? "true" : "false",
+    ...(kind ? { kind } : {}),
+    page,
+  });
   const archive = useMutation({
     mutationFn: (ids: string[]) => api().calendarInbox.archive(ids, !archived),
     onSuccess: () => {
       setPage(1);
-      void queries.invalidateQueries({ queryKey: ["calendar-inbox"] });
+      void queries.invalidateQueries({ queryKey: inboxKey(userId) });
+    },
+    onError: async (error) => {
+      if (isAccessDenied(error)) await clearInboxAccess(queries, userId);
     },
   });
   const groups = new Map<string, CalendarNotice[]>();
@@ -162,11 +211,22 @@ function InboxContents({ onNavigate, userId }: { onNavigate: () => void; userId:
           ))}
         </select>
       </label>
-      {archive.isError && <ErrorState error={archive.error} />}
+      {archive.isError && !isAccessDenied(archive.error) && <ErrorState error={archive.error} />}
       {query.isPending ? (
         <Skeleton className="h-48" />
       ) : query.isError ? (
         <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+      ) : query.data === null ? (
+        <EmptyState title={t("calendar.inbox.unavailable")}>
+          <Button
+            variant="secondary"
+            onClick={() =>
+              void queries.refetchQueries({ queryKey: inboxKey(userId), type: "active" })
+            }
+          >
+            {t("common.retry")}
+          </Button>
+        </EmptyState>
       ) : (
         <>
           {!query.data.entries.length && <EmptyState title={t("calendar.inbox.empty")} />}

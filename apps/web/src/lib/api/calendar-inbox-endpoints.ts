@@ -4,9 +4,10 @@ import type { ApiClient } from "./client";
 
 export function calendarInboxEndpoints(client: ApiClient) {
   return {
-    list: (query: CalendarInboxQuery = {}) =>
+    list: (query: CalendarInboxQuery = {}, signal?: AbortSignal) =>
       client.get("/admin/notifications/inbox", calendarInboxSchema, {
         query: { ...query },
+        signal,
         cache: "no-store",
       }),
     archive: (ids: string[], archived: boolean) =>
