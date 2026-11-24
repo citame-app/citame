@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
+import { appointmentDepositStatusSchema } from "./booking-protection";
 import { calendarAppointmentSchema } from "./calendar";
 import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
@@ -630,6 +631,7 @@ const upsertChangeSchema = z.discriminatedUnion("entity", [
     "appointment",
     appointmentSchema.extend({
       clientName: z.string().optional(),
+      depositStatus: appointmentDepositStatusSchema.nullable().optional(),
       combinationStaffIds: z.array(idSchema).min(1).max(100).optional(),
       ...calendarAppointmentSchema.pick({
         billingReviewReasons: true,
@@ -728,6 +730,7 @@ export const syncPullResponseSchema = z.object({
   clientGroups: z.literal(true).optional(),
   /** Confirms that the booked-resource projection carries stable resource IDs. */
   bookedResourceIds: z.literal(true).optional(),
+  appointmentDepositStatus: z.literal(true).optional(),
   viewerRole: z.enum(["owner", "staff"]).optional(),
   viewerEditCatalogue: z.boolean().optional(),
   viewerEditCalendar: z.boolean().optional(),

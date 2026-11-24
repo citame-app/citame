@@ -10,12 +10,13 @@ pub(super) fn attendance_block_label(block: AttendanceProtectionBlock) -> Key {
 impl Root {
     pub(super) fn render_appointment_protection(
         &self,
-        protection: &AppointmentProtection,
+        status: AppointmentDepositStatus,
+        protection: Option<&AppointmentProtection>,
         can_refresh: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         use AppointmentProtectionState::*;
-        let state = match protection.state {
+        let state_label = match status.state {
             Pending => Key::DepositPending,
             Confirmed => Key::DepositConfirmed,
             Waived => Key::DepositWaived,
@@ -26,9 +27,12 @@ impl Root {
             Unknown => Key::DepositUnknown,
         };
         let money = [
-            (Key::DepositAmount, protection.deposit_cents),
-            (Key::DepositFee, protection.fee_cents),
-            (Key::DepositRefund, protection.refund_due_cents),
+            (Key::DepositAmount, protection.and_then(|p| p.deposit_cents)),
+            (Key::DepositFee, protection.and_then(|p| p.fee_cents)),
+            (
+                Key::DepositRefund,
+                protection.and_then(|p| p.refund_due_cents),
+            ),
         ];
         div()
             .debug_selector(|| "appointment-protection".to_owned())
@@ -55,14 +59,15 @@ impl Root {
                             self.t(Key::DepositRefresh),
                             Kind::Ghost,
                             cx.listener(|this, _, _, cx| {
-                                if matches!(&this.overlay, Overlay::Details(details) if matches!(details.annotations, Some(annotations::Annotations::Ready(_)))) {
+                                if matches!(&this.overlay, Overlay::Details(details) if !matches!(details.annotations, Some(annotations::Annotations::Loading { .. } | annotations::Annotations::Editing(_)))) {
                                     this.open_annotations(cx);
                                 }
                             }),
                         ).tab_index(0).focus(|style| style.border_color(theme::text())))
                     }),
             )
-            .child(self.t(state))
+            .child(self.t(state_label))
+            .when(protection.is_none(), |panel| panel.child(div().text_color(theme::muted()).child(self.t(Key::DepositLastSynced))))
             .when(
                 self.ready_deposit_receipt().is_some(),
                 |panel| {
@@ -86,19 +91,19 @@ impl Root {
                     &[("amount", &self.amount_label(amount, "EUR"))],
                 )))
             }))
-            .when(protection.state == Pending, |panel| {
+            .when(status.state == Pending, |panel| {
                 panel.child(div().child(i18n::fill(
                     self.t(Key::DepositExpires),
-                    &[("date", &self.date_time_label(protection.expires_at))],
+                    &[("date", &self.date_time_label(status.expires_at))],
                 )))
             })
-            .when(matches!(protection.state, Pending | Confirmed), |panel| {
+            .when(matches!(status.state, Pending | Confirmed), |panel| {
                 panel.child(div().child(i18n::fill(
                     self.t(Key::DepositCancellationCutoff),
-                    &[("date", &self.date_time_label(protection.cancellation_cutoff))],
+                    &[("date", &self.date_time_label(status.cancellation_cutoff))],
                 )))
             })
-            .when_some(protection.attendance_block, |panel, block| {
+            .when_some(status.attendance_block, |panel, block| {
                 panel.child(div().text_color(theme::muted()).child(self.t(attendance_block_label(block))))
             })
     }

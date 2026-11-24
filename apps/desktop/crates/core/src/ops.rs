@@ -769,6 +769,12 @@ pub fn appointment_outcome_options(
     now: DateTime<Utc>,
     can_correct: bool,
 ) -> &'static [AppointmentStatus] {
+    if appointment
+        .deposit_status
+        .is_some_and(|deposit| deposit.attendance_block.is_some())
+    {
+        return &[];
+    }
     match appointment.status {
         AppointmentStatus::Booked if appointment.starts_at <= now => {
             &[AppointmentStatus::Completed, AppointmentStatus::NoShow]
@@ -793,6 +799,12 @@ pub fn set_appointment_status(
         return Err(CoreError::Invalid("choose completed or no_show".into()));
     }
     let current = writable_appointment(store, id)?;
+    if let Some(block) = current
+        .deposit_status
+        .and_then(|deposit| deposit.attendance_block)
+    {
+        return Err(CoreError::AttendanceProtected(block));
+    }
     let scope = store.get_meta("calendar_scope")?;
     if !appointment_outcome_options(&current, now, scope.as_deref() == Some("all"))
         .contains(&status)

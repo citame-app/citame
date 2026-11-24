@@ -177,6 +177,11 @@ const MIGRATIONS: &[&str] = &[
     )
     ON CONFLICT(key) DO UPDATE SET value = '0';
     "#,
+    r#"
+    INSERT INTO meta (key,value)
+    SELECT 'appointment_deposit_cursor','0' WHERE EXISTS (SELECT 1 FROM appointment)
+    ON CONFLICT(key) DO NOTHING;
+    "#,
 ];
 
 const MIRROR_TABLES: &[&str] = &[
@@ -317,6 +322,17 @@ fn upsert(tx: &Transaction, c: &RawChange, alert: bool) -> Result<()> {
                 // A fresh replica can see name-only allocations before its API is upgraded.
                 tx.execute(
                     "INSERT INTO meta (key, value) VALUES ('booked_resources_cursor', '0')
+                     ON CONFLICT(key) DO NOTHING",
+                    [],
+                )?;
+            }
+            if c.data
+                .as_ref()
+                .and_then(|data| data.get("depositStatus"))
+                .is_none()
+            {
+                tx.execute(
+                    "INSERT INTO meta (key, value) VALUES ('appointment_deposit_cursor', '0')
                      ON CONFLICT(key) DO NOTHING",
                     [],
                 )?;
@@ -1023,6 +1039,57 @@ impl Store {
         })
     }
 
+    pub(crate) fn appointment_deposit_cursor(&self) -> Result<Option<i64>> {
+        Ok(self
+            .get_meta("appointment_deposit_cursor")?
+            .and_then(|value| value.parse().ok()))
+    }
+
+    pub(crate) fn apply_appointment_deposit_page(
+        &mut self,
+        changes: &[RawChange],
+        next_cursor: i64,
+        has_more: bool,
+        generation: &str,
+    ) -> Result<usize> {
+        self.write_transaction(|store| {
+            Self::ensure_generation(&store.conn, Some(generation))?;
+            let mut updated = 0;
+            for change in changes {
+                if change.entity != "appointment" || change.op != "upsert" {
+                    continue;
+                }
+                let Some(data) = &change.data else { continue };
+                let Some(version) = data.get("version").and_then(Value::as_i64) else {
+                    continue;
+                };
+                let Some(status) = data.get("depositStatus") else {
+                    continue;
+                };
+                let status: Option<AppointmentDepositStatus> =
+                    serde_json::from_value(status.clone())?;
+                updated += store.conn.execute(
+                    "UPDATE appointment SET json = json_set(json, '$.depositStatus', json(?2))
+                     WHERE id = ?1 AND version = ?3",
+                    params![change.id, serde_json::to_string(&status)?, version],
+                )?;
+            }
+            if has_more {
+                Self::set_meta_at(
+                    &store.conn,
+                    "appointment_deposit_cursor",
+                    &next_cursor.to_string(),
+                )?;
+            } else {
+                store.conn.execute(
+                    "DELETE FROM meta WHERE key = 'appointment_deposit_cursor'",
+                    [],
+                )?;
+            }
+            Ok(updated)
+        })
+    }
+
     /// Resume enrichment for legacy rows without rewinding the main change stream.
     pub(crate) fn client_groups_cursor(&self) -> Result<Option<i64>> {
         let missing: bool = self.conn.query_row(
@@ -1442,7 +1509,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','appointment_deposit_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         Self::forget_combinations_at(tx)?;

@@ -1336,6 +1336,7 @@ keys! {
     DepositPendingAttendance => ("Confirm the deposit or cancel the hold before recording attendance.", "Confirma la señal o cancela la reserva provisional antes de registrar la asistencia."),
     DepositClosedAttendance => ("The protected booking has closed. Its attendance can no longer change.", "La reserva con señal se ha cerrado. Ya no se puede cambiar la asistencia."),
     DepositReceipt => ("View deposit receipt", "Ver recibo de la señal"),
+    DepositLastSynced => ("Last synced status", "Último estado sincronizado"),
     DepositRefresh => ("Refresh deposit", "Actualizar señal"),
     AppointmentAnnotations => ("Appointment notes", "Notas de la cita"),
     AppointmentBusinessMessage => ("Message from the centre", "Mensaje del centro"),

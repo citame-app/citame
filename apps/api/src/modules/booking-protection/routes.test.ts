@@ -22,6 +22,7 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { pull } from "../../../test/sync";
 import { updateAppointment } from "../appointments/service";
 import { settleVerifiedBankPayment } from "../commerce/service";
 import { calendarProtections, expireBookingHolds, protectionView } from "./value";
@@ -104,6 +105,30 @@ test("private appointment context shows protection and redacts amounts without c
     protection: { checkoutId: string };
   };
   const path = `/appointments/${id}/context`;
+  const mirrored = async () => {
+    const snapshot = await pull(t, owner, { since: 0, limit: 200 });
+    expect(snapshot.appointmentDepositStatus).toBe(true);
+    return snapshot.changes.find((change) => change.entity === "appointment" && change.id === id);
+  };
+  const pending = await mirrored();
+  expect(pending).toMatchObject({
+    data: {
+      depositStatus: {
+        state: "pending",
+        attendanceBlock: "pending_deposit",
+        expiresAt: expect.any(String),
+        cancellationCutoff: expect.any(String),
+      },
+    },
+  });
+  if (pending?.op !== "upsert" || pending.entity !== "appointment")
+    throw new Error("missing booking");
+  expect(Object.keys(pending.data.depositStatus ?? {}).sort()).toEqual([
+    "attendanceBlock",
+    "cancellationCutoff",
+    "expiresAt",
+    "state",
+  ]);
   const details = await call(owner, path);
   expect(details.status).toBe(200);
   expect(details.headers.get("cache-control")).toBe("private, no-store");
@@ -162,6 +187,7 @@ test("private appointment context shows protection and redacts amounts without c
   expect(await (await call(owner, path)).json()).toMatchObject({
     protection: { state: "confirmed", depositCents: 2500 },
   });
+  expect(await mirrored()).toMatchObject({ data: { depositStatus: { state: "confirmed" } } });
 });
 
 test("a required signal needs explicit current policy acceptance and creates one server-priced appointment receipt", async () => {

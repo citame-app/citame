@@ -85,6 +85,7 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
         gift_cards_scope: None,
         client_groups: None,
         booked_resource_ids: None,
+        appointment_deposit_status: None,
         calendar_scope: None,
         viewer_edit_calendar: None,
         viewer_role: None,
@@ -167,6 +168,66 @@ fn fresh_replica_repairs_name_only_allocations_after_its_api_is_upgraded() {
             .as_deref(),
         Some("room-1")
     );
+}
+
+#[test]
+fn an_existing_offline_replica_backfills_deposit_status_without_replaying_the_calendar() {
+    use crate::model::{AppointmentStatus, AttendanceProtectionBlock};
+
+    let mut store = Store::open_in_memory().unwrap();
+    let mut visit = RawChange {
+        seq: 1,
+        entity: "appointment".into(),
+        id: "visit".into(),
+        op: "upsert".into(),
+        data: Some(json!({
+            "id": "visit", "staffId": "staff", "clientId": "client",
+            "startsAt": "2026-03-10T13:00:00Z", "endsAt": "2026-03-10T14:00:00Z",
+            "status": "booked", "version": 1, "services": [],
+            "createdAt": "2026-03-09T13:00:00Z", "updatedAt": "2026-03-09T13:00:00Z"
+        })),
+    };
+    store.apply_page(&[visit.clone()], 1).unwrap();
+    assert_eq!(store.appointment_deposit_cursor().unwrap(), Some(0));
+    visit.data.as_mut().unwrap()["depositStatus"] = json!({
+        "state": "pending",
+        "expiresAt": "2026-03-09T13:15:00Z",
+        "cancellationCutoff": "2026-03-09T13:00:00Z",
+        "attendanceBlock": "pending_deposit"
+    });
+
+    let upgraded = Fake::new(
+        Box::new(applied_all),
+        Box::new(move |since, limit| {
+            let mut page = empty_pull(since, limit)?;
+            page.head_seq = 1;
+            page.next_cursor = 1;
+            page.appointment_deposit_status = Some(true);
+            if since == 0 {
+                page.changes.push(visit.clone());
+            }
+            Ok(page)
+        }),
+    );
+    pull_all(&mut store, &upgraded).unwrap();
+    assert_eq!(upgraded.log(), ["pull:1", "pull:0"]);
+    assert_eq!(store.cursor().unwrap(), 1);
+    assert_eq!(store.appointment_deposit_cursor().unwrap(), None);
+    assert_eq!(store.booking_notice_head().unwrap(), 0);
+
+    let result = crate::ops::set_appointment_status(
+        &mut store,
+        "visit",
+        AppointmentStatus::Completed,
+        "2026-03-10T15:00:00Z".parse().unwrap(),
+    );
+    assert!(matches!(
+        result,
+        Err(crate::error::CoreError::AttendanceProtected(
+            AttendanceProtectionBlock::PendingDeposit
+        ))
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
 }
 
 fn enqueue_clients(s: &mut Store, n: usize) -> Vec<String> {
@@ -528,6 +589,7 @@ fn page(from: i64, n: i64, has_more: bool) -> PullResponse {
             gift_cards_scope: None,
             client_groups: None,
             booked_resource_ids: None,
+            appointment_deposit_status: None,
             calendar_scope: None,
             viewer_edit_calendar: None,
             viewer_role: None,
@@ -681,6 +743,7 @@ fn client_visibility_change_purges_the_previous_replica_and_keeps_the_outbox() {
                 gift_cards_scope: None,
                 client_groups: None,
                 booked_resource_ids: None,
+                appointment_deposit_status: None,
                 calendar_scope: Some("staff".into()),
                 viewer_edit_calendar: None,
                 viewer_role: None,
@@ -754,6 +817,7 @@ fn tombstones_in_a_pull_remove_local_rows() {
                 gift_cards_scope: None,
                 client_groups: None,
                 booked_resource_ids: None,
+                appointment_deposit_status: None,
                 calendar_scope: None,
                 viewer_edit_calendar: None,
                 viewer_role: None,
@@ -839,6 +903,7 @@ fn a_server_that_says_has_more_without_progress_cannot_spin_the_client() {
                 gift_cards_scope: None,
                 client_groups: None,
                 booked_resource_ids: None,
+                appointment_deposit_status: None,
                 calendar_scope: None,
                 viewer_edit_calendar: None,
                 viewer_role: None,
@@ -880,6 +945,7 @@ fn empty_pages_that_still_advance_the_cursor_are_followed() {
                 gift_cards_scope: None,
                 client_groups: None,
                 booked_resource_ids: None,
+                appointment_deposit_status: None,
                 calendar_scope: None,
                 viewer_edit_calendar: None,
                 viewer_role: None,
@@ -1037,6 +1103,7 @@ fn offline_create_then_reconnect_applies_and_clears_the_pending_flag() {
                 gift_cards_scope: None,
                 client_groups: None,
                 booked_resource_ids: None,
+                appointment_deposit_status: None,
                 calendar_scope: None,
                 viewer_edit_calendar: None,
                 viewer_role: None,

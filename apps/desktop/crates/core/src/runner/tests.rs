@@ -69,6 +69,7 @@ impl Transport for Scripted {
             gift_cards_scope: None,
             client_groups: None,
             booked_resource_ids: None,
+            appointment_deposit_status: None,
             calendar_scope: None,
             viewer_edit_calendar: None,
             viewer_role: None,

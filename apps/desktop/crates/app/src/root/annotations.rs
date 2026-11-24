@@ -39,7 +39,7 @@ impl Details {
         self.deposit_outcome_block = context
             .protection
             .as_ref()
-            .and_then(|deposit| deposit.attendance_block);
+            .and_then(|deposit| deposit.status.attendance_block);
         self.annotations = Some(Annotations::Ready(context));
     }
 }

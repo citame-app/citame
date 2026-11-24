@@ -1,13 +1,8 @@
 import { z } from "zod";
-import { bookingProtectionSchema } from "./booking-protection";
+import { appointmentDepositStatusSchema, bookingProtectionSchema } from "./booking-protection";
 import { idSchema, LIMITS } from "./common";
 
-export const appointmentProtectionContextSchema = bookingProtectionSchema
-  .pick({
-    state: true,
-    expiresAt: true,
-    cancellationCutoff: true,
-  })
+export const appointmentProtectionContextSchema = appointmentDepositStatusSchema
   .extend(
     bookingProtectionSchema
       .pick({ checkoutId: true, depositCents: true, feeCents: true, refundDueCents: true })
@@ -15,7 +10,6 @@ export const appointmentProtectionContextSchema = bookingProtectionSchema
   )
   .extend({
     receiptRestricted: z.literal(true).optional(),
-    attendanceBlock: z.enum(["pending_deposit", "closed_protection"]).optional(),
   });
 
 export const appointmentContextInputSchema = z

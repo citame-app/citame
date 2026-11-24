@@ -238,7 +238,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     let mut switched_generation = false;
     let snapshot_complete = store.get_meta("calendar_snapshot_complete")?.is_some();
     let mut request_colors = store.get_meta(CATALOG_COLORS_CACHED)?.is_none();
-    let (client_groups_supported, booked_resource_ids_supported) = loop {
+    let (client_groups_supported, booked_resource_ids_supported, deposit_status_supported) = loop {
         let since = store.cursor()?;
         let response = transport.pull_with_catalogue(
             since,
@@ -322,6 +322,7 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             break (
                 page.client_groups == Some(true),
                 page.booked_resource_ids == Some(true),
+                page.appointment_deposit_status == Some(true),
             );
         }
     };
@@ -331,8 +332,40 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
     if booked_resource_ids_supported {
         backfill_booked_resources(store, transport, &generation, &mut report)?;
     }
+    if deposit_status_supported {
+        backfill_appointment_deposits(store, transport, &generation, &mut report)?;
+    }
     report.cursor = store.cursor()?;
     Ok(report)
+}
+
+fn backfill_appointment_deposits(
+    store: &mut Store,
+    transport: &dyn Transport,
+    generation: &str,
+    report: &mut PullReport,
+) -> Result<(), SyncError> {
+    while let Some(since) = store.appointment_deposit_cursor()? {
+        let page = transport.pull(since, PULL_PAGE).map_err(classify)?;
+        if page.generation.as_deref().unwrap_or(INITIAL_GENERATION) != generation
+            || page.appointment_deposit_status != Some(true)
+        {
+            break;
+        }
+        if page.next_cursor < since || (page.has_more && page.next_cursor == since) {
+            return Err(SyncError::Fatal(
+                "The appointment deposit backfill cursor did not advance".into(),
+            ));
+        }
+        report.changes += store.apply_appointment_deposit_page(
+            &page.changes,
+            page.next_cursor,
+            page.has_more,
+            generation,
+        )?;
+        report.pages += 1;
+    }
+    Ok(())
 }
 
 /// Fill allocations discarded by an older Desktop without replaying booking notices or outbox state.

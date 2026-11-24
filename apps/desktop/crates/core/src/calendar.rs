@@ -262,6 +262,7 @@ fn overlay_calendar_outbox(
                         staff_id,
                         client_id,
                         client_name,
+                        deposit_status: None,
                         starts_at,
                         ends_at: starts_at + Duration::minutes(block),
                         status: AppointmentStatus::Booked,
