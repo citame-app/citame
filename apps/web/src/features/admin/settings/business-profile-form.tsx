@@ -1,6 +1,7 @@
 import {
   applyOpeningScheduleEdits,
   BUSINESS_AMENITIES,
+  BUSINESS_DESCRIPTION_MAX_LENGTH,
   type BusinessProfile,
   type BusinessProfileChanges,
   businessProfileSchema,
@@ -10,9 +11,10 @@ import {
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
+import { TextAreaField } from "~/components/ui/select-field";
 import { ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useI18n } from "~/i18n/react";
@@ -25,7 +27,6 @@ import { OpeningHoursEditor } from "./opening-hours-editor";
 const queryKey = ["admin", "settings", "profile"] as const;
 const fields = [
   { key: "category", maxLength: 80 },
-  { key: "description", maxLength: 600 },
   { key: "address", maxLength: 240, autoComplete: "address-line1" },
   { key: "phone", maxLength: 32, type: "tel", autoComplete: "tel" },
   { key: "email", maxLength: 254, type: "email", autoComplete: "email" },
@@ -72,6 +73,7 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
   const toast = useToast();
   const queries = useQueryClient();
   const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [errors, setErrors] = useState<Set<string>>(() => new Set());
   const base = draft?.base ?? latest;
@@ -127,6 +129,7 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
   if (!base.businessProfile) return <p role="status">{t("settings.profile.unavailable")}</p>;
   return (
     <form
+      ref={formRef}
       className="max-w-2xl space-y-5"
       aria-labelledby="business-profile-heading"
       noValidate
@@ -142,6 +145,9 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
         const parsed = businessProfileSchema.partial().safeParse(normalized);
         if (!parsed.success) {
           setErrors(new Set(parsed.error.issues.map((issue) => String(issue.path[0]))));
+          queueMicrotask(() =>
+            formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus(),
+          );
           return;
         }
         setErrors(new Set());
@@ -161,6 +167,15 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
       <p className="text-sm text-muted">{t("settings.profile.help")}</p>
       <fieldset disabled={save.isPending || reload.isPending} className="space-y-4">
         <legend className="sr-only">{t("settings.profile.title")}</legend>
+        <TextAreaField
+          name="description"
+          label={t("settings.profile.description")}
+          value={form.description ?? ""}
+          rows={6}
+          maxLength={BUSINESS_DESCRIPTION_MAX_LENGTH}
+          error={errors.has("description") ? t("settings.profile.invalid") : undefined}
+          onChange={(event) => edit("description", event.currentTarget.value || null)}
+        />
         {fields.map((field) => (
           <TextField
             key={field.key}

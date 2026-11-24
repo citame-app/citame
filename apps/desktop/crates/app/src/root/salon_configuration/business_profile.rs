@@ -1,5 +1,6 @@
 use super::*;
 use sob_core::http::{BusinessAmenity, BusinessProfile, OpeningSchedule};
+use std::{cell::Cell, rc::Rc};
 
 mod opening_hours;
 use opening_hours::HoursEditor;
@@ -11,18 +12,12 @@ struct TextSpec {
     write: fn(&mut BusinessProfile, Option<String>),
 }
 
-const FIELDS: [TextSpec; 9] = [
+const FIELDS: [TextSpec; 8] = [
     TextSpec {
         label: Key::BusinessCategory,
         limit: 80,
         read: |profile| &profile.category,
         write: |profile, value| profile.category = value,
-    },
-    TextSpec {
-        label: Key::BusinessDescription,
-        limit: 600,
-        read: |profile| &profile.description,
-        write: |profile, value| profile.description = value,
     },
     TextSpec {
         label: Key::BusinessAddress,
@@ -82,8 +77,120 @@ const AMENITIES: [(BusinessAmenity, Key); 6] = [
     (BusinessAmenity::PetsWelcome, Key::BusinessPetsWelcome),
 ];
 
+const DESCRIPTION_LIMIT: usize = 2_000;
+const DESCRIPTION_LINES: usize = 64;
+
+struct DescriptionLine {
+    input: Entity<TextField>,
+    _events: Subscription,
+}
+
+struct DescriptionEditor {
+    lines: Vec<DescriptionLine>,
+    remaining: Rc<Cell<usize>>,
+    paste_rejected: bool,
+}
+
+impl DescriptionEditor {
+    fn new(value: &str, cx: &mut Context<Root>) -> Self {
+        let remaining = Rc::new(Cell::new(
+            DESCRIPTION_LINES.saturating_sub(value.split('\n').count()),
+        ));
+        Self {
+            lines: value
+                .split('\n')
+                .map(|line| description_line(line, remaining.clone(), cx))
+                .collect(),
+            remaining,
+            paste_rejected: false,
+        }
+    }
+
+    fn draft(&self, cx: &App) -> Result<Option<String>, Key> {
+        let value = self
+            .lines
+            .iter()
+            .map(|line| line.input.read(cx).text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let value = value.trim();
+        if self.lines.len() > DESCRIPTION_LINES
+            || value.encode_utf16().count() > DESCRIPTION_LIMIT
+            || value
+                .chars()
+                .any(|ch| ch != '\n' && (ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')))
+        {
+            return Err(Key::BusinessDescription);
+        }
+        Ok((!value.is_empty()).then(|| value.to_owned()))
+    }
+
+    fn add_line(&mut self, cx: &mut Context<Root>) {
+        if let Some(next) = self.remaining.get().checked_sub(1) {
+            self.remaining.set(next);
+            self.lines
+                .push(description_line("", self.remaining.clone(), cx));
+            self.paste_rejected = false;
+        }
+    }
+
+    fn remove_line(&mut self, index: usize) {
+        if self.lines.len() > 1 && index < self.lines.len() {
+            self.lines.remove(index);
+            self.remaining
+                .set(DESCRIPTION_LINES.saturating_sub(self.lines.len()));
+            self.paste_rejected = false;
+        }
+    }
+}
+
+fn description_line(
+    value: &str,
+    remaining: Rc<Cell<usize>>,
+    cx: &mut Context<Root>,
+) -> DescriptionLine {
+    let input = cx.new(|cx| {
+        let mut input =
+            TextField::new("", false, cx).with_bounded_line_paste(DESCRIPTION_LIMIT, remaining);
+        input.set_text(value, cx);
+        input
+    });
+    cx.observe(&input, |_, _, cx| cx.notify()).detach();
+    let events = cx.subscribe(&input, |root, origin, event, cx| {
+        root.edit_business_profile(cx, |editor, cx| {
+            let description = &mut editor.description;
+            let Some(index) = description
+                .lines
+                .iter()
+                .position(|line| line.input == origin)
+            else {
+                return;
+            };
+            match event {
+                FieldEvent::PasteLines(tail) => {
+                    let remaining = description.remaining.clone();
+                    description.lines.splice(
+                        index + 1..index + 1,
+                        tail.iter()
+                            .map(|value| description_line(value, remaining.clone(), cx)),
+                    );
+                    description.paste_rejected = false;
+                }
+                FieldEvent::PasteTooLong => description.paste_rejected = true,
+                FieldEvent::Changed => description.paste_rejected = false,
+                FieldEvent::Submit => {}
+            }
+        });
+    });
+    DescriptionLine {
+        input,
+        _events: events,
+    }
+}
+
 pub(super) struct BusinessEditor {
     inputs: [Entity<TextField>; FIELDS.len()],
+    description: DescriptionEditor,
     published: bool,
     mobile_service: bool,
     amenities: [bool; AMENITIES.len()],
@@ -105,6 +212,10 @@ impl BusinessEditor {
         });
         Self {
             inputs,
+            description: DescriptionEditor::new(
+                profile.description.as_deref().unwrap_or_default(),
+                cx,
+            ),
             published: profile.published,
             mobile_service: profile.mobile_service,
             amenities: AMENITIES.map(|(value, _)| profile.amenities.contains(&value)),
@@ -121,6 +232,7 @@ impl BusinessEditor {
 
     pub(super) fn draft(&self, cx: &App) -> Result<BusinessProfile, Key> {
         let mut profile = BusinessProfile {
+            description: self.description.draft(cx)?,
             published: self.published,
             mobile_service: self.mobile_service,
             amenities: AMENITIES
@@ -240,6 +352,63 @@ impl Root {
                     .text_color(theme::muted())
                     .child(self.t(Key::BusinessProfileHelp)),
             )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(div().text_sm().child(self.t(Key::BusinessDescription)))
+                    .children(
+                        editor
+                            .description
+                            .lines
+                            .iter()
+                            .enumerate()
+                            .map(|(index, line)| {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .child(div().flex_1().min_w(px(0.)).child(line.input.clone()))
+                                    .when(editor.description.lines.len() > 1, |row| {
+                                        row.child(self.button(
+                                            ("business-description-remove", index),
+                                            self.t(Key::BusinessDescriptionRemoveLine),
+                                            Kind::Ghost,
+                                            cx.listener(move |root, _, _, cx| {
+                                                root.edit_business_profile(cx, |profile, _| {
+                                                    profile.description.remove_line(index)
+                                                });
+                                            }),
+                                        ))
+                                    })
+                            }),
+                    )
+                    .when(editor.description.remaining.get() > 0, |row| {
+                        row.child(div().flex().child(self.button(
+                            "business-description-add",
+                            self.t(Key::BusinessDescriptionAddLine),
+                            Kind::Ghost,
+                            cx.listener(|root, _, _, cx| {
+                                root.edit_business_profile(cx, |profile, cx| {
+                                    profile.description.add_line(cx)
+                                });
+                            }),
+                        )))
+                    })
+                    .when(
+                        invalid == Some(Key::BusinessDescription)
+                            || editor.description.paste_rejected,
+                        |row| {
+                            row.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme::muted())
+                                    .child(self.t(Key::BusinessProfileInvalid)),
+                            )
+                        },
+                    ),
+            )
             .children(FIELDS.iter().zip(&editor.inputs).map(|(field, input)| {
                 div()
                     .flex()
@@ -331,6 +500,9 @@ mod tests {
             let editor = desk.editor.as_mut().unwrap();
             editor.show_profile = true;
             let profile = editor.profile.as_mut().unwrap();
+            let description = format!("{}\n\n{}", "a".repeat(720), "b".repeat(720));
+            profile.description = DescriptionEditor::new(&description, cx);
+            assert_eq!(profile.description.lines.len(), 3);
             let input = |label| profile.inputs[FIELDS.iter().position(|spec| spec.label == label).unwrap()].clone();
             input(Key::BusinessEmail).update(cx, |field, cx| field.set_text("a..b@example.com", cx));
             assert!(matches!(profile.draft(cx), Err(Key::BusinessEmail)));
@@ -344,7 +516,7 @@ mod tests {
                 panic!("Offline edit did not persist")
             };
             assert_eq!(serde_json::to_value(&write).unwrap()["changes"], serde_json::json!({
-                "businessProfile": {"address": "9 Test Street", "website": "https://example.test"}
+                "businessProfile": {"address": "9 Test Street", "website": "https://example.test", "description": description}
             }));
         }).unwrap();
     }

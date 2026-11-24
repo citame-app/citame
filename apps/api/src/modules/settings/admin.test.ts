@@ -253,10 +253,18 @@ test("keeps the public profile draft private and publishes only reviewed owner c
   ]) {
     expect((await write(owner, { ...fence, changes: { website } })).status).toBe(400);
   }
-  const description = "Synthetic salon profile";
+  const firstLine = "Synthetic salon profile";
+  const description = [firstLine, "Treatment and opening details. ".repeat(39).trim()].join("\n\n");
+  for (const invalid of ["x".repeat(2001), "x\u0000y", "x\n".repeat(64) + "last line"]) {
+    expect((await write(owner, { ...fence, changes: { description: invalid } })).status).toBe(400);
+  }
   const draft = await write(owner, {
     ...fence,
-    changes: { description, amenities: ["wifi", "wifi"], website: "https://example.test" },
+    changes: {
+      description: description.replaceAll("\n", "\r\n"),
+      amenities: ["wifi", "wifi"],
+      website: "https://example.test",
+    },
   });
   expect(draft.status, await draft.clone().text()).toBe(200);
   expect(await draft.json()).toMatchObject({
@@ -265,7 +273,7 @@ test("keeps the public profile draft private and publishes only reviewed owner c
   expect(await publicProfile()).toBeNull();
   const staffSync = await json(t.app, "/sync/pull?since=0&limit=200", "GET", undefined, ana.cookie);
   expect(staffSync.status).toBe(200);
-  expect(await staffSync.text()).not.toContain(description);
+  expect(await staffSync.text()).not.toContain(firstLine);
   expect((await write(owner, { ...fence, changes: { published: true } })).status).toBe(409);
   const latest = desktopSalonSettingsSchema.parse(await (await read(owner)).json());
   expect(

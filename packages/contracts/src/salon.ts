@@ -121,8 +121,23 @@ export function applyOpeningScheduleEdits(
       .map(([date, ranges]) => ({ date, ranges })),
   };
 }
+export const BUSINESS_DESCRIPTION_MAX_LENGTH = 2_000;
+const BUSINESS_DESCRIPTION_MAX_LINES = 64;
+const businessDescription = z
+  .string()
+  .transform((value) => value.replace(/\r\n?/g, "\n").trim())
+  .pipe(
+    z
+      .string()
+      .min(1)
+      .max(BUSINESS_DESCRIPTION_MAX_LENGTH)
+      .refine((value) => value.split("\n").length <= BUSINESS_DESCRIPTION_MAX_LINES)
+      .refine((value) => !/[\p{Cc}\u2028\u2029]/u.test(value.replaceAll("\n", ""))),
+  )
+  .nullable();
+
 export const businessProfileContentSchema = z.strictObject({
-  description: shortText(600),
+  description: businessDescription,
   category: shortText(80),
   address: shortText(240),
   phone: phoneSchema.regex(/^[^\p{Cc}]+$/u).nullable(),
