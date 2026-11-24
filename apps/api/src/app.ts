@@ -1,6 +1,7 @@
 import type { CalendarResponse, HealthResponse } from "@sob/contracts";
-import type { Database } from "@sob/db";
+import { type Database, jwks } from "@sob/db";
 import type { RedisClient } from "bun";
+import { gt, isNull, or } from "drizzle-orm";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { createAuth } from "./auth/auth";
@@ -189,16 +190,28 @@ export function createApp(input: AppDeps): App {
   };
   app.ready = async () => {
     await ensureOAuthSeeds(deps.db, deps.config);
-    try {
-      // Use the same signing path as real sessions before accepting traffic. The probe
-      // has no user or permissions, has its own audience and never leaves this process.
-      await auth.api.signJWT({
-        body: { payload: { aud: "urn:citame:startup", exp: Math.floor(Date.now() / 1000) + 5 } },
-      });
-    } catch {
-      throw new Error(
-        "Cannot use the OAuth signing key. Check BETTER_AUTH_SECRET and the selected database.",
-      );
+    if (!consultation) {
+      // Check restored keys before serving traffic. Fresh installs keep lazy key creation
+      // so parallel starts do not all try to create the first key.
+      const [liveKey] = await deps.db
+        .select({ id: jwks.id })
+        .from(jwks)
+        .where(or(isNull(jwks.expiresAt), gt(jwks.expiresAt, new Date())))
+        .limit(1);
+      if (liveKey) {
+        try {
+          // The probe has no user or permissions and never leaves this process.
+          await auth.api.signJWT({
+            body: {
+              payload: { aud: "urn:citame:startup", exp: Math.floor(Date.now() / 1000) + 5 },
+            },
+          });
+        } catch {
+          throw new Error(
+            "Cannot use the OAuth signing key. Check BETTER_AUTH_SECRET and the selected database.",
+          );
+        }
+      }
     }
     auth.mailer.start();
   };
