@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextAreaField } from "~/components/ui/select-field";
 import { useI18n } from "~/i18n/react";
+import { calendarEntryQueryKey } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { AppointmentBadges } from "./appointment-badges";
@@ -17,21 +18,23 @@ import { invalidateCalendarData } from "./cache";
 
 const contextKey = (id: string) => ["admin", "appointment-context", id] as const;
 type NoteValues = { note: string; requested: boolean };
-type NoteDraft = NoteValues & {
-  baseline: NoteValues & { appointmentVersion: number; version: number };
+type NoteDraft = Partial<NoteValues> & {
+  baseline: { note: string; staffId: string; requestedStaffId: string | null };
 };
 
 export function AppointmentContext({
   appointment,
+  staffName,
   readOnly = false,
 }: {
   appointment: CalendarAppointment;
+  staffName: string;
   readOnly?: boolean;
 }) {
   const { t } = useI18n();
   const context = useQuery({
     queryKey: contextKey(appointment.id),
-    queryFn: () => api().appointments.context(appointment.id),
+    queryFn: ({ signal }) => api().appointments.context(appointment.id, signal),
   });
   const details = context.data;
   const writePending = usePendingCalendarWrites().has(appointment.id);
@@ -64,11 +67,14 @@ export function AppointmentContext({
             // biome-ignore lint/suspicious/noArrayIndexKey: the frozen service position identifies this note in the API.
             key={`${appointment.id}:${index}`}
             appointment={appointment}
+            staffName={staffName}
             appointmentVersion={details.appointmentVersion ?? appointment.version}
             position={index}
             name={service.name}
             row={details.rows.find((r) => r.servicePosition === index)}
-            readOnly={readOnly}
+            readOnly={readOnly || details.canEdit === false}
+            defaultRequested={details.defaultRequested}
+            refreshing={context.isFetching}
             writePending={writePending}
           />
         ))
@@ -78,32 +84,62 @@ export function AppointmentContext({
 }
 function ServiceContext({
   appointment,
+  staffName,
   appointmentVersion,
   position,
   name,
   row,
   readOnly = false,
+  defaultRequested,
+  refreshing,
   writePending,
 }: {
   appointment: CalendarAppointment;
+  staffName: string;
   appointmentVersion: number;
   position: number;
   name: string;
   row?: AppointmentContextRow;
   readOnly?: boolean;
+  defaultRequested?: boolean;
+  refreshing: boolean;
   writePending: boolean;
 }) {
   const { t } = useI18n();
   const queries = useQueryClient();
   const badges = appointment.serviceBadges?.filter((b) => b.servicePosition === position);
   const latest = {
-    appointmentVersion,
-    version: row?.version ?? 0,
+    staffId: appointment.staffId,
+    requestedStaffId: row?.requestedStaffId ?? null,
     note: row?.internalNote ?? "",
-    requested: row ? Boolean(row.requestedStaffId) : (badges?.some((b) => b.requested) ?? false),
+    requested: row
+      ? Boolean(row.requestedStaffId)
+      : (defaultRequested ?? badges?.some((b) => b.requested) ?? false),
   };
   const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const values = draft ?? latest;
+  const values = {
+    note: draft?.note ?? latest.note,
+    requested: draft?.requested ?? latest.requested,
+  };
+  const noteChanged = draft?.note !== undefined && values.note.trim() !== latest.note.trim();
+  const requestChanged =
+    draft?.requested !== undefined &&
+    (values.requested !== latest.requested ||
+      (values.requested &&
+        latest.requestedStaffId !== null &&
+        latest.requestedStaffId !== latest.staffId));
+  const noteOverlap = noteChanged && draft !== null && draft.baseline.note !== latest.note;
+  const requestOverlap =
+    draft?.requested !== undefined &&
+    ((requestChanged && draft.baseline.requestedStaffId !== latest.requestedStaffId) ||
+      (values.requested && draft.baseline.staffId !== latest.staffId));
+  const rowVersion = row?.version ?? 0;
+  const refresh = () =>
+    Promise.all([
+      queries.invalidateQueries({ queryKey: contextKey(appointment.id) }),
+      queries.invalidateQueries({ queryKey: ["admin", "calendar"] }),
+      queries.invalidateQueries({ queryKey: calendarEntryQueryKey(appointment.id) }),
+    ]);
   const save = useMutation({
     mutationKey: calendarWriteKey,
     mutationFn: ({ appointment, context }: CalendarServiceContextChange) =>
@@ -121,15 +157,54 @@ function ServiceContext({
       setDraft(null);
       return invalidateCalendarData(queries);
     },
+    onError: (error) => {
+      if (error instanceof ApiError && error.status === 409) void refresh();
+    },
   });
-  const conflicted = save.error instanceof ApiError && save.error.status === 409;
+  const conflicted = save.isError && save.error instanceof ApiError && save.error.status === 409;
+  const needsRefresh =
+    conflicted &&
+    (appointmentVersion < save.variables.appointment.version ||
+      (appointmentVersion === save.variables.appointment.version &&
+        rowVersion <= save.variables.context.version));
+  // A new professional request only applies to the assignment currently shown in the drawer.
+  const awaitingAssignment =
+    draft?.requested !== undefined &&
+    values.requested &&
+    appointment.version !== appointmentVersion;
+  const reviewRequired = noteOverlap || requestOverlap;
+  const canSave =
+    !readOnly &&
+    !writePending &&
+    !needsRefresh &&
+    !awaitingAssignment &&
+    !reviewRequired &&
+    (noteChanged || requestChanged);
+
   function update(change: Partial<NoteValues>) {
-    const baseline = draft?.baseline ?? latest;
-    const next = { note: values.note, requested: values.requested, ...change };
+    const note =
+      change.note === undefined
+        ? draft?.note
+        : change.note === latest.note
+          ? undefined
+          : change.note;
+    const requested =
+      change.requested === undefined
+        ? draft?.requested
+        : change.requested === latest.requested
+          ? undefined
+          : change.requested;
+    const nextBaseline = {
+      ...latest,
+      ...(draft?.note !== undefined ? { note: draft.baseline.note } : {}),
+      ...(draft?.requested !== undefined
+        ? { requestedStaffId: draft.baseline.requestedStaffId, staffId: draft.baseline.staffId }
+        : {}),
+    };
     setDraft(
-      next.note === baseline.note && next.requested === baseline.requested
+      note === undefined && requested === undefined
         ? null
-        : { ...next, baseline },
+        : { note, requested, baseline: nextBaseline },
     );
     if (save.isError && !conflicted) save.reset();
   }
@@ -163,37 +238,76 @@ function ServiceContext({
         maxLength={2000}
         readOnly={readOnly || save.isPending}
       />
-      {save.isError && (
+      <div role="status" className="text-sm empty:sr-only">
+        {needsRefresh && t("badge.saveConflict")}
+        {!needsRefresh && awaitingAssignment && t("badge.loadAssignment")}
+        {!needsRefresh && !awaitingAssignment && reviewRequired && t("badge.reviewConflict")}
+      </div>
+      {save.isError && !conflicted && (
         <p role="alert" className="text-sm text-danger-fg">
-          {t(conflicted ? "badge.saveConflict" : "badge.saveError")}
+          {t("badge.saveError")}
         </p>
+      )}
+      {reviewRequired && (
+        <div className="space-y-2 rounded-lg bg-sunken p-3 text-sm">
+          <p className="font-medium">{t("badge.savedDetails")}</p>
+          {noteOverlap && (
+            <p className="whitespace-pre-wrap break-words">
+              {latest.note || t("drawer.notes.empty")}
+            </p>
+          )}
+          {requestOverlap && (
+            <p>
+              {values.requested
+                ? t("badge.assignedProfessionalChanged")
+                : t("badge.savedPreferenceChanged")}
+              {values.requested && staffName && (
+                <span className="block font-medium">{staffName}</span>
+              )}
+            </p>
+          )}
+        </div>
+      )}
+      {!readOnly && (needsRefresh || awaitingAssignment) && (
+        <Button variant="secondary" loading={refreshing} onClick={() => void refresh()}>
+          {t("problem.reload")}
+        </Button>
+      )}
+      {!readOnly && reviewRequired && !needsRefresh && !awaitingAssignment && (
+        <Button
+          variant="secondary"
+          disabled={refreshing || writePending}
+          onClick={() => {
+            setDraft({
+              note: noteChanged ? values.note : undefined,
+              requested: requestChanged ? values.requested : undefined,
+              baseline: latest,
+            });
+            save.reset();
+          }}
+        >
+          {t("drawer.notes.keepDraft")}
+        </Button>
       )}
       {!readOnly && (
         <Button
           variant="secondary"
           loading={save.isPending}
-          disabled={!draft || conflicted || writePending}
+          disabled={!canSave}
           onClick={() => {
-            if (!draft || conflicted) return;
-            const { baseline, requested, note } = draft;
-            const unchanged =
-              latest.version === baseline.version &&
-              latest.note === baseline.note &&
-              latest.requested === baseline.requested;
+            if (!canSave) return;
             startCalendarWrite(
               queries,
               {
                 appointment: {
                   id: appointment.id,
-                  version: unchanged
-                    ? Math.max(appointment.version, latest.appointmentVersion)
-                    : baseline.appointmentVersion,
+                  version: appointmentVersion,
                 },
                 context: {
                   servicePosition: position,
-                  version: baseline.version,
-                  ...(requested !== baseline.requested ? { requested } : {}),
-                  internalNote: note,
+                  version: rowVersion,
+                  ...(requestChanged ? { requested: values.requested } : {}),
+                  internalNote: values.note,
                 },
               },
               save.mutate,
@@ -203,15 +317,14 @@ function ServiceContext({
           {t("badge.save")}
         </Button>
       )}
-      {!readOnly && conflicted && (
+      {!readOnly && (needsRefresh || reviewRequired) && (
         <Button
           variant="secondary"
+          disabled={writePending}
           onClick={() => {
-            void queries.invalidateQueries({
-              queryKey: contextKey(appointment.id),
-            });
             setDraft(null);
             save.reset();
+            if (needsRefresh) void refresh();
           }}
         >
           {t("badge.discardDraft")}

@@ -336,7 +336,7 @@ function DrawerBody({
         </p>
       )}
       {(!readOnly || appointment.sourceCopy) && (
-        <AppointmentContext appointment={appointment} readOnly={readOnly} />
+        <AppointmentContext appointment={appointment} staffName={staffName} readOnly={readOnly} />
       )}
       <div className="space-y-3">
         <TextAreaField

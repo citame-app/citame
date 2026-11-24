@@ -279,7 +279,8 @@ export function createEndpoints(client: ApiClient) {
       catalog: () => client.get("/appointments/catalog", listServicesResponseSchema),
       calendarEntry: (id: string, signal?: AbortSignal) =>
         client.get(`/appointments/${id}/calendar-entry`, calendarAppointmentSchema, { signal }),
-      context: (id: string) => client.get(`/appointments/${id}/context`, appointmentContextSchema),
+      context: (id: string, signal?: AbortSignal) =>
+        client.get(`/appointments/${id}/context`, appointmentContextSchema, { signal }),
       updateContext: (id: string, request: AppointmentContextUpdate) =>
         client.patch(`/appointments/${id}/context`, request, appointmentContextSchema),
       previewBooksyContext: (input: BooksyContextImport) =>
