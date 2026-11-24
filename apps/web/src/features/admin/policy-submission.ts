@@ -6,6 +6,7 @@ export function usePolicySubmission<Input, Output>(
   input: Input,
   save: (packet: Input) => Promise<Output>,
   onSaved: (result: Output) => void | Promise<void>,
+  retainOnRetryError?: (error: unknown) => boolean,
 ) {
   const [uncertain, setUncertain] = useState(false);
   const packet = useRef<Input | undefined>(undefined);
@@ -33,7 +34,8 @@ export function usePolicySubmission<Input, Output>(
       if (
         error instanceof NetworkError ||
         error instanceof ResponseShapeError ||
-        (error instanceof ApiError && error.status >= 500)
+        (error instanceof ApiError && error.status >= 500) ||
+        (uncertain && retainOnRetryError?.(error))
       )
         setUncertain(true);
       else {

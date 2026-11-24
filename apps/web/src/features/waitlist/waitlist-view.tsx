@@ -1,19 +1,20 @@
 import type { Appointment, WaitlistEntry, WaitlistSourceEntry } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, buttonClasses } from "~/components/ui/button";
 import { ConfirmDialog } from "~/components/ui/dialog";
 import { SelectField } from "~/components/ui/select-field";
-import { Sheet } from "~/components/ui/sheet";
 import { EmptyState, ErrorState, Skeleton, useOnline } from "~/components/ui/states";
 import { useToast } from "~/components/ui/toast";
 import { useNow } from "~/features/admin/use-now";
 import { BookingProtectionNotice } from "~/features/booking/protection";
+import { totalPriceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
+import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
-import { formatDateLong, formatMoney, formatTime, localDateOf } from "~/lib/format";
+import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
 import { type JoinFormProps, WaitlistJoinForm } from "./join-form";
 import { WaitlistOfferReview } from "./offer-review";
 import { WaitlistPolicyForm } from "./policy-form";
@@ -92,11 +93,60 @@ export function WaitlistView({
       invalidate();
     },
   });
-  if (query.isPending) return <Skeleton className="h-52" />;
-  if (query.isError) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />;
+  const lostAccess = query.error instanceof ApiError && [401, 403].includes(query.error.status);
+  useEffect(() => {
+    if (!lostAccess) return;
+    setReview(null);
+    setBooked(null);
+  }, [lostAccess]);
+  const reviewPanel = review && !lostAccess && (
+    <WaitlistOfferReview
+      key={`${review.id}:${review.version}`}
+      entry={review}
+      mode={mode}
+      role={role}
+      accessPreset={accessPreset}
+      bookingEnabled={canBookOnline}
+      onClose={() => setReview(null)}
+      onBooked={(a) => {
+        setBooked(a);
+        setReview(null);
+      }}
+    />
+  );
+  const bookedResult = booked && (
+    <div role="status" className="space-y-3 rounded-xl border border-line bg-surface p-4">
+      <p className="font-medium text-success-fg">{t("waitlist.accepted")}</p>
+      {booked.protection && (
+        <BookingProtectionNotice protection={booked.protection} role={role} mode={mode} />
+      )}
+      <BookingLink
+        onNavigate={onNavigate}
+        mode={mode}
+        appointmentId={booked.id}
+        startsAt={booked.startsAt}
+        staffId={booked.staffId}
+      />
+    </div>
+  );
+  if (query.isPending || query.isError) {
+    return (
+      <>
+        <div className="space-y-3">
+          {query.isPending ? (
+            <Skeleton className="h-52" />
+          ) : (
+            <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+          )}
+          {!lostAccess && bookedResult}
+        </div>
+        {reviewPanel}
+      </>
+    );
+  }
   const today = localDateOf(now.toISOString(), timeZone);
   const hasImportToReview = query.data.imported?.some((item) => item.requestedDate >= today);
-  return (
+  const list = (
     <section aria-label={t("waitlist.title")} className="min-w-0 space-y-6">
       {mode === "admin" && role === "owner" && !calendarRange && (
         <WaitlistPolicyForm initial={query.data.policy} />
@@ -142,21 +192,7 @@ export function WaitlistView({
           </ul>
         </section>
       )}
-      {booked && (
-        <div role="status" className="space-y-3 rounded-xl border border-line bg-surface p-4">
-          <p className="font-medium text-success-fg">{t("waitlist.accepted")}</p>
-          {booked.protection && (
-            <BookingProtectionNotice protection={booked.protection} role={role} mode={mode} />
-          )}
-          <BookingLink
-            onNavigate={onNavigate}
-            mode={mode}
-            appointmentId={booked.id}
-            startsAt={booked.startsAt}
-            staffId={booked.staffId}
-          />
-        </div>
-      )}
+      {bookedResult}
       {!canBookOnline && (
         <p className="rounded-lg bg-sunken p-4 text-sm">{t("booking.paused.title")}</p>
       )}
@@ -302,7 +338,14 @@ export function WaitlistView({
                       </p>
                       <p>
                         {t("waitlist.price", {
-                          price: formatMoney(entry.offer.priceCents, entry.offer.currency, locale),
+                          price: totalPriceLabel(
+                            t,
+                            locale,
+                            entry.offer.services,
+                            entry.offer.priceCents,
+                            entry.offer.currency,
+                            true,
+                          ),
                         })}
                       </p>
                       <p className="text-sm">
@@ -393,26 +436,6 @@ export function WaitlistView({
           </div>
         </div>
       )}
-      <Sheet
-        open={Boolean(review) && canBookOnline}
-        onOpenChange={(open) => !open && setReview(null)}
-        title={t("waitlist.offerTitle")}
-        size="lg"
-      >
-        {review && canBookOnline && (
-          <WaitlistOfferReview
-            key={`${review.id}:${review.version}`}
-            entry={review}
-            mode={mode}
-            role={role}
-            accessPreset={accessPreset}
-            onBooked={(a) => {
-              setBooked(a);
-              setReview(null);
-            }}
-          />
-        )}
-      </Sheet>
       <ConfirmDialog
         open={Boolean(cancelling)}
         onOpenChange={(open) => !open && setCancelling(null)}
@@ -425,6 +448,12 @@ export function WaitlistView({
         onConfirm={() => cancelling && cancel.mutate(cancelling)}
       />
     </section>
+  );
+  return (
+    <>
+      {list}
+      {reviewPanel}
+    </>
   );
 }
 function BookingLink({

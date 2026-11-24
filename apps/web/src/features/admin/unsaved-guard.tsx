@@ -9,9 +9,11 @@ import { useI18n } from "~/i18n/react";
 export function UnsavedGuard({
   dirty,
   preserveOnSearchChange = false,
+  description,
 }: {
   dirty: boolean;
   preserveOnSearchChange?: boolean;
+  description?: string;
 }) {
   const { t } = useI18n();
   const blocker = useBlocker({
@@ -28,7 +30,7 @@ export function UnsavedGuard({
       }}
       destructive
       title={t("admin.unsaved.title")}
-      description={t("admin.unsaved.body")}
+      description={description ?? t("admin.unsaved.body")}
       confirmLabel={t("admin.unsaved.leave")}
       cancelLabel={t("admin.unsaved.stay")}
       onConfirm={() => blocker.status === "blocked" && blocker.proceed()}

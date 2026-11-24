@@ -271,14 +271,23 @@ test("accepted protected offers still need the current deposit consent and do no
   };
   expect((await call(client, `/me/waitlist/${entry.id}/accept`, "POST", request)).status).toBe(409);
   expect(await t.db.select().from(appointment)).toHaveLength(0);
-  const r = await call(client, `/me/waitlist/${entry.id}/accept`, "POST", {
+  const acceptedTerms = {
     ...request,
     protectionAcceptedVersion: offered.offer.policy.version,
     protectionAcceptedTotalCents: offered.offer.priceCents,
-  });
+  };
+  const r = await call(client, `/me/waitlist/${entry.id}/accept`, "POST", acceptedTerms);
   expect(r.status, await r.clone().text()).toBe(201);
   const result = waitlistAcceptedSchema.parse(await r.json());
   expect(result.appointment.protection).toMatchObject({ state: "pending", depositCents: 2500 });
+  expect(await t.db.select().from(reminder)).toHaveLength(0);
+  requestNow = new Date(Date.parse(offered.offer.expiresAt) + 1);
+  const replay = await call(client, `/me/waitlist/${entry.id}/accept`, "POST", acceptedTerms);
+  expect(replay.status, await replay.clone().text()).toBe(201);
+  const recovered = waitlistAcceptedSchema.parse(await replay.json());
+  expect(recovered.appointment.id).toBe(result.appointment.id);
+  expect(recovered.entry.state).toBe("booked");
+  expect(await t.db.select().from(appointment)).toHaveLength(1);
   expect(await t.db.select().from(reminder)).toHaveLength(0);
 });
 test("a blocked profile is not offered capacity and a block after an offer prevents acceptance", async () => {

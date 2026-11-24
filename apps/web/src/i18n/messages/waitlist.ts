@@ -56,6 +56,12 @@ export const waitlistEn = {
   "waitlist.professional": "With {name}",
   "waitlist.price": "Services: {price}",
   "waitlist.accept": "Accept and book this time",
+  "waitlist.retryBooking": "Verify or retry booking",
+  "waitlist.unconfirmed":
+    "The booking response was interrupted. Verify or retry to recover the result of the same request.",
+  "waitlist.leaveReview": "Leave offer review",
+  "waitlist.leaveUnconfirmed":
+    "The appointment may already be booked. Check the waitlist or the calendar before making another booking.",
   "waitlist.accepted": "Your waitlist appointment is booked",
   "waitlist.viewBooking": "View appointment",
   "waitlist.decline": "Decline and keep waiting",
@@ -146,6 +152,12 @@ export const waitlistEsAR: Record<keyof typeof waitlistEn, string> = {
   "waitlist.professional": "Con {name}",
   "waitlist.price": "Servicios: {price}",
   "waitlist.accept": "Aceptar y reservar este horario",
+  "waitlist.retryBooking": "Verificar o reintentar la reserva",
+  "waitlist.unconfirmed":
+    "Se interrumpió la respuesta de la reserva. Verifica o reintenta para recuperar el resultado de la misma solicitud.",
+  "waitlist.leaveReview": "Salir de la revisión",
+  "waitlist.leaveUnconfirmed":
+    "Puede que la cita ya esté reservada. Comprueba la lista de espera o la agenda antes de crear otra reserva.",
   "waitlist.accepted": "Tu cita de lista de espera está reservada",
   "waitlist.viewBooking": "Ver cita",
   "waitlist.decline": "Rechazar y seguir esperando",
