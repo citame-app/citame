@@ -31,6 +31,12 @@ trap 'exit 143' TERM
 cp -- "$DUMP" "$ARCHIVE"
 [ "$(sha256_of "$ARCHIVE")" = "$expected" ] || { echo "restore refused: checksum mismatch for $DUMP" >&2; exit 1; }
 
+# Resolve the toolchain for every step before checking or writing any database.
+if use_docker pg_restore || use_docker psql; then
+  require_docker_socket "$TARGET"
+  PG_MODE=docker
+fi
+
 if ! read_restore_archive "$TARGET" pg_restore --list < "$ARCHIVE" > /dev/null; then
   echo "restore refused: could not read the PostgreSQL archive table of contents for $DUMP" >&2
   exit 1
@@ -78,4 +84,9 @@ if [ "$occupied" != "f" ] && [ "${FORCE:-0}" != "1" ]; then
 fi
 
 pg_tool pg_restore "$TARGET" --no-owner --no-privileges --single-transaction --exit-on-error < "$ARCHIVE"
+# Logical dumps can omit planner statistics. Collect them before the application opens the database.
+if ! pg_tool psql "$TARGET" -X -v ON_ERROR_STOP=1 -q -c 'ANALYZE'; then
+  echo "restore loaded $DB, but ANALYZE failed; run ANALYZE on the restored database before switching traffic" >&2
+  exit 1
+fi
 echo "restore finished: $DB"

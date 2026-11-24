@@ -104,12 +104,15 @@ Each run stages the archive and checksum privately on the destination filesystem
 For a remote server, install matching native PostgreSQL client tools and use `PG_MODE=native`. The scripts pass URL connection options such as `sslmode=verify-full` and `sslrootcert` to libpq, including when opening the administrative database during restore. Specify the database in the URL path. Use a libpq service file if the client certificate key needs `sslpassword`.
 
 Docker mode connects to the selected container's local PostgreSQL socket. It accepts only a loopback URL with the default port and no query options. If a native client is missing, a remote or customized URL fails before the script contacts a Docker database.
+In automatic mode, restore uses the container for every step if either `pg_restore` or `psql` is missing locally.
 
 The standard restore targets an empty database. Before opening a database connection, it stages a private copy of the archive, verifies its SHA-256 checksum, and asks `pg_restore` to read the copy’s table of contents. The restore reads that same copy and applies schema and data in a single transaction. Place `TMPDIR` on a filesystem with room for the compressed archive. The catalog check detects existing objects even when the restore account cannot read their data. Keep other writers disconnected from the recovery database until validation is complete.
 
 ```bash
 scripts/restore.sh /backups/sob-2026-11-14.dump postgres://sob:...@host:5432/sob_restored
 ```
+
+After loading the archive, the script runs `ANALYZE` so PostgreSQL has planner statistics before the application starts. If that step fails, the restored database is already populated. Run `ANALYZE` with the restore account on that database before validating it and switching traffic.
 
 ### Switch a Compose deployment to the restored database
 

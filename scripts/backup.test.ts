@@ -18,6 +18,7 @@ const restoredName = `sob_test_restored_${runId}`;
 const truncatedName = `${restoredName}_truncated`;
 const restrictedName = `${restoredName}_restricted`;
 const verifiedRestoreName = `${restoredName}_verified`;
+const failedAnalysisName = `${restoredName}_analysis`;
 const invalidArchiveName = `${restoredName}_invalid`;
 const restoreRole = `sob_restore_${runId}`;
 
@@ -38,6 +39,7 @@ afterAll(async () => {
       restrictedName,
       invalidArchiveName,
       verifiedRestoreName,
+      failedAnalysisName,
     ]) {
       await admin.unsafe(`drop database if exists "${name}" with (force)`);
     }
@@ -100,6 +102,13 @@ test("backup then restore into a fresh database reproduces every table", async (
   const owner = new SQL(source.url);
   const reader = `${restoreRole}_reader`;
   try {
+    expect(
+      await recovered`
+        select last_analyze is not null as analyzed
+        from pg_stat_user_tables
+        where schemaname = 'public' and relname = 'service'
+      `,
+    ).toEqual([{ analyzed: true }]);
     await owner.unsafe(`create role "${reader}" nologin`);
     const checkPermission = recovered.begin(async (tx) => {
       await tx.unsafe(`set local role "${reader}"`);
@@ -137,6 +146,74 @@ test("backup then restore into a fresh database reproduces every table", async (
     await owner.close();
   }
 }, 60_000);
+
+test("restore keeps the loaded database and reports an analysis failure", async () => {
+  const dump = join(dir, "analyze-failure.dump");
+  const backup = run(["bash", "scripts/backup.sh", dump], { DATABASE_URL: source.url });
+  expect(backup.exitCode, backup.stderr.toString()).toBe(0);
+
+  const target = source.url.replace(/\/[^/]+$/, `/${failedAnalysisName}`);
+  const restore = run(
+    [
+      "bash",
+      "-c",
+      `psql() {
+        if [[ "$*" == *" -c ANALYZE" ]]; then return 97; fi
+        command psql "$@"
+      }
+      docker() {
+        if [[ "$*" == *" psql "*" -c ANALYZE" ]]; then return 97; fi
+        command docker "$@"
+      }
+      export -f psql docker
+      exec bash scripts/restore.sh "$@"`,
+      "restore-test",
+      dump,
+      target,
+    ],
+    {},
+  );
+  expect(restore.exitCode).not.toBe(0);
+  expect(restore.stderr.toString()).toContain(
+    `restore loaded ${failedAnalysisName}, but ANALYZE failed`,
+  );
+  expect(restore.stdout.toString()).not.toContain("restore finished");
+  expect(await fingerprint(target)).toEqual(await fingerprint(source.url));
+}, 60_000);
+
+test("restore selects one toolchain for an incomplete local PostgreSQL installation", async () => {
+  const dump = join(dir, "mixed-toolchain.dump");
+  const contents = "synthetic archive";
+  const checksum = new Bun.CryptoHasher("sha256").update(contents).digest("hex");
+  await Bun.write(dump, contents);
+  await Bun.write(`${dump}.sha256`, `${checksum}  mixed-toolchain.dump\n`);
+
+  const restore = run(
+    [
+      "bash",
+      "-c",
+      `command() {
+        if [[ "$*" == "-v pg_restore" ]]; then return 1; fi
+        builtin command "$@"
+      }
+      psql() { echo 'native psql' >&2; return 98; }
+      docker() {
+        if [[ "$*" == *" pg_restore --list" ]]; then cat > /dev/null; return; fi
+        if [[ "$*" == *" psql "* ]]; then echo 'container psql' >&2; return 97; fi
+        return 96
+      }
+      export -f command psql docker
+      exec bash scripts/restore.sh "$@"`,
+      "restore-test",
+      dump,
+      "postgres://owner@localhost/salon",
+    ],
+    { PG_MODE: "auto", PG_CONTAINER: "synthetic-postgres" },
+  );
+  expect(restore.exitCode).toBe(97);
+  expect(restore.stderr.toString()).toContain("container psql");
+  expect(restore.stderr.toString()).not.toContain("native psql");
+});
 
 test("restore keeps the verified archive if the source file is refreshed during validation", async () => {
   const dump = join(dir, "refreshed.dump");
