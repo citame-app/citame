@@ -402,8 +402,9 @@ impl Root {
                     Err(TransportError::Unauthorized | TransportError::Forbidden(_))
                 );
                 if denied {
-                    this.waitlist_count.deny(&mut this.svc.store);
-                    this.forget_waitlist_view(cx);
+                    if this.waitlist_count.deny(&mut this.svc.store, &scope) {
+                        this.forget_waitlist_view(cx);
+                    }
                     return;
                 }
                 if booked.is_some() {

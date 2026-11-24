@@ -143,8 +143,17 @@ impl Store {
         Ok(Some(pages))
     }
 
-    pub fn invalidate_waitlist_access(&mut self) -> Result<()> {
-        self.write_transaction(|store| invalidate_visibility(&store.conn))
+    pub fn invalidate_waitlist_access(
+        &mut self,
+        expected: &CalendarCacheScope,
+    ) -> Result<Option<CalendarCacheScope>> {
+        self.write_transaction(|store| {
+            if &CalendarCacheScope::read(&store.conn)? != expected {
+                return Ok(None);
+            }
+            invalidate_visibility(&store.conn)?;
+            CalendarCacheScope::read(&store.conn).map(Some)
+        })
     }
 }
 

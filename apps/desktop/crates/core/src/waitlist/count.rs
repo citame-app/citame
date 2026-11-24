@@ -102,15 +102,13 @@ impl WaitlistCount {
         request: CountRequest,
         result: Result<u32, TransportError>,
     ) -> WaitlistCountUpdate {
-        let current_scope = store.calendar_cache_scope().ok();
         // Access to the waitlist applies to every period. An older request from this same
         // scope can report a denial after navigating or going offline.
         if matches!(
             &result,
             Err(TransportError::Unauthorized | TransportError::Forbidden(_))
-        ) && current_scope.as_ref() == Some(&request.scope)
+        ) && self.deny(store, &request.scope)
         {
-            self.deny(store);
             return WaitlistCountUpdate::AccessDenied;
         }
         if !self
@@ -121,7 +119,9 @@ impl WaitlistCount {
             return WaitlistCountUpdate::Unchanged;
         }
         self.pending = None;
-        if range != Some(request.range) || current_scope.as_ref() != Some(&request.scope) {
+        if range != Some(request.range)
+            || store.calendar_cache_scope().ok().as_ref() != Some(&request.scope)
+        {
             return WaitlistCountUpdate::Unchanged;
         }
         match result {
@@ -133,15 +133,16 @@ impl WaitlistCount {
         }
     }
 
-    pub fn deny(&mut self, store: &mut Store) {
+    pub fn deny(&mut self, store: &mut Store, expected: &CalendarCacheScope) -> bool {
+        let Ok(Some(current)) = store.invalidate_waitlist_access(expected) else {
+            return false;
+        };
         self.total = None;
         self.pending = None;
-        let _ = store.invalidate_waitlist_access();
-        if let Some((_, scope)) = &mut self.query
-            && let Ok(current) = store.calendar_cache_scope()
-        {
+        if let Some((_, scope)) = &mut self.query {
             *scope = current;
         }
+        true
     }
 }
 
@@ -214,6 +215,9 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let current_scope = store.calendar_cache_scope().unwrap();
+        assert!(store.invalidate_waitlist_access(&scope).unwrap().is_none());
+        assert_eq!(store.calendar_cache_scope().unwrap(), current_scope);
         let restored = count
             .refresh(&store, Some(other), true, now + REFRESH_INTERVAL)
             .0
