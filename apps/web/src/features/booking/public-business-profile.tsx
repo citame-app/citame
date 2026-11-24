@@ -88,7 +88,7 @@ export function PublicBusinessProfile({
         <div className="editorial-section-heading">
           {category && <p className="editorial-kicker">{category}</p>}
           <h2 id="public-business-heading">{t("home.business.title")}</h2>
-          {description && <p className="break-words">{description}</p>}
+          {description && <p className="whitespace-pre-wrap break-words">{description}</p>}
           {rules && (
             <>
               <h3 className="text-heading">{t("settings.profile.rules")}</h3>
