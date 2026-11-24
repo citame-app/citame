@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
 import {
+  booksyContextReviewSchema,
   calendarResponseSchema,
   checkoutListSchema,
   checkoutSchema,
@@ -619,7 +620,9 @@ test.each(["current", "legacy"] as const)(
       reviewHash: next.reviewHash,
     });
     expect(repeated.status).toBe(200);
-    expect((await repeated.json()).paymentReviewsReopened).toBeUndefined();
+    expect(
+      booksyContextReviewSchema.parse(await repeated.json()).paymentReviewsReopened,
+    ).toBeUndefined();
     expect((await pay(sale.id, "external_card", 2000)).status).toBe(409);
     const readReceipt = async () =>
       checkoutSchema.parse(
