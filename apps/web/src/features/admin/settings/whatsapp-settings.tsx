@@ -39,6 +39,7 @@ const words = {
     sdkError: "Meta sign-in could not load. Try again or check your browser settings.",
     signupError:
       "The connection has not been completed. Try again and select a single business number.",
+    signupCancelled: "Meta sign-in ended before the connection was completed. You can try again.",
     connecting: "Connecting",
     pin: "Two-step verification PIN for a new number (optional)",
     pinHelp:
@@ -103,6 +104,8 @@ const words = {
     sdkError: "No se pudo cargar Meta. Vuelve a intentarlo o revisa los ajustes del navegador.",
     signupError:
       "La conexión quedó sin completar. Vuelve a intentarlo y selecciona un único número del centro.",
+    signupCancelled:
+      "El inicio de sesión de Meta terminó antes de completar la conexión. Puedes volver a intentarlo.",
     connecting: "Conectando",
     pin: "PIN de verificación para un número nuevo (opcional)",
     pinHelp:
@@ -211,7 +214,7 @@ export function WhatsAppSettings() {
   const [pin, setPin] = useState("");
   const [sdk, setSdk] = useState<"idle" | "loading" | "ready" | "failed">("idle");
   const [popup, setPopup] = useState(false);
-  const [signupError, setSignupError] = useState(false);
+  const [signupError, setSignupError] = useState<"cancel" | "invalid" | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [review, setReview] = useState<{ phone: string; revision: string } | null>(null);
   const cleanup = useRef<(() => void) | undefined>(undefined);
@@ -310,16 +313,16 @@ export function WhatsAppSettings() {
     const revision = signupRevision;
     if (!setup || !revision) return;
     setPopup(true);
-    setSignupError(false);
+    setSignupError(null);
     connect.reset();
     cleanup.current?.();
     cleanup.current = startMetaSignup(
       setup.configId,
       pin,
       (input) => connect.mutate({ ...input, revision }),
-      () => {
+      (reason) => {
         setPopup(false);
-        setSignupError(true);
+        setSignupError(reason);
       },
     );
   }
@@ -360,7 +363,7 @@ export function WhatsAppSettings() {
                   disabled={!connection.revision || dirty || save.isPending}
                   onClick={() => {
                     setRenewing(true);
-                    setSignupError(false);
+                    setSignupError(null);
                     connect.reset();
                   }}
                 >
@@ -421,7 +424,11 @@ export function WhatsAppSettings() {
             )}
             {(sdk === "failed" || signupError) && (
               <p role="alert" className="text-danger-fg">
-                {sdk === "failed" ? copy.sdkError : copy.signupError}
+                {sdk === "failed"
+                  ? copy.sdkError
+                  : signupError === "cancel"
+                    ? copy.signupCancelled
+                    : copy.signupError}
               </p>
             )}
           </>

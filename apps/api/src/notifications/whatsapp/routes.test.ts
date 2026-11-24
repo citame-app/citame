@@ -18,9 +18,13 @@ const verifyToken = "validation-for-synthetic-webhook";
 const calls: string[] = [];
 const originalSender = { wabaId: "456789", phoneId: "345678" };
 let graphPhoneId = originalSender.phoneId;
+let graphCoexistence = true;
+let cloudRegistered = false;
+let subscriptionFails = false;
+let registrations: unknown[] = [];
 let pauseExchange: (() => Promise<Response | undefined>) | undefined;
 let onTemplates: (() => void) | undefined;
-const graph = (async (url: URL) => {
+const graph = (async (url: URL, options?: RequestInit) => {
   calls.push(url.pathname);
   if (url.pathname.endsWith("/oauth/access_token")) {
     return (await pauseExchange?.()) ?? Response.json({ access_token: "synthetic-credential" });
@@ -31,12 +35,21 @@ const graph = (async (url: URL) => {
         {
           id: graphPhoneId,
           display_phone_number: "+34 611 000 000",
-          is_on_biz_app: true,
+          is_on_biz_app: graphCoexistence,
+          status: cloudRegistered ? "CONNECTED" : undefined,
           platform_type: "CLOUD_API",
         },
       ],
     });
-  if (url.pathname.endsWith("/subscribed_apps")) return Response.json({ success: true });
+  if (url.pathname.endsWith("/register")) {
+    registrations.push(JSON.parse(String(options?.body)));
+    cloudRegistered = true;
+    return Response.json({ success: true });
+  }
+  if (url.pathname.endsWith("/subscribed_apps"))
+    return subscriptionFails
+      ? new Response(null, { status: 503 })
+      : Response.json({ success: true });
   if (url.pathname.endsWith("/message_templates")) {
     onTemplates?.();
     return Response.json({
@@ -75,6 +88,10 @@ beforeEach(async () => {
   await t.reset();
   calls.length = 0;
   graphPhoneId = originalSender.phoneId;
+  graphCoexistence = true;
+  cloudRegistered = false;
+  subscriptionFails = false;
+  registrations = [];
   f = await seedFixtures(t.db);
   owner = await actor(t, "owner", "owner@example.com");
 });
@@ -108,6 +125,40 @@ test("validates the OAuth asset, skips registration for coexistence, encrypts th
   expect(calls).toContain("/v27.0/456789/subscribed_apps");
   const [record] = await t.db.select().from(whatsappConnection);
   expect(record?.encryptedToken).not.toContain("synthetic-credential");
+});
+
+test("a new Cloud API number requires a PIN and can finish after a failed webhook subscription", async () => {
+  graphCoexistence = false;
+  subscriptionFails = true;
+  const settings = await json(t.app, "/admin/whatsapp", "GET", undefined, owner.cookie);
+  const { signupRevision } = whatsappSettingsSchema.parse(await settings.json());
+  const enroll = (code: string, pin?: string) =>
+    json(
+      t.app,
+      "/admin/whatsapp/connect/reviewed",
+      "POST",
+      { code, ...originalSender, revision: signupRevision, ...(pin ? { pin } : {}) },
+      owner.cookie,
+    );
+
+  expect((await enroll("synthetic-missing-pin")).status).toBe(400);
+  expect(registrations).toEqual([]);
+  expect(calls).not.toContain("/v27.0/456789/subscribed_apps");
+  const failed = await enroll("synthetic-first-attempt", "123456");
+  expect(failed.ok).toBe(false);
+  expect(await failed.json()).toMatchObject({ error: { code: "invalid_state" } });
+  expect(registrations).toEqual([{ messaging_product: "whatsapp", pin: "123456" }]);
+  expect(await t.db.select().from(whatsappConnection)).toEqual([]);
+
+  subscriptionFails = false;
+  const recovered = await enroll("synthetic-new-code");
+  expect(recovered.status).toBe(200);
+  expect(whatsappSettingsSchema.parse(await recovered.json()).connection).toMatchObject({
+    phone: "+34 611 000 000",
+    coexistence: false,
+  });
+  expect(registrations).toHaveLength(1);
+  expect(calls.filter((path) => path.endsWith("/subscribed_apps"))).toHaveLength(2);
 });
 
 test("schedules an existing appointment when a rule is enabled and records signed delivery updates", async () => {

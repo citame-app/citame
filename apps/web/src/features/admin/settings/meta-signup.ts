@@ -7,7 +7,7 @@ type FacebookSdk = {
     autoLogAppEvents: boolean;
   }): void;
   login(
-    callback: (response: SignupResponse) => void,
+    callback: (response?: SignupResponse | null) => void,
     options: {
       config_id: string;
       response_type: "code";
@@ -36,14 +36,16 @@ export function readSignupEvent({ origin, data }: Pick<MessageEvent, "origin" | 
     if (event.event === "CANCEL" || event.event === "ERROR") return { type: "cancel" } as const;
     if (!["FINISH", "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"].includes(event.event)) return null;
     const accountIds = event.data?.messaging_account_ids;
-    const wabaId = Array.isArray(accountIds)
-      ? accountIds.length === 1
-        ? accountIds[0]
-        : undefined
-      : event.data?.waba_id;
-    if (!numericId(wabaId)) return { type: "invalid" } as const;
-    const phoneId = event.data?.phone_number_id;
-    return { type: "success", wabaId, phoneId: numericId(phoneId) ? phoneId : undefined } as const;
+    const wabaId =
+      accountIds === undefined
+        ? event.data?.waba_id
+        : Array.isArray(accountIds) && accountIds.length === 1
+          ? accountIds[0]
+          : undefined;
+    const phoneId = event.data?.phone_number_id ?? undefined;
+    if (!numericId(wabaId) || (phoneId !== undefined && !numericId(phoneId)))
+      return { type: "invalid" } as const;
+    return { type: "success", wabaId, phoneId } as const;
   } catch {
     return null;
   }
@@ -116,7 +118,7 @@ export function startMetaSignup(
     if (!window.FB) throw new Error("WhatsApp SDK unavailable");
     window.FB.login(
       (result) => {
-        code = result.authResponse?.code;
+        code = result?.authResponse?.code;
         if (!code) return fail("cancel");
         submit();
       },
