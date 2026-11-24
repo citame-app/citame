@@ -7199,8 +7199,8 @@ fn native_directory_replays_contacts_and_preserves_newer_edits() {
 #[ignore = "needs the real API behind the web gateway (see README)"]
 fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     use sob_core::http::marketing::{
-        Audience, CampaignAction, Channel, Draft, DraftRevision, DraftWrite, LIVE_TOPIC,
-        MutationError, Status, Trigger,
+        Audience, CampaignAction, Channel, Draft, DraftRevision, DraftWrite, EmailBlock,
+        EmailEmphasis, EmailLayout, LIVE_TOPIC, MutationError, Status, Trigger,
     };
 
     let mut browser = Device::sign_in();
@@ -7210,6 +7210,19 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     let name = format!("Synthetic Desk Marketing {id}");
     let device = proxy_device();
     let generation = browser.store.verified_reviewed_generation().unwrap();
+    let layout = EmailLayout {
+        heading: "Campaign news".into(),
+        preheader: "Browse our availability".into(),
+        blocks: vec![
+            EmailBlock::Paragraph {
+                text: "Synthetic body".into(),
+                emphasis: EmailEmphasis::Strong,
+            },
+            EmailBlock::Booking {
+                label: "Book now".into(),
+            },
+        ],
+    };
     let mut create = DraftWrite {
         generation: "old-generation".into(),
         revision: DraftRevision::Create { id: id.clone() },
@@ -7218,7 +7231,8 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
             channel: Channel::Email,
             trigger: Trigger::Birthday,
             subject: "Synthetic test subject".into(),
-            email_body: "Synthetic test body\n\nSecond paragraph".into(),
+            email_body: layout.plain_text(),
+            email_layout: Some(Some(Box::new(layout.clone()))),
             sms_body: String::new(),
             delay_minutes: 0,
             birthday_lead_days: 0,
@@ -7240,6 +7254,7 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     let created = device.transport.save_campaign_draft(&create).unwrap();
     assert_eq!(created.status, Status::Draft);
     assert_eq!(created.email_body, create.draft.email_body);
+    assert_eq!(created.email_layout, Some(layout.clone()));
     assert_eq!(
         device.transport.save_campaign_draft(&create).unwrap().id,
         created.id
@@ -7284,6 +7299,12 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
         .unwrap();
     assert_eq!(found.campaigns.first().unwrap().id, id);
     let campaign = device.transport.marketing_campaign(&id).unwrap();
+    assert_eq!(campaign.email_layout, Some(layout.clone()));
+    let web_campaign = browser.rest_get(&format!("/admin/marketing/campaigns/{id}?emailLayout=1"));
+    assert_eq!(
+        web_campaign["emailLayout"],
+        serde_json::to_value(&layout).unwrap()
+    );
     let preview = device.transport.marketing_preview(&id).unwrap();
     let capabilities = device.transport.marketing_capabilities().unwrap();
     assert_eq!(preview.campaign_id, campaign.id);

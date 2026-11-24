@@ -1,8 +1,10 @@
 use super::*;
-use sob_core::http::marketing::{Audience, Draft, DraftRevision, DraftWrite};
+use sob_core::http::marketing::{Audience, Draft, DraftRevision, DraftWrite, EmailLayout};
 use std::{cell::Cell, rc::Rc};
 
+mod email_layout;
 mod invitation;
+use email_layout::LayoutEditor;
 use invitation::InvitationEditor;
 
 const MAX_EDITABLE_LINES: usize = 256;
@@ -34,6 +36,8 @@ pub(super) struct Editor {
     trigger: Trigger,
     subject: Entity<TextField>,
     email: MessageInput,
+    email_layout: Option<LayoutEditor>,
+    had_email_layout: bool,
     sms: MessageInput,
     tags: Entity<TextField>,
     inactive_days: Entity<TextField>,
@@ -57,6 +61,7 @@ fn input(value: &str, cx: &mut Context<Root>) -> Entity<TextField> {
 enum Message {
     Email,
     Sms,
+    Paragraph(usize),
 }
 
 struct MessageInput {
@@ -90,20 +95,30 @@ impl Message {
         match self {
             Self::Email => Key::MarketingEmailBody,
             Self::Sms => Key::MarketingSmsBody,
+            Self::Paragraph(_) => Key::MarketingEmailParagraph,
         }
     }
 
     fn limit(self) -> usize {
         match self {
-            Self::Email => 10_000,
+            Self::Email | Self::Paragraph(_) => EmailLayout::BODY_LIMIT,
             Self::Sms => 304,
         }
     }
 
-    fn input(self, editor: &mut Editor) -> &mut MessageInput {
+    fn input(self, editor: &mut Editor) -> Option<&mut MessageInput> {
         match self {
-            Self::Email => &mut editor.email,
-            Self::Sms => &mut editor.sms,
+            Self::Email => Some(&mut editor.email),
+            Self::Sms => Some(&mut editor.sms),
+            Self::Paragraph(id) => editor.email_layout.as_mut()?.paragraph_mut(id),
+        }
+    }
+
+    fn element_name(self) -> String {
+        match self {
+            Self::Email => "email".to_owned(),
+            Self::Sms => "sms".to_owned(),
+            Self::Paragraph(id) => format!("email-paragraph-{id}"),
         }
     }
 
@@ -126,7 +141,9 @@ impl Message {
             let Some(editor) = &mut desk.editor else {
                 return;
             };
-            let input = self.input(editor);
+            let Some(input) = self.input(editor) else {
+                return;
+            };
             let Some(index) = input.lines.iter().position(|line| *line == origin) else {
                 return;
             };
@@ -192,6 +209,10 @@ impl Editor {
         invitation: Option<InvitationEditor>,
         cx: &mut Context<Root>,
     ) -> Self {
+        let email_layout = draft
+            .email_layout
+            .flatten()
+            .map(|layout| LayoutEditor::new(*layout, cx));
         Self {
             generation,
             id: source
@@ -203,6 +224,8 @@ impl Editor {
             trigger: draft.trigger,
             subject: input(&draft.subject, cx),
             email: MessageInput::new(Message::Email, &draft.email_body, cx),
+            had_email_layout: email_layout.is_some(),
+            email_layout,
             sms: MessageInput::new(Message::Sms, &draft.sms_body, cx),
             tags: input(&draft.audience.tags.join(", "), cx),
             inactive_days: input(
@@ -248,7 +271,22 @@ impl Editor {
         };
         let name = text(&self.name, cx);
         let subject = text(&self.subject, cx);
-        let email_body = message_text(&self.email.lines, cx);
+        let layout = self.email_layout.as_ref().map(|layout| layout.packet(cx));
+        let email_layout = if self.channel == Channel::Sms {
+            None
+        } else {
+            layout.clone()
+        };
+        if email_layout
+            .as_ref()
+            .is_some_and(|layout| !layout.is_valid())
+        {
+            return None;
+        }
+        let email_body = layout.filter(EmailLayout::is_valid).map_or_else(
+            || message_text(&self.email.lines, cx),
+            |layout| layout.plain_text(),
+        );
         let sms_body = message_text(&self.sms.lines, cx);
         let delay_minutes = timing(
             &text(&self.delay, cx),
@@ -287,6 +325,8 @@ impl Editor {
                 },
             ),
             draft: Draft {
+                email_layout: (self.had_email_layout || email_layout.is_some())
+                    .then_some(email_layout.map(Box::new)),
                 name,
                 channel: self.channel,
                 trigger: self.trigger,
@@ -495,7 +535,10 @@ impl Root {
         if editor.invitation.is_some()
             && editor.pending.is_none()
             && ((editor.channel != Channel::Sms
-                && !message_text(&editor.email.lines, cx).contains("{{booking_url}}"))
+                && !editor.email_layout.as_ref().map_or_else(
+                    || message_text(&editor.email.lines, cx).contains("{{booking_url}}"),
+                    |layout| layout.packet(cx).has_booking_link(),
+                ))
                 || (editor.channel != Channel::Email
                     && !message_text(&editor.sms.lines, cx).contains("{{booking_url}}")))
         {
@@ -528,10 +571,7 @@ impl Root {
         lines: &[Entity<TextField>],
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let name = match message {
-            Message::Email => "email",
-            Message::Sms => "sms",
-        };
+        let name = message.element_name();
         div()
             .flex()
             .flex_col()
@@ -553,8 +593,9 @@ impl Root {
                                 if let Some(editor) =
                                     root.marketing_desk().and_then(|desk| desk.editor.as_mut())
                                 {
-                                    let input = message.input(editor);
-                                    if input.lines.len() > 1 {
+                                    if let Some(input) = message.input(editor)
+                                        && input.lines.len() > 1
+                                    {
                                         input.lines.retain(|line| *line != remove);
                                         input.update_budget();
                                         cx.notify();
@@ -573,15 +614,14 @@ impl Root {
                     move |root, cx| {
                         if let Some(editor) =
                             root.marketing_desk().and_then(|desk| desk.editor.as_mut())
+                            && let Some(input) = message.input(editor)
+                            && input.lines.len() < MAX_EDITABLE_LINES
                         {
-                            let input = message.input(editor);
-                            if input.lines.len() < MAX_EDITABLE_LINES {
-                                input
-                                    .lines
-                                    .push(message.line("", &input.remaining_lines, cx));
-                                input.update_budget();
-                                cx.notify();
-                            }
+                            input
+                                .lines
+                                .push(message.line("", &input.remaining_lines, cx));
+                            input.update_budget();
+                            cx.notify();
                         }
                     },
                     cx,
@@ -609,7 +649,11 @@ impl Root {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(preview_message(&text(&editor.subject, cx))),
                     )
-                    .child(preview_message(&message_text(&editor.email.lines, cx)))
+                    .child(if let Some(layout) = &editor.email_layout {
+                        self.preview_email_layout(layout, cx)
+                    } else {
+                        div().child(preview_message(&message_text(&editor.email.lines, cx)))
+                    })
             })
             .when(editor.channel != Channel::Email, |body| {
                 body.child(self.label(Key::MarketingSms))
@@ -761,8 +805,19 @@ impl Root {
         .when(email, |body| {
             body.child(self.label(Key::MarketingSubject))
                 .child(editor.subject.clone())
-                .child(self.edit_message(Message::Email, &editor.email.lines, cx))
+                .child(self.render_email_editor(editor, cx))
         })
+        .when(
+            editor.channel == Channel::Sms && editor.email_layout.is_some(),
+            |body| {
+                body.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(self.t(Key::MarketingSmsLayoutRemoval)),
+                )
+            },
+        )
         .when(sms, |body| {
             body.child(self.edit_message(Message::Sms, &editor.sms.lines, cx))
         })
@@ -813,6 +868,55 @@ impl Root {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[gpui::test]
+    async fn formatted_campaign_drafts_keep_the_native_packet_and_clear_layout_for_sms(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use sob_core::http::marketing::{EmailBlock, EmailEmphasis};
+        let (_directory, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root
+        });
+        root.update(cx, |_, cx| {
+            let layout = EmailLayout {
+                heading: "Hello {{first_name}}".into(),
+                preheader: "Appointment times are available".into(),
+                blocks: vec![
+                    EmailBlock::Booking {
+                        label: "Book now".into(),
+                    },
+                    EmailBlock::Paragraph {
+                        text: "First line\nSecond line".into(),
+                        emphasis: EmailEmphasis::Italic,
+                    },
+                ],
+            };
+            let mut draft =
+                Draft::from_template(Trigger::Manual, "News", "Updates", "Plain fallback");
+            draft.email_layout = Some(Some(Box::new(layout.clone())));
+            let mut editor = Editor::new(draft, None, "generation".into(), false, None, cx);
+            let formatted = editor.packet(cx).unwrap().draft;
+            assert_eq!(formatted.email_body, layout.plain_text());
+            assert_eq!(formatted.email_layout, Some(Some(Box::new(layout.clone()))));
+            let paragraph = Message::Paragraph(1).input(&mut editor).unwrap();
+            assert_eq!(
+                message_text(&paragraph.lines, cx),
+                "First line\nSecond line"
+            );
+            editor.channel = Channel::Sms;
+            let sms = editor.packet(cx).unwrap().draft;
+            assert_eq!(sms.email_layout, Some(None));
+            assert_eq!(sms.email_body, layout.plain_text());
+            editor.channel = Channel::Email;
+            assert_eq!(
+                editor.packet(cx).unwrap().draft.email_layout,
+                Some(Some(Box::new(layout)))
+            );
+        });
+    }
 
     #[gpui::test]
     async fn marketing_templates_and_duplicates_open_local_drafts(cx: &mut gpui::TestAppContext) {

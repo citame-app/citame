@@ -71,6 +71,83 @@ impl Pagination {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub struct EmailLayout {
+    pub heading: String,
+    pub preheader: String,
+    pub blocks: Vec<EmailBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EmailBlock {
+    Heading {
+        text: String,
+    },
+    Paragraph {
+        text: String,
+        emphasis: EmailEmphasis,
+    },
+    Booking {
+        label: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EmailEmphasis {
+    None,
+    Strong,
+    Italic,
+}
+
+impl EmailLayout {
+    pub const BODY_LIMIT: usize = 10_000;
+    pub const HEADING_LIMIT: usize = 140;
+    pub const PREHEADER_LIMIT: usize = 150;
+    pub const BOOKING_LIMIT: usize = 80;
+    pub const BLOCK_LIMIT: usize = 16;
+
+    pub fn plain_text(&self) -> String {
+        [&self.heading, &self.preheader]
+            .into_iter()
+            .cloned()
+            .chain(self.blocks.iter().map(|block| match block {
+                EmailBlock::Heading { text } | EmailBlock::Paragraph { text, .. } => text.clone(),
+                EmailBlock::Booking { label } => format!("{label}: {{{{booking_url}}}}"),
+            }))
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    pub fn has_booking_link(&self) -> bool {
+        self.heading.contains("{{booking_url}}")
+            || self.blocks.iter().any(|block| match block {
+                EmailBlock::Booking { .. } => true,
+                EmailBlock::Heading { text } | EmailBlock::Paragraph { text, .. } => {
+                    text.contains("{{booking_url}}")
+                }
+            })
+    }
+
+    pub fn is_valid(&self) -> bool {
+        let fits = |text: &str, limit| text.encode_utf16().count() <= limit && !text.contains('\0');
+        fits(&self.heading, Self::HEADING_LIMIT)
+            && fits(&self.preheader, Self::PREHEADER_LIMIT)
+            && (1..=Self::BLOCK_LIMIT).contains(&self.blocks.len())
+            && self.blocks.iter().all(|block| {
+                let (text, limit) = match block {
+                    EmailBlock::Heading { text } => (text, Self::HEADING_LIMIT),
+                    EmailBlock::Paragraph { text, .. } => (text, Self::BODY_LIMIT),
+                    EmailBlock::Booking { label } => (label, Self::BOOKING_LIMIT),
+                };
+                !text.is_empty() && fits(text, limit)
+            })
+            && self.plain_text().encode_utf16().count() <= Self::BODY_LIMIT
+    }
+}
+
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Campaign {
@@ -82,6 +159,7 @@ pub struct Campaign {
     pub version: u32,
     pub subject: String,
     pub email_body: String,
+    pub email_layout: Option<EmailLayout>,
     pub sms_body: String,
     pub delay_minutes: u32,
     pub birthday_lead_days: u32,
@@ -119,6 +197,9 @@ pub struct Draft {
     pub trigger: Trigger,
     pub subject: String,
     pub email_body: String,
+    /// An omitted field preserves an existing layout. Explicit null converts it to plain text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email_layout: Option<Option<Box<EmailLayout>>>,
     pub sms_body: String,
     pub delay_minutes: u32,
     pub birthday_lead_days: u32,
@@ -134,6 +215,7 @@ impl Draft {
             trigger,
             subject: subject.into(),
             email_body: message.into(),
+            email_layout: None,
             sms_body: message.into(),
             delay_minutes: if trigger == Trigger::FirstVisit {
                 120
@@ -178,6 +260,10 @@ impl From<&Campaign> for Draft {
             trigger: campaign.trigger,
             subject: campaign.subject.clone(),
             email_body: campaign.email_body.clone(),
+            email_layout: campaign
+                .email_layout
+                .clone()
+                .map(|layout| Some(Box::new(layout))),
             sms_body: campaign.sms_body.clone(),
             delay_minutes: campaign.delay_minutes,
             birthday_lead_days: campaign.birthday_lead_days,
@@ -419,6 +505,7 @@ impl HttpTransport {
         params
             .append_pair("page", &page.to_string())
             .append_pair("bookingInvitations", "1")
+            .append_pair("emailLayout", "1")
             .append_pair("search", search);
         if let Some(status) = status {
             params.append_pair("status", status.wire());
@@ -451,7 +538,11 @@ impl HttpTransport {
 
     pub fn marketing_campaign(&self, id: &str) -> Result<Campaign, TransportError> {
         read_response(
-            self.get(&self.agent, &format!("{PATH}/{}", parse_id(id)?), None)?,
+            self.get(
+                &self.agent,
+                &format!("{PATH}/{}?emailLayout=1", parse_id(id)?),
+                None,
+            )?,
             false,
         )
     }
