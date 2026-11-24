@@ -913,6 +913,104 @@ test("retains old product fingerprints through migration and detects changed pac
   );
 });
 
+test("a prepared copy reconciles the audited restoration of archived package content", async () => {
+  const [product] = await t.db.select().from(retailProduct);
+  if (!product) throw new Error("Expected the imported fixture product");
+  const {
+    packageContentQuantity: _quantity,
+    packageContentUnit: _unit,
+    stockAllocated: _allocation,
+    ...legacy
+  } = product;
+  await t.db.execute(
+    sql`update booksy_rehearsal.source_entity set target_hash=${fingerprint(legacy)} where kind='sourceProducts'`,
+  );
+  const repairedAt = new Date(product.updatedAt.getTime() + 1000);
+  await t.db
+    .update(retailProduct)
+    .set({
+      packageContentQuantity: "12.5",
+      packageContentUnit: "ml",
+      version: 2,
+      updatedAt: repairedAt,
+    })
+    .where(eq(retailProduct.id, product.id));
+  const settings = { exclusiveExtensions: true, preparedCopy: true };
+  await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+  const repairAudit = {
+    actorUserId: null,
+    action: "inventory.product_package_imported",
+    entity: "retail_product",
+    entityId: product.id,
+    metadata: { source: "booksy archive", fields: ["packageContent"] },
+    createdAt: new Date(product.updatedAt.getTime() + 500),
+  };
+  const [audit] = await t.db.insert(auditLog).values(repairAudit).returning();
+  if (!audit) throw new Error("Expected the repair audit");
+  expect(await verifyBooksySourceModel(t.db, model, settings)).toMatchObject({
+    sourceAppointmentsVerified: true,
+    canCutOver: false,
+  });
+  await expect(verifyBooksySourceModel(t.db, model)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+  for (const createdAt of [
+    new Date(product.createdAt.getTime() - 1000),
+    new Date(repairedAt.getTime() + 1000),
+  ]) {
+    await t.db.update(auditLog).set({ createdAt }).where(eq(auditLog.id, audit.id));
+    await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+      "Native product/resource fields changed",
+    );
+  }
+  await t.db
+    .update(auditLog)
+    .set({ createdAt: repairAudit.createdAt })
+    .where(eq(auditLog.id, audit.id));
+  await t.db
+    .update(retailProduct)
+    .set({ packageContentQuantity: "10", updatedAt: repairedAt })
+    .where(eq(retailProduct.id, product.id));
+  await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+  await t.db
+    .update(retailProduct)
+    .set({
+      packageContentQuantity: "12.5",
+      priceCents: product.priceCents + 100,
+      updatedAt: repairedAt,
+    })
+    .where(eq(retailProduct.id, product.id));
+  await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+  await t.db
+    .update(retailProduct)
+    .set({
+      priceCents: product.priceCents,
+      stockAllocated: 1,
+      updatedAt: repairedAt,
+    })
+    .where(eq(retailProduct.id, product.id));
+  await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+  await t.db
+    .update(retailProduct)
+    .set({ stockAllocated: 0, updatedAt: repairedAt })
+    .where(eq(retailProduct.id, product.id));
+  expect((await verifyBooksySourceModel(t.db, model, settings)).sourceAppointmentsVerified).toBe(
+    true,
+  );
+  await t.db.insert(auditLog).values(repairAudit);
+  await expect(verifyBooksySourceModel(t.db, model, settings)).rejects.toThrow(
+    "Native product/resource fields changed",
+  );
+});
+
 test("old product fingerprints verify before and after classification backfill", async () => {
   const [product] = await t.db.select().from(retailProduct);
   if (!product) throw new Error("Expected the imported fixture product");
