@@ -1,8 +1,10 @@
 import {
+  CALENDAR_INBOX_SCOPE_HEADER,
   calendarArchiveInputSchema,
   calendarInboxQuerySchema,
   notificationStatsSchema,
   optOutRequestSchema,
+  scheduleAccessScope,
   updateNotificationPreferencesRequestSchema,
 } from "@sob/contracts";
 import { Hono } from "hono";
@@ -64,8 +66,11 @@ export function optOutRoutes({ db, config }: Pick<AppDeps, "db" | "config">) {
 /** Scoped appointment inbox plus owner-only worker statistics. */
 export function notificationAdminRoutes({ db, config }: Pick<AppDeps, "db" | "config">) {
   return new Hono<AppEnv>()
-    .use("/inbox", async (c, next) => {
+    .use("/inbox/*", async (c, next) => {
       c.header("Cache-Control", "private, no-store");
+      const expectedScope = c.req.header(CALENDAR_INBOX_SCOPE_HEADER);
+      if (expectedScope !== undefined && expectedScope !== scheduleAccessScope(c.get("principal")))
+        throw new DomainError("forbidden", "Calendar inbox access scope changed");
       await next();
     })
     .get("/inbox", async (c) =>

@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
-import { appointmentSchema, calendarInboxSchema } from "@sob/contracts";
+import {
+  appointmentSchema,
+  CALENDAR_INBOX_SCOPE_HEADER,
+  calendarInboxSchema,
+  scheduleAccessScope,
+} from "@sob/contracts";
 import { appointment, auditLog, clientProfile } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -84,6 +89,31 @@ test("archive survives repeat reads, is idempotent and belongs to each user; res
   expect((await call(owner, "/archive", "POST", { ids: [id], archived: false })).status).toBe(200);
   expect((await inbox()).entries[0]?.id).toBe(id);
   expect((await inbox(owner, "?archived=true")).total).toBe(0);
+});
+
+test("the inbox verifies the calendar scope before reading or archiving notices", async () => {
+  await book();
+  const [notice] = (await inbox()).entries;
+  if (!notice) throw new Error("Expected the booking notice");
+  const expectedScope = scheduleAccessScope({ ...owner, role: "owner" });
+  const headers = { cookie: owner.cookie, [CALENDAR_INBOX_SCOPE_HEADER]: expectedScope };
+  const root = "/admin/notifications/inbox";
+  expect((await t.app.request(root, { headers })).status).toBe(200);
+  const archive = (cookie: string) =>
+    t.app.request(`${root}/archive`, {
+      method: "POST",
+      headers: { ...headers, cookie, "content-type": "application/json" },
+      body: JSON.stringify({ ids: [notice.id], archived: true }),
+    });
+  const otherSession = { ...headers, cookie: ana.cookie };
+  expect((await t.app.request(root, { headers: otherSession })).status).toBe(403);
+  expect((await archive(ana.cookie)).status).toBe(403);
+  expect((await inbox(ana)).total).toBe(1);
+
+  const saved = await archive(owner.cookie);
+  expect(saved.status).toBe(200);
+  expect(saved.headers.get("cache-control")).toBe("private, no-store");
+  expect((await inbox(owner)).total).toBe(0);
 });
 
 test("history retains each event's scheduled time while linking to the current appointment", async () => {

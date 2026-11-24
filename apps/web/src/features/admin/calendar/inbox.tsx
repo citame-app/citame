@@ -27,7 +27,7 @@ function useCalendarInboxQuery(
     queryKey: [...calendarInboxUserKey(userId), accessScope, query],
     queryFn: async ({ signal, queryKey }) => {
       try {
-        return await api().calendarInbox.list(query, signal);
+        return await api().calendarInbox.list(query, signal, accessScope);
       } catch (error) {
         if (!isAccessDenied(error)) throw error;
         await clearCalendarInbox(queries, userId, queryKey);
@@ -149,8 +149,12 @@ function InboxContents({
   });
   const archive = useMutation({
     mutationKey: calendarInboxUserKey(userId),
-    mutationFn: (request: { ids: string[]; userId: string; archived: boolean }) =>
-      api().calendarInbox.archive(request.ids, request.archived),
+    mutationFn: (request: {
+      ids: string[];
+      userId: string;
+      archived: boolean;
+      accessScope?: string;
+    }) => api().calendarInbox.archive(request.ids, request.archived, request.accessScope),
     onSuccess: (_, request) => {
       setPage(1);
       void queries.invalidateQueries({ queryKey: calendarInboxUserKey(request.userId) });
@@ -159,7 +163,8 @@ function InboxContents({
       if (isAccessDenied(error)) await clearCalendarInbox(queries, request.userId);
     },
   });
-  const updateArchive = (ids: string[]) => archive.mutate({ ids, archived: !archived, userId });
+  const updateArchive = (ids: string[]) =>
+    archive.mutate({ ids, archived: !archived, userId, accessScope });
   const groups = new Map<string, CalendarNotice[]>();
   for (const notice of query.data?.entries ?? []) {
     const day = localDateOf(notice.createdAt, timeZone);

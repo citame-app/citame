@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from "bun:test";
+import { CALENDAR_INBOX_SCOPE_HEADER } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { useEffect, useState } from "react";
 import { renderApp } from "../../../../test/render";
@@ -13,7 +14,7 @@ const archivedKey = [
   "previous-scope",
   { archived: "true", kind: "new", page: 2 },
 ];
-const otherKey = ["calendar-inbox", "other-account", "reception", {}];
+const otherKey = ["calendar-inbox", "other-account", "other-reception", {}];
 const page = (total: number) => ({ entries: [], total, page: 1, pageSize: 25 });
 
 function WithScope() {
@@ -39,7 +40,12 @@ function SwitchingInbox({ accountChanged }: { accountChanged: Promise<void> }) {
       mounted = false;
     };
   }, [accountChanged]);
-  return <CalendarInbox userId={account} accessScope="reception" />;
+  return (
+    <CalendarInbox
+      userId={account}
+      accessScope={account === userId ? "reception" : "other-reception"}
+    />
+  );
 }
 
 afterEach(() => {
@@ -134,11 +140,15 @@ test("a delayed archive denial clears only the account that attempted to archive
   };
   let switched = false;
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+    const expectedScope = new Headers(init?.headers).get(CALENDAR_INBOX_SCOPE_HEADER);
     if (init?.method === "POST") {
+      expect(expectedScope).toBe("reception");
       archiveStarted.resolve();
       return archiveResult.promise;
     }
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/admin/notifications/inbox")
+      expect(expectedScope).toBe(switched ? "other-reception" : "reception");
     if (switched) return Response.json(page(url.search ? 0 : 7));
     return Response.json({ ...page(1), entries: url.search ? [notice] : [] });
   }) as unknown as typeof fetch;

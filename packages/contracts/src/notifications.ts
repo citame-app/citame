@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { idSchema, instantSchema, pageInfoSchema, pageSchema } from "./common";
 
+export const CALENDAR_INBOX_SCOPE_HEADER = "x-citame-calendar-inbox-scope";
+
 export const calendarNoticeKindSchema = z.enum(["new", "rescheduled", "cancelled"]);
 export const calendarNoticeSchema = z.object({
   id: idSchema,

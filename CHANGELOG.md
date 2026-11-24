@@ -12,7 +12,7 @@ Appointment reminders use the centre’s local date and time in the subject and 
 
 The web waitlist and calendar badge refresh together when the list changes. Cached requests and counts are cleared when the team member loses access. Desktop skips outdated waitlist reads when a newer change has already arrived.
 
-The web calendar inbox refreshes during the first load when a new notice arrives. It clears saved notices and counts after access changes and keeps archive results scoped to the account that submitted them.
+The web calendar inbox refreshes during the first load when a new notice arrives. It clears saved notices and counts after access changes. Inbox reads and archive requests now verify the calendar access associated with the current browser tab.
 
 Desktop keeps appointment creation, moves, cancellations and attendance changes inside the account's writable calendars. A read-only agenda still opens appointment details.
 
