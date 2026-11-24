@@ -56,6 +56,11 @@ describe("calendar cache helpers", () => {
     });
   });
 
+  test("a late mutation response cannot replace a newer live version", () => {
+    const newer = patchAppointment(calendar, ID, { status: "cancelled", version: 4 });
+    expect(mergeAppointment(newer, { ...base, version: 3 })).toBe(newer);
+  });
+
   test("removeAppointment drops it", () => {
     expect(removeAppointment(calendar, ID).appointments).toEqual([]);
   });

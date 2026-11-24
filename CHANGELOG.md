@@ -120,6 +120,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
 
+- A rejected calendar move clears its local preview while preserving newer appointment revisions and other changes received live.
+
 - Submitting a new password after a reset or staff invitation uses one account-email rate-limit attempt.
 
 - Production Compose waits for Caddy to load its listener configuration before reporting the gateway healthy.

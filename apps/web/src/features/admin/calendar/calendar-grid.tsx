@@ -25,6 +25,7 @@ import {
   offsetToSnappedMinutes,
   statusAppearance,
 } from "./logic";
+import type { MoveRequest } from "./move-requests";
 import {
   type CalendarEntry,
   indexCalendar,
@@ -45,11 +46,6 @@ export interface GridColumn {
   date: string;
   title: string;
   subtitle?: string;
-}
-
-export interface MoveRequest {
-  staffId: string;
-  startsAt: string;
 }
 
 export interface SlotRequest {

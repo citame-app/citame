@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type { CalendarAppointment } from "@sob/contracts";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { CalendarAppointment, CalendarResponse } from "@sob/contracts";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import { renderApp } from "../../../../test/render";
 import { CalendarView } from "./calendar-view";
+import { isLocalCalendarMove } from "./move-requests";
 
 const ANA = "0198f5a0-7b1c-7000-8000-000000000201";
 const BEA = "0198f5a0-7b1c-7000-8000-000000000202";
@@ -39,12 +41,16 @@ let stored: CalendarAppointment;
 let additionalAppointments: CalendarAppointment[];
 let requests: string[];
 let patches: unknown[];
+let holdPatch: Promise<void> | undefined;
+let holdCalendar: Promise<void> | undefined;
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
 beforeEach(() => {
   requests = [];
   patches = [];
+  holdPatch = undefined;
+  holdCalendar = undefined;
   stored = lucia;
   additionalAppointments = [];
   patchReply = {
@@ -60,6 +66,7 @@ beforeEach(() => {
     const url = new URL(String(input), "http://localhost");
     requests.push(`${init?.method ?? "GET"} ${url.pathname}${url.search}`);
     if (url.pathname === "/api/appointments/calendar") {
+      await holdCalendar;
       return json({
         timezone: "America/Argentina/Buenos_Aires",
         from: url.searchParams.get("from"),
@@ -99,6 +106,7 @@ beforeEach(() => {
       return json({ clients: [], page: 1, pageSize: 8, total: 0 });
     if (init?.method === "PATCH") {
       patches.push(JSON.parse(String(init.body)));
+      await holdPatch;
       if (patchReply.status === 200) stored = patchReply.body as CalendarAppointment;
       return json(patchReply.body, patchReply.status);
     }
@@ -123,6 +131,25 @@ const open = (props: Partial<Parameters<typeof CalendarView>[0]> = {}) => {
   );
   return { ...view, onSearchChange };
 };
+
+function RemountingCalendar() {
+  const [key, setKey] = useState(1);
+  return (
+    <>
+      <button type="button" onClick={() => setKey(key + 1)}>
+        Remount
+      </button>
+      <CalendarView
+        key={key}
+        search={{ view: "day", date: "2026-03-09" }}
+        onSearchChange={() => {}}
+        role="owner"
+        ownStaffId={null}
+        now={NOW}
+      />
+    </>
+  );
+}
 
 describe("CalendarView", () => {
   test("booked resources with the same name filter by ID and clear independently", async () => {
@@ -303,6 +330,101 @@ describe("CalendarView", () => {
     fireEvent.click(within(banner).getByRole("button", { name: "Open appointment" }));
     expect(await screen.findByRole("dialog", { name: "Lucia" })).toBeInTheDocument();
   });
+
+  test("an in-flight move stays visible and locked when the calendar remounts", async () => {
+    const response = Promise.withResolvers<void>();
+    holdPatch = response.promise;
+    const { queryClient } = renderApp(<RemountingCalendar />);
+    const original = await screen.findByRole("button", { name: /Lucia/ });
+    try {
+      fireEvent.keyDown(original, { key: "ArrowDown", altKey: true });
+      await waitFor(() => expect(patches).toHaveLength(1));
+      expect(
+        isLocalCalendarMove(queryClient, {
+          ...lucia,
+          version: 3,
+          startsAt: "2026-03-09T13:15:00Z",
+        }),
+      ).toBe(true);
+      expect(
+        isLocalCalendarMove(queryClient, {
+          ...lucia,
+          version: 4,
+          startsAt: "2026-03-09T13:15:00Z",
+        }),
+      ).toBe(false);
+      fireEvent.click(screen.getByRole("button", { name: "Remount" }));
+      const current = await screen.findByRole("button", { name: /Lucia/ });
+      expect(current).not.toBe(original);
+      expect(current).toHaveTextContent("10:15");
+      fireEvent.keyDown(current, { key: "ArrowDown", altKey: true });
+      response.resolve();
+      expect(await screen.findByText("Appointment moved")).toBeVisible();
+      expect(patches).toHaveLength(1);
+    } finally {
+      response.resolve();
+    }
+  });
+
+  for (const movedElsewhere of [false, true]) {
+    test(`a rejected move preserves live refreshes (same appointment updated: ${movedElsewhere})`, async () => {
+      const other = {
+        ...lucia,
+        id: crypto.randomUUID(),
+        clientName: "Synthetic second appointment",
+      };
+      additionalAppointments = [other];
+      const patch = Promise.withResolvers<void>();
+      const refresh = Promise.withResolvers<void>();
+      holdPatch = patch.promise;
+      patchReply = { status: 409, body: { error: { code: "slot_taken", message: "taken" } } };
+      const { queryClient } = open();
+      const filters = { queryKey: ["admin", "calendar"] };
+      const read = () => queryClient.getQueriesData<CalendarResponse>(filters)[0]?.[1];
+      try {
+        const block = await screen.findByRole("button", { name: /Lucia/ });
+        fireEvent.keyDown(block, { key: "ArrowDown", altKey: true });
+        await waitFor(() => expect(patches).toHaveLength(1));
+        expect(block).toHaveTextContent("10:15");
+        expect(read()?.appointments[0]?.startsAt).toBe(lucia.startsAt);
+        fireEvent.keyDown(block, { key: "ArrowDown", altKey: true });
+        expect(patches).toHaveLength(1);
+        fireEvent.click(block);
+        const drawer = await screen.findByRole("dialog", { name: "Lucia" });
+        expect(within(drawer).getByRole("button", { name: "Reschedule" })).toBeDisabled();
+        fireEvent.click(within(drawer).getByRole("button", { name: "Close panel" }));
+
+        if (movedElsewhere)
+          stored = {
+            ...lucia,
+            version: 3,
+            startsAt: "2026-03-09T16:00:00.000Z",
+            endsAt: "2026-03-09T17:00:00.000Z",
+          };
+        additionalAppointments = [{ ...other, version: 3, clientName: "Updated in Desktop" }];
+        await act(() => queryClient.invalidateQueries(filters));
+        await waitFor(() =>
+          expect(screen.getByRole("button", { name: /Lucia/ })).toHaveTextContent(
+            movedElsewhere ? "1:00" : "10:15",
+          ),
+        );
+        holdCalendar = refresh.promise;
+        patch.resolve();
+        await screen.findByRole("alert");
+        expect(read()?.appointments[0]).toMatchObject({
+          version: stored.version,
+          startsAt: stored.startsAt,
+        });
+        expect(read()?.appointments[1]).toMatchObject({
+          version: 3,
+          clientName: "Updated in Desktop",
+        });
+      } finally {
+        patch.resolve();
+        refresh.resolve();
+      }
+    });
+  }
 });
 test("read-only calendar access hides create and mutation controls including keyboard creation", async () => {
   renderApp(

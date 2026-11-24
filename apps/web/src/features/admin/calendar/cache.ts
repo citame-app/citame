@@ -11,11 +11,14 @@ export function patchAppointment(
   calendar: CalendarResponse,
   id: string,
   patch: Partial<CalendarAppointment>,
+  matches: (current: CalendarAppointment) => boolean = () => true,
 ): CalendarResponse {
-  if (!calendar.appointments.some((a) => a.id === id)) return calendar;
+  const index = calendar.appointments.findIndex((a) => a.id === id);
+  const current = calendar.appointments[index];
+  if (!current || !matches(current)) return calendar;
   return {
     ...calendar,
-    appointments: calendar.appointments.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+    appointments: calendar.appointments.with(index, { ...current, ...patch }),
   };
 }
 
@@ -24,7 +27,12 @@ export function mergeAppointment(
   calendar: CalendarResponse,
   appointment: Appointment,
 ): CalendarResponse {
-  return patchAppointment(calendar, appointment.id, appointment);
+  return patchAppointment(
+    calendar,
+    appointment.id,
+    appointment,
+    (current) => current.version <= appointment.version,
+  );
 }
 
 export function removeAppointment(calendar: CalendarResponse, id: string): CalendarResponse {

@@ -31,7 +31,7 @@ import { ConflictList } from "../staff/conflict-list";
 import { useNow } from "../use-now";
 import { AppointmentDrawer } from "./appointment-drawer";
 import { BooksyContextImport } from "./booksy-context-import";
-import { CalendarGrid, type GridColumn, type MoveRequest } from "./calendar-grid";
+import { CalendarGrid, type GridColumn } from "./calendar-grid";
 import { CalendarInbox } from "./inbox";
 import { shortcutFor } from "./keys";
 import { useCalendarLive } from "./live-provider";
@@ -43,6 +43,7 @@ import {
   type CalendarView as ViewName,
 } from "./logic";
 import { MiniCalendar } from "./mini-calendar";
+import type { MoveRequest } from "./move-requests";
 import { type NewAppointmentInitial, NewAppointmentSheet } from "./new-appointment";
 import { CalendarOverview } from "./overview";
 import { indexCalendar, personInitials, serviceHue } from "./presentation";
@@ -110,7 +111,12 @@ export function CalendarView({
     }),
     ...(live ? { refetchInterval: false } : {}),
   });
-  const calendar = query.data;
+  const { move, projectPendingMoves, isMovePending, conflict, clearConflict } =
+    useMoveAppointment();
+  const calendar = useMemo(
+    () => projectPendingMoves(query.data),
+    [projectPendingMoves, query.data],
+  );
   const [lastConsultation, setLastConsultation] = useState(Boolean(calendar?.importSnapshot));
   const consultation = calendar ? Boolean(calendar.importSnapshot) : lastConsultation;
   useEffect(() => {
@@ -121,7 +127,6 @@ export function CalendarView({
     role === "owner" && !consultation
       ? calendarViews
       : calendarViews.filter((view) => view !== "resources");
-  const { move, conflict, clearConflict } = useMoveAppointment();
   const [showCancelled, setShowCancelled] = useState(false);
   const [status, setStatus] = useState("all");
   const [resource, setResource] = useState<{ id: string; name: string } | null>(null);
@@ -237,8 +242,9 @@ export function CalendarView({
     [move],
   );
   const canMove = useCallback(
-    (a: CalendarAppointment) => availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
-    [role, now, ownStaffId, readOnly],
+    (a: CalendarAppointment) =>
+      !isMovePending(a.id) && availableActions(role, a, now, ownStaffId, !readOnly).reschedule,
+    [isMovePending, role, now, ownStaffId, readOnly],
   );
   const go = useCallback(
     (patch: Partial<CalendarSearch>) => onSearchChange({ ...search, ...patch }),
