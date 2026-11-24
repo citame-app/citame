@@ -64,10 +64,11 @@ export async function collectDesktopAppointments(
   return { appointments, cursor };
 }
 
-export async function hydrateRehearsalDesktop(
-  get: (path: string) => Response | Promise<Response>,
-  generation: string,
-  calendar: CalendarResponse,
+type CalendarDetails = Pick<CalendarAppointment, "services" | "resources" | "serviceBadges">;
+
+export function matchesRehearsalCalendarDetails(
+  actual: CalendarDetails,
+  expected: CalendarDetails,
 ) {
   const resources = (value: Pick<CalendarAppointment, "resources">) =>
     (value.resources ?? []).toSorted((left, right) =>
@@ -84,6 +85,18 @@ export async function hydrateRehearsalDesktop(
           badge.customerComment,
       )
       .sort((left, right) => left.servicePosition - right.servicePosition);
+  return (
+    Bun.deepEquals(actual.services, expected.services) &&
+    Bun.deepEquals(resources(actual), resources(expected)) &&
+    Bun.deepEquals(visibleBadges(actual), visibleBadges(expected))
+  );
+}
+
+export async function hydrateRehearsalDesktop(
+  get: (path: string) => Response | Promise<Response>,
+  generation: string,
+  calendar: CalendarResponse,
+) {
   const { appointments, cursor } = await collectDesktopAppointments(get, generation, 0);
   const staff = new Set(calendar.staff.map((column) => column.id));
   const from = Date.parse(calendar.from);
@@ -106,9 +119,7 @@ export async function hydrateRehearsalDesktop(
         data.startsAt !== visit.startsAt ||
         data.endsAt !== visit.endsAt ||
         data.importedFromBooksy !== visit.importedFromBooksy ||
-        !Bun.deepEquals(data.services, visit.services) ||
-        !Bun.deepEquals(resources(data), resources(visit)) ||
-        !Bun.deepEquals(visibleBadges(data), visibleBadges(visit))
+        !matchesRehearsalCalendarDetails(data, visit)
       );
     })
   )

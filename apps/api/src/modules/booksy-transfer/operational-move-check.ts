@@ -20,7 +20,11 @@ import { asc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { IMPORTED_STAFF_UNIT_START } from "../availability/staff-reservations";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
-import { collectDesktopAppointments, openRehearsalSyncStream } from "./operational-desktop-check";
+import {
+  collectDesktopAppointments,
+  matchesRehearsalCalendarDetails,
+  openRehearsalSyncStream,
+} from "./operational-desktop-check";
 import { fingerprint } from "./plan";
 
 export class OperationalMoveProofError extends Error {}
@@ -171,18 +175,20 @@ async function verifyStoredMove(
 async function assertCalendarMove(
   owner: OwnerRequest,
   calendarRoute: string,
-  id: string,
+  visit: CalendarAppointment,
   startsAt: string,
   version: number,
 ) {
   const response = await owner(calendarRoute);
   const calendar = calendarResponseSchema.safeParse(await response.json());
-  const visible = calendar.success && calendar.data.appointments.find((item) => item.id === id);
+  const visible =
+    calendar.success && calendar.data.appointments.find((item) => item.id === visit.id);
   if (
     response.status !== 200 ||
     !visible ||
     visible.startsAt !== startsAt ||
-    visible.version !== version
+    visible.version !== version ||
+    !matchesRehearsalCalendarDetails(visible, visit)
   )
     throw new OperationalMoveProofError("The web calendar did not reflect the rehearsal move");
 }
@@ -199,6 +205,7 @@ async function rehearseDesktopMove(
   calendarRoute: string,
   desktop: RehearsalDesktopPush,
   before: MoveState,
+  visit: CalendarAppointment,
   destinations: string[],
   otherAppointmentsDigest: string,
   receipts: string,
@@ -240,7 +247,7 @@ async function rehearseDesktopMove(
       const next = await stream.next();
       if (next < applied.appliedSeq)
         throw new OperationalMoveProofError("The web session missed the desktop's live change");
-      await assertCalendarMove(owner, calendarRoute, id, startsAt, version + 1);
+      await assertCalendarMove(owner, calendarRoute, visit, startsAt, version + 1);
       const moved = await verifyStoredMove(db, before, startsAt, otherAppointmentsDigest);
       const storedEffects = await moveEffects(db);
       const {
@@ -347,7 +354,7 @@ export async function rehearseNativeCalendarMove(
         moved.data.version !== visit.version + 1
       )
         throw new OperationalMoveProofError("The web move did not return the updated appointment");
-      await assertCalendarMove(owner, calendarRoute, visit.id, startsAt, visit.version + 1);
+      await assertCalendarMove(owner, calendarRoute, visit, startsAt, visit.version + 1);
       const nudge = await desktop.stream.next();
       await desktop.renew();
       const replica = await collectDesktopAppointments(
@@ -360,6 +367,7 @@ export async function rehearseNativeCalendarMove(
         !replayed ||
         replayed.data.startsAt !== startsAt ||
         replayed.data.version !== visit.version + 1 ||
+        !matchesRehearsalCalendarDetails(replayed.data, visit) ||
         replayed.seq > nudge ||
         nudge <= desktop.startingHead
       )
@@ -370,6 +378,7 @@ export async function rehearseNativeCalendarMove(
         calendarRoute,
         desktop,
         after,
+        visit,
         [...new Set([...(await availableStarts()), visit.startsAt])].filter(
           (candidate) => candidate !== startsAt,
         ),
