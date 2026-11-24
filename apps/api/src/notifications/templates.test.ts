@@ -76,7 +76,7 @@ describe("renderEmail", () => {
       const spanish = renderEmail(data({ ...booking, locale: "es-AR" }));
       expect(english.subject).toContain("Nov 25, 12:30 AM");
       expect(english.text).toContain("Wednesday, November 25");
-      expect(spanish.subject).toMatch(/25 (?:de )?nov.*0{1,2}:30/i);
+      expect(spanish.subject).toMatch(/25 (?:de )?nov.*(?:\b0{1,2}:30\b|\b12:30\s*a\.\s*m\.)/i);
       expect(spanish.text).toContain("miércoles, 25 de noviembre");
       expect(english.subject + english.text).not.toMatch(/today|tomorrow|about two hours/i);
       expect(spanish.subject + spanish.text).not.toMatch(/hoy|mañana|unas dos horas/i);
