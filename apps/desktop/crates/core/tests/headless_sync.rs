@@ -6060,8 +6060,13 @@ fn offline_time_off_syncs_and_rejects_a_stale_delete_without_touching_the_bookin
     assert_eq!(report.push.rejected, 1, "{report:?}");
     let fresh = read(&b).unwrap();
     assert_eq!(fresh.time_off.reason.as_deref(), Some("Remote edit"));
-    ops::delete_time_off(&mut b.store, &fresh.time_off).unwrap();
+    let conflict = b.store.conflicts().unwrap().remove(0);
+    let review = ops::review_time_off_conflict(&b.store, &conflict.mutation_id).unwrap();
+    assert_eq!(review.saved, fresh.time_off);
+    assert!(review.proposal.is_none());
+    ops::retry_reviewed_time_off(&mut b.store, &conflict.mutation_id, &review.saved, None).unwrap();
     assert_eq!(b.sync().push.applied, 1);
+    assert!(b.store.conflicts().unwrap().is_empty());
     a.sync();
     assert!(read(&a).is_none());
     assert!(day_items(&a, at, &c.staff).iter().any(|item| {

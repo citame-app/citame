@@ -712,8 +712,14 @@ impl Conflict {
         self.reason == RESTORED_HISTORY
     }
 
-    /// Only appointment mutations have a resolution flow (reschedule or cancel).
+    /// Appointment mutations have a separate reschedule or cancel flow.
     pub fn is_appointment(&self) -> bool {
         self.kind.starts_with("appointment.")
+    }
+
+    pub fn is_time_off_revision_conflict(&self) -> bool {
+        matches!(self.kind.as_str(), "time_off.update" | "time_off.delete")
+            && self.reason == "conflict"
+            && self.payload.get("expectedUpdatedAt").is_some()
     }
 }

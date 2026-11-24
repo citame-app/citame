@@ -311,11 +311,6 @@ pub fn pull_all(store: &mut Store, transport: &dyn Transport) -> Result<PullRepo
             store.apply_catalog_colors(&colors, Some(&generation))?;
         }
         request_colors = false;
-        if let Some(scope) = page.time_off_scope.as_deref()
-            && store.get_meta("time_off_scope")?.as_deref() != Some(scope)
-        {
-            store.set_meta_in("time_off_scope", scope, &generation)?;
-        }
         report.pages += 1;
         report.changes += applied;
         if !page.has_more {
