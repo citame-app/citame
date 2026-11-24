@@ -241,6 +241,9 @@ impl VisitPacket {
 
 impl ReviewedVisit {
     pub fn mark_local_dispatch(&self, store: &mut Store) -> Result<()> {
+        for part in &self.packet.parts {
+            crate::ops::require_calendar_write(store, &part.staff_id)?;
+        }
         store.mark_local_bookings_dispatch(
             self.packet.parts.iter().map(|part| part.id.as_str()),
             &self.packet.desktop_generation,

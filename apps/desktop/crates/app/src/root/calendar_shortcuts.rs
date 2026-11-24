@@ -75,6 +75,13 @@ const SHORTCUTS: &[Shortcut] = &[
 ];
 
 impl Root {
+    fn available_calendar_shortcuts(&self) -> impl Iterator<Item = &'static Shortcut> {
+        let can_edit = self.calendar_edits_allowed;
+        SHORTCUTS
+            .iter()
+            .filter(move |shortcut| can_edit || !matches!(shortcut.action, Action::New))
+    }
+
     pub(super) fn sync_calendar(&mut self, cx: &mut Context<Self>) {
         self.svc.wake(Wake::Manual);
         self.force_resource_calendar_refresh(cx);
@@ -105,7 +112,7 @@ impl Root {
             return;
         }
         let input = key.key_char.as_deref().unwrap_or(&key.key);
-        let Some(shortcut) = SHORTCUTS.iter().find(|shortcut| {
+        let Some(shortcut) = self.available_calendar_shortcuts().find(|shortcut| {
             shortcut
                 .input
                 .iter()
@@ -266,8 +273,8 @@ impl Root {
                         .id("calendar-shortcuts-list")
                         .min_h_0()
                         .overflow_y_scroll()
-                        .child(div().flex().flex_col().children(SHORTCUTS.iter().map(
-                            |shortcut| {
+                        .child(div().flex().flex_col().children(
+                            self.available_calendar_shortcuts().map(|shortcut| {
                                 div()
                                     .flex()
                                     .items_center()
@@ -281,8 +288,8 @@ impl Root {
                                             .text_color(theme::muted())
                                             .child(shortcut.display),
                                     )
-                            },
-                        ))),
+                            }),
+                        )),
                 )
                 .when(self.calendar_edits_allowed, |body| {
                     body.child(

@@ -872,7 +872,9 @@ impl Root {
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
         self.calendar_scope = scope;
-        self.calendar_edits_allowed = self.svc.store.calendar_edits_allowed().unwrap_or(false);
+        self.calendar_edits_allowed =
+            ops::calendar_scope_permits_edit(self.calendar_scope.as_deref(), None)
+                && self.svc.store.calendar_edits_allowed().unwrap_or(false);
         self.replica_generation = generation;
         if self.calendar_mode == CalendarMode::Resources && !self.can_view_resource_calendar() {
             self.calendar_mode = CalendarMode::Day;
@@ -1111,7 +1113,15 @@ impl Root {
 
     // ---------------------------------------------------------------- dialogs: new
 
+    fn can_edit_staff_calendar(&self, id: &str) -> bool {
+        self.calendar_edits_allowed
+            && ops::calendar_scope_permits_edit(self.calendar_scope.as_deref(), Some(id))
+    }
+
     fn open_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.calendar_edits_allowed {
+            return;
+        }
         let t = |k| i18n::t(self.locale, k);
         let new_client = cx.new(|cx| TextField::new(t(Key::ClientName), false, cx));
         let new_client_phone = cx.new(|cx| TextField::new(t(Key::ClientPhone), false, cx));
@@ -1138,11 +1148,15 @@ impl Root {
             selected_end: None,
             staff_id: self
                 .preferred_calendar_staff()
+                .filter(|id| self.can_edit_staff_calendar(id))
                 .or_else(|| {
                     if self.team_calendar_visible() {
                         None
                     } else {
-                        self.staff.first().map(|member| member.id.as_str())
+                        self.staff
+                            .iter()
+                            .find(|member| self.can_edit_staff_calendar(&member.id))
+                            .map(|member| member.id.as_str())
                     }
                 })
                 .map(str::to_owned),
@@ -1171,6 +1185,9 @@ impl Root {
 
     /// Choosing a staff member drops selected services they do not perform.
     fn pick_new_staff(&mut self, id: String, cx: &mut Context<Self>) {
+        if !self.can_edit_staff_calendar(&id) {
+            return;
+        }
         if let Overlay::New(f) = &mut self.overlay {
             if let Some(selection) = &mut f.combination {
                 if !selection.offer.permits_staff(&id)
@@ -1202,6 +1219,10 @@ impl Root {
     }
 
     fn book_reviewed(&mut self, peak_review: Option<&str>, cx: &mut Context<Self>) {
+        if !self.calendar_edits_allowed {
+            self.show_new_booking_error(CoreError::AppointmentScopeDenied, cx);
+            return;
+        }
         if matches!(&self.overlay, Overlay::New(form) if !form.visit_parts.is_empty()) {
             self.review_grouped_visit(cx);
             return;
@@ -1357,6 +1378,7 @@ impl Root {
         if let Overlay::New(form) = &mut self.overlay {
             form.error = Some(match error {
                 CoreError::TimeOffOverlap => Key::TimeOffOverlap,
+                CoreError::AppointmentScopeDenied => Key::ConflictForbidden,
                 CoreError::StaffCapacityExceeded => Key::ConflictSlotTaken,
                 CoreError::PendingClient => Key::BookingIntakeClientSync,
                 CoreError::CalendarGenerationChanged => Key::BookingIntakeRestore,
@@ -1550,6 +1572,7 @@ impl Root {
             Err(e) => {
                 let message = match e {
                     CoreError::TimeOffOverlap => self.t(Key::TimeOffOverlap).to_owned(),
+                    CoreError::AppointmentScopeDenied => self.t(Key::ConflictForbidden).to_owned(),
                     CoreError::StaffCapacityExceeded => self.t(Key::ConflictSlotTaken).to_owned(),
                     other => other.to_string(),
                 };
@@ -1588,6 +1611,9 @@ impl Root {
                 }
             }
             cx.notify();
+            return;
+        }
+        if !self.calendar_edits_allowed {
             return;
         }
         let start = conflict_requested_start(c).unwrap_or_else(Utc::now);
@@ -2105,12 +2131,14 @@ impl Root {
                 Kind::Ghost,
                 cx.listener(|this, _, _, cx| this.set_theme(!theme::is_dark(), cx)),
             ))
-            .child(self.button(
-                "new",
-                self.t(Key::NewAppointment),
-                Kind::Primary,
-                cx.listener(|this, _, window, cx| this.open_new(window, cx)),
-            ))
+            .when(self.calendar_edits_allowed, |header| {
+                header.child(self.button(
+                    "new",
+                    self.t(Key::NewAppointment),
+                    Kind::Primary,
+                    cx.listener(|this, _, window, cx| this.open_new(window, cx)),
+                ))
+            })
             .when(
                 self.staff
                     .iter()
@@ -2915,9 +2943,28 @@ impl Root {
             .child(mk("d+", Key::MoveNextDay, 1440, cx))
     }
 
-    fn staff_chips(
+    fn writable_staff_chips(
         &self,
         staff: &[Staff],
+        prefix: &'static str,
+        selected: &str,
+        cx: &mut Context<Self>,
+        pick: fn(&mut Root, String, &mut Context<Root>),
+    ) -> gpui::Div {
+        self.staff_chips(
+            staff
+                .iter()
+                .filter(|member| self.can_edit_staff_calendar(&member.id)),
+            prefix,
+            selected,
+            cx,
+            pick,
+        )
+    }
+
+    fn staff_chips<'a>(
+        &self,
+        staff: impl IntoIterator<Item = &'a Staff>,
         prefix: &'static str,
         selected: &str,
         cx: &mut Context<Self>,
@@ -2927,12 +2974,12 @@ impl Root {
             .flex()
             .flex_wrap()
             .gap_2()
-            .children(staff.iter().enumerate().map(|(i, s)| {
-                let id = s.id.clone();
+            .children(staff.into_iter().enumerate().map(|(i, member)| {
+                let id = member.id.clone();
                 self.chip(
                     (prefix, i),
-                    SharedString::from(s.display_name.clone()),
-                    s.id == selected,
+                    SharedString::from(member.display_name.clone()),
+                    member.id == selected,
                     cx.listener(move |this, _, _, cx| pick(this, id.clone(), cx)),
                 )
                 .tab_index(0)
@@ -2953,6 +3000,13 @@ impl Root {
             return self.render_booking_intake(f, review, viewport, cx);
         }
         const CLIENT_LIMIT: usize = 12;
+        let can_book = self.calendar_edits_allowed
+            && f.staff_id
+                .as_deref()
+                .is_none_or(|id| self.can_edit_staff_calendar(id))
+            && f.visit_parts
+                .iter()
+                .all(|part| self.can_edit_staff_calendar(&part.staff_id));
         let review_offline_price = f.combination.is_none()
             && self.status.connectivity != Connectivity::Online
             && !f.services.is_empty();
@@ -3063,7 +3117,7 @@ impl Root {
                     .flex_col()
                     .gap_2()
                     .child(self.label(Key::Staff))
-                    .child(self.staff_chips(
+                    .child(self.writable_staff_chips(
                         combination_staff.as_deref().unwrap_or(&self.staff),
                         "new-staff",
                         staff,
@@ -3307,24 +3361,26 @@ impl Root {
                         Kind::Ghost,
                         cx.listener(|this, _, _, cx| this.dismiss_overlay(cx)),
                     ))
-                    .child(
-                        self.button(
-                            "new-book",
-                            self.t(if !f.visit_parts.is_empty() {
-                                Key::VisitReview
-                            } else if f.recurrence.is_some() {
-                                Key::SeriesReview
-                            } else {
-                                Key::Book
-                            }),
-                            Kind::Primary,
-                            cx.listener(move |this, _, _, cx| {
-                                this.book_reviewed(peak_review.as_deref(), cx)
-                            }),
+                    .when(can_book, |actions| {
+                        actions.child(
+                            self.button(
+                                "new-book",
+                                self.t(if !f.visit_parts.is_empty() {
+                                    Key::VisitReview
+                                } else if f.recurrence.is_some() {
+                                    Key::SeriesReview
+                                } else {
+                                    Key::Book
+                                }),
+                                Kind::Primary,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.book_reviewed(peak_review.as_deref(), cx)
+                                }),
+                            )
+                            .tab_index(0)
+                            .focus(|style| style.border_color(theme::text())),
                         )
-                        .tab_index(0)
-                        .focus(|style| style.border_color(theme::text())),
-                    ),
+                    }),
             );
         self.modal_with_height(
             div()
@@ -3353,15 +3409,19 @@ impl Root {
                                 .child(service_picker),
                         ),
                 )
-                .when_some(f.error, |panel, error| {
-                    panel.child(
-                        div()
-                            .flex_none()
-                            .text_sm()
-                            .text_color(theme::conflict_fg())
-                            .child(self.t(error)),
-                    )
-                })
+                .when_some(
+                    f.error
+                        .or((!can_book).then_some(Key::BookingIntakeAccessChanged)),
+                    |panel, error| {
+                        panel.child(
+                            div()
+                                .flex_none()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(self.t(error)),
+                        )
+                    },
+                )
                 .child(footer),
             (viewport.width - px(24.)).clamp(px(0.), px(if wide { 900. } else { 560. })),
             (viewport.height - px(24.)).clamp(px(0.), px(720.)),
@@ -3503,11 +3563,10 @@ impl Root {
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
-        let editable = self.calendar_edits_allowed
-            && !stale
-            && current
-                .as_ref()
-                .is_some_and(|a| a.status == AppointmentStatus::Booked);
+        let editable = !stale
+            && current.as_ref().is_some_and(|a| {
+                a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
+            });
         let can_set_outcome =
             editable && current.as_ref().is_some_and(|a| a.starts_at <= Utc::now());
         let changed =
@@ -3739,7 +3798,7 @@ impl Root {
                             cx.notify();
                         },
                     ))
-                    .child(self.staff_chips(
+                    .child(self.writable_staff_chips(
                         &self.staff,
                         "move-staff",
                         &d.staff_id,
@@ -4293,7 +4352,7 @@ impl Root {
                             cx.notify();
                         },
                     ))
-                    .child(self.staff_chips(
+                    .child(self.writable_staff_chips(
                         &self.staff,
                         "c-staff",
                         &dr.staff_id,
@@ -4349,18 +4408,23 @@ impl Root {
                     .flex()
                     .flex_wrap()
                     .gap_2()
-                    .when(!new_booking || c.reason != "conflict", |x| {
-                        x.child(self.button(
-                            ("c-resched", i),
-                            self.t(if new_booking {
-                                Key::ConflictPickNewTime
-                            } else {
-                                Key::ReviewCurrentAppointment
-                            }),
-                            Kind::Primary,
-                            cx.listener(move |this, _, _, cx| this.start_conflict_edit(&m3, cx)),
-                        ))
-                    })
+                    .when(
+                        !new_booking || (self.calendar_edits_allowed && c.reason != "conflict"),
+                        |x| {
+                            x.child(self.button(
+                                ("c-resched", i),
+                                self.t(if new_booking {
+                                    Key::ConflictPickNewTime
+                                } else {
+                                    Key::ReviewCurrentAppointment
+                                }),
+                                Kind::Primary,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.start_conflict_edit(&m3, cx)
+                                }),
+                            ))
+                        },
+                    )
                     .when(new_booking, |x| {
                         x.child(self.button(
                             ("c-cancel", i),
@@ -5846,6 +5910,29 @@ mod tests {
                 entries[1].payload["_reviewedServices"][1]["priceCents"],
                 1440
             );
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn read_only_calendar_blocks_new_shortcuts_and_keeps_existing_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            root.svc
+                .store
+                .set_meta("viewer_edit_calendar", "0")
+                .unwrap();
+            root.reload(cx);
+        })
+        .unwrap();
+        cx.simulate_keystrokes(win.into(), "n");
+        win.update(cx, |root, _, cx| {
+            assert!(matches!(root.overlay, Overlay::None));
+            root.open_details(EXISTING, cx);
+            assert!(matches!(root.overlay, Overlay::Details(_)));
+            assert!(outbox_kinds(root).is_empty());
         })
         .unwrap();
     }
