@@ -10,6 +10,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- The commerce API prepares the individual receipts for native and imported multi-professional visits in one transaction, including existing collections and cancelled parts.
+
 - Desktop appointment details show the server-confirmed deposit state and payment deadlines, including the last synced state when offline. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
 
 - Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.

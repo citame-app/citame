@@ -38,8 +38,10 @@ The staff commerce API can prepare the receipts for a complete visit through
 `POST /admin/commerce/visits/:appointmentId/checkouts`. It accepts an appointment from a native
 itinerary or a group preserved during import. The operation reuses existing receipts, keeps the
 professional and service amounts for each part, and prepares new receipts in one transaction.
-Cancelled parts remain visible with no new receipt. An unresolved imported charge requires review
-before the visit can be prepared. Accounts need access to every calendar and receipt in the group.
+Cancelled parts and externally settled parts remain visible with their existing receipt if one
+exists. An unresolved imported charge requires review before the visit can be prepared. Accounts
+need access to every calendar and receipt in the group.
+As in individual checkout, preparing a zero-total receipt with final prices settles it for zero.
 
 ## Verification — 2026-11-17
 

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appointmentStatusSchema } from "./appointments";
 import { bookingProtectionSchema } from "./booking-protection";
 import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
@@ -349,6 +350,8 @@ export const visitCheckoutSchema = z.object({
       appointmentId: idSchema,
       staffId: idSchema,
       startsAt: instantSchema,
+      status: appointmentStatusSchema,
+      settledExternally: z.boolean(),
       receipt: checkoutSchema.nullable(),
     }),
   ),

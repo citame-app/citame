@@ -102,21 +102,33 @@ test.each(["itinerary", "import"] as const)(
     );
     expect(existing.status).toBe(201);
     const saved = checkoutSchema.parse(await existing.json());
+    const payment = await json(
+      t.app,
+      `/admin/commerce/checkouts/${saved.id}/payments`,
+      "POST",
+      { method: "external_card", amountCents: 400, idempotencyKey: crypto.randomUUID() },
+      owner.cookie,
+    );
+    expect(payment.status, await payment.clone().text()).toBe(201);
     const replies = await Promise.all([prepare(second), prepare(first)]);
+    const receiptIds = [];
     for (const reply of replies) {
       expect(reply.status, await reply.clone().text()).toBe(200);
       const view = visitCheckoutSchema.parse(await reply.json());
       expect(view.groupId).toBe(groupId);
+      receiptIds.push(view.appointments.map(({ receipt }) => receipt?.id));
       expect(view.appointments.map((item) => item.receipt)).toEqual([
         expect.objectContaining({
           id: saved.id,
           appointmentId: first,
           staffId: f.anaId,
-          balanceCents: 1200,
+          paidCents: 400,
+          balanceCents: 800,
         }),
         expect.objectContaining({ appointmentId: second, staffId: f.beaId, balanceCents: 1900 }),
       ]);
     }
+    expect(receiptIds[0]).toEqual(receiptIds[1]);
     expect(await t.db.select().from(checkout)).toHaveLength(2);
   },
 );
@@ -157,5 +169,40 @@ test("a cancelled appointment stays visible without creating a receipt", async (
     first,
     null,
   ]);
+  expect(await t.db.select().from(checkout)).toHaveLength(1);
+});
+
+test("a cancelled appointment retains the receipt that was created before cancellation", async () => {
+  const { first, second } = await group("itinerary");
+  const initial = visitCheckoutSchema.parse(await (await prepare(first)).json());
+  await t.db.update(appointment).set({ status: "cancelled" }).where(eq(appointment.id, second));
+  const view = visitCheckoutSchema.parse(await (await prepare(first)).json());
+  expect(view.appointments[1]).toMatchObject({
+    status: "cancelled",
+    receipt: { id: initial.appointments[1]?.receipt?.id },
+  });
+  expect(await t.db.select().from(checkout)).toHaveLength(2);
+});
+
+test("an externally settled part remains noncollectible while its sibling gets a receipt", async () => {
+  const { first, second } = await group("import");
+  await t.db.insert(appointmentContext).values({
+    appointmentId: second,
+    servicePosition: 0,
+    source: "booksy",
+    sourceRef: "settled-fixture",
+    invoiced: true,
+  });
+  const settled = await json(
+    t.app,
+    `/admin/commerce/appointments/${second}/imported-settlement`,
+    "PUT",
+    { amountCents: 1900, appointmentVersion: 1, reference: "Synthetic invoice" },
+    owner.cookie,
+  );
+  expect(settled.status, await settled.clone().text()).toBe(200);
+  const view = visitCheckoutSchema.parse(await (await prepare(first)).json());
+  expect(view.appointments[1]).toMatchObject({ settledExternally: true, receipt: null });
+  expect(view.appointments[0]?.receipt?.appointmentId).toBe(first);
   expect(await t.db.select().from(checkout)).toHaveLength(1);
 });

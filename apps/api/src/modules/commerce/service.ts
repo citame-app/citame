@@ -431,6 +431,32 @@ export async function createCheckout(
 export async function getCheckoutInTransaction(tx: Tx, id: string, principal: Principal) {
   return snapshot(tx, await saleRow(tx, id, principal));
 }
+
+async function linkedAppointmentCheckout(db: Connection, appointmentId: string) {
+  // A protected booking retains its original receipt after settlement or void.
+  const [linked] = await db
+    .select({ receipt: checkout })
+    .from(checkout)
+    .leftJoin(bookingProtection, eq(bookingProtection.checkoutId, checkout.id))
+    .where(
+      and(
+        eq(checkout.appointmentId, appointmentId),
+        or(sql`${checkout.status} <> 'void'`, isNotNull(bookingProtection.checkoutId)),
+      ),
+    )
+    .orderBy(desc(sql`${bookingProtection.checkoutId} IS NOT NULL`))
+    .limit(1);
+  return linked?.receipt;
+}
+
+export async function readAppointmentCheckout(tx: Tx, id: string, principal: Principal) {
+  requireOperator(principal);
+  const receipt = await linkedAppointmentCheckout(tx, id);
+  if (!receipt) return null;
+  assertSaleAccess(principal, receipt);
+  return snapshot(tx, receipt);
+}
+
 export async function createCheckoutInTransaction(
   tx: Tx,
   input: CreateCheckoutInput,
@@ -551,20 +577,7 @@ export async function createCheckoutInTransaction(
         "Appointment seller must match the booked professional",
       );
     staffId = booking.staffId;
-    // A protected booking keeps its original receipt even after the deposit is settled or void.
-    const [linked] = await tx
-      .select({ receipt: checkout })
-      .from(checkout)
-      .leftJoin(bookingProtection, eq(bookingProtection.checkoutId, checkout.id))
-      .where(
-        and(
-          eq(checkout.appointmentId, input.appointmentId),
-          or(sql`${checkout.status} <> 'void'`, isNotNull(bookingProtection.checkoutId)),
-        ),
-      )
-      .orderBy(desc(sql`${bookingProtection.checkoutId} IS NOT NULL`))
-      .limit(1);
-    const previous = linked?.receipt;
+    const previous = await linkedAppointmentCheckout(tx, booking.id);
     if (previous) {
       assertSaleAccess(principal, previous);
       if (input.lines.length || input.discountCents || input.tipCents || input.clientId)

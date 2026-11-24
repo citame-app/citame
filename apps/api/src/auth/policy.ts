@@ -35,6 +35,15 @@ export function requirePermission(principal: Principal, permission: keyof StaffP
     throw forbidden("Your access profile does not permit this operation");
 }
 
+export function canReviewVisitCheckouts(principal: Principal, staffIds: ReadonlyArray<string>) {
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
+  return (
+    permissions.commerce &&
+    ((permissions.allCalendars && permissions.allSales) ||
+      staffIds.every((id) => id === principal.staffId))
+  );
+}
+
 /**
  * Returns the request to execute. Clients are pinned to their own booking profile (an inline
  * `client` payload is dropped, so they cannot mint or impersonate profiles); staff are pinned
