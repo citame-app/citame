@@ -22,6 +22,7 @@ import {
   seedFixtures,
   setupApiTest,
 } from "../../../test/helpers";
+import { pull } from "../../../test/sync";
 import { updateAppointment } from "../appointments/service";
 import { settleVerifiedBankPayment } from "../commerce/service";
 import { calendarProtections, expireBookingHolds, protectionView } from "./value";
@@ -104,6 +105,29 @@ test("private appointment context shows protection and redacts amounts without c
     protection: { checkoutId: string };
   };
   const path = `/appointments/${id}/context`;
+  const pendingPage = await pull(t, owner, { since: 0, limit: 200 });
+  expect(pendingPage.appointmentDepositStatus).toBe(true);
+  const pending = pendingPage.changes.find(
+    (change) => change.entity === "appointment" && change.id === id,
+  );
+  expect(pending).toMatchObject({
+    data: {
+      depositStatus: {
+        state: "pending",
+        attendanceBlock: "pending_deposit",
+        expiresAt: expect.any(String),
+        cancellationCutoff: expect.any(String),
+      },
+    },
+  });
+  if (pending?.op !== "upsert" || pending.entity !== "appointment")
+    throw new Error("missing booking");
+  expect(Object.keys(pending.data.depositStatus ?? {}).sort()).toEqual([
+    "attendanceBlock",
+    "cancellationCutoff",
+    "expiresAt",
+    "state",
+  ]);
   const details = await call(owner, path);
   expect(details.status).toBe(200);
   expect(details.headers.get("cache-control")).toBe("private, no-store");
@@ -148,6 +172,13 @@ test("private appointment context shows protection and redacts amounts without c
   expect(await receipt.json()).toMatchObject({ id: booking.checkoutId, appointmentId: id });
   expect((await call(professional, receiptPath)).status).toBe(403);
 
+  const restrictedReplica = await pull(t, professional, { since: 0, limit: 200 });
+  expect(
+    restrictedReplica.changes.find((change) => change.entity === "appointment" && change.id === id),
+  ).toMatchObject({
+    data: { depositStatus: { state: "pending", attendanceBlock: "pending_deposit" } },
+  });
+
   const payment = await call(
     owner,
     `/admin/commerce/checkouts/${booking.checkoutId}/payments`,
@@ -161,6 +192,12 @@ test("private appointment context shows protection and redacts amounts without c
   expect(payment.status).toBe(201);
   expect(await (await call(owner, path)).json()).toMatchObject({
     protection: { state: "confirmed", depositCents: 2500 },
+  });
+  const delta = await pull(t, owner, { since: pendingPage.nextCursor, limit: 200 });
+  expect(
+    delta.changes.find((change) => change.entity === "appointment" && change.id === id),
+  ).toMatchObject({
+    data: { depositStatus: { state: "confirmed" } },
   });
 });
 

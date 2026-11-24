@@ -38,6 +38,8 @@ pub enum CoreError {
     AppointmentChanged,
     #[error("the appointment assignment is outside the account calendar")]
     AppointmentScopeDenied,
+    #[error("booking protection blocks attendance")]
+    AttendanceProtected(crate::model::AttendanceProtectionBlock),
     #[error("not found: {0}")]
     NotFound(String),
     #[error("io error: {0}")]

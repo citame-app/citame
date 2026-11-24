@@ -189,10 +189,16 @@ impl Root {
         if self.status.connectivity != Connectivity::Online || details.checkout.is_some() {
             return None;
         }
-        let Some(annotations::Annotations::Ready(context)) = &details.annotations else {
+        if !matches!(
+            details.annotations,
+            Some(annotations::Annotations::Ready(_))
+        ) {
             return None;
-        };
-        let protection = context.protection.as_ref()?;
+        }
+        let appointment = calendar::effective_appointment(&self.svc.store, &details.id)
+            .ok()
+            .flatten();
+        let protection = details.deposit_view(appointment.as_ref())?.private?;
         if protection.receipt_restricted {
             return None;
         }
@@ -586,9 +592,13 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let history = self.overlay.sales_history().is_some();
+        let deposit_receipt = matches!(&self.overlay, Overlay::Details(details)
+            if details.checkout_access.as_ref().is_some_and(|access| access.deposit));
         let body = div().flex().flex_col().gap_3().child(
-            div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if matches!(&self.overlay, Overlay::Details(details) if details.checkout_access.as_ref().is_some_and(|access| access.deposit)) {
+            div()
+                .text_lg()
+                .font_weight(FontWeight::BOLD)
+                .child(self.t(if deposit_receipt {
                     Key::DepositReceipt
                 } else if history
                     || matches!(
@@ -599,10 +609,14 @@ impl Root {
                     Key::SaleCreateReceipt
                 } else {
                     Key::OpenAppointmentCheckout
-                },
-            )),
+                })),
         );
         let body = match review {
+            _ if deposit_receipt && self.status.connectivity != Connectivity::Online => body.child(
+                div()
+                    .debug_selector(|| "deposit-receipt-offline".to_owned())
+                    .child(self.t(Key::DepositReceiptOffline)),
+            ),
             CheckoutReview::Loading(_) => body.child(self.t(Key::CheckoutLoading)),
             CheckoutReview::Failed => body.child(self.t(Key::CheckoutUnavailable)),
             CheckoutReview::Receipt(form) if form.reward_editor.is_some() => {

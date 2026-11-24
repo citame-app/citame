@@ -3,6 +3,7 @@ import { permissionsFor, type SyncLiveView, syncLiveViewSchema } from "@sob/cont
 import {
   appointment,
   appointmentVisitPart,
+  bookingProtection,
   clientProfile,
   type Database,
   dateShift,
@@ -30,6 +31,7 @@ import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { calendarBadges } from "../appointments/context";
 import { loadSnapshots, toAppointment } from "../appointments/service";
+import { appointmentDepositStatus } from "../booking-protection/value";
 import { groupName } from "../clients/groups";
 import { compatibleBillingReasons } from "../commerce/appointment-billing";
 import { giftReplicaScope } from "../gift-cards/service";
@@ -85,10 +87,16 @@ async function loadVisible(
           row: appointment,
           clientName: clientProfile.name,
           itineraryId: appointmentVisitPart.visitId,
+          deposit: {
+            state: bookingProtection.state,
+            expiresAt: bookingProtection.expiresAt,
+            cancellationCutoff: bookingProtection.cancellationCutoff,
+          },
         })
         .from(appointment)
         .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
         .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
+        .leftJoin(bookingProtection, eq(bookingProtection.appointmentId, appointment.id))
         .where(and(inArray(appointment.id, ids), isNull(appointment.deletedAt)));
       const visible = rows.filter(({ row }) => ownCalendar(row.staffId));
       const visibleIds = visible.map(({ row }) => row.id);
@@ -102,11 +110,18 @@ async function loadVisible(
         [...snapshots.values()].flat(),
         { includeBilling: permissions.commerce },
       );
-      for (const { row, clientName, itineraryId } of visible) {
+      for (const { row, clientName, itineraryId, deposit } of visible) {
         const billing = badges.get(row.id);
         const bookedResources = resources.get(row.id);
         put(row.id, {
           ...toAppointment(row, snapshots.get(row.id) ?? []),
+          depositStatus: deposit
+            ? appointmentDepositStatus({
+                state: deposit.state,
+                expiresAt: deposit.expiresAt.toISOString(),
+                cancellationCutoff: deposit.cancellationCutoff.toISOString(),
+              })
+            : null,
           ...(projection.bookingCombinations && permissions.editCalendar && row.combinationStaffIds
             ? {
                 combinationStaffIds: permissions.allCalendars
@@ -477,6 +492,7 @@ export async function pullChanges(
     timeOffScope,
     clientDirectory: permissions.clients,
     bookedResourceIds: true,
+    appointmentDepositStatus: true,
     giftCardsScope: giftReplicaScope(principal),
     ...(query.clientGroups && permissions.clients ? { clientGroups: true as const } : {}),
     viewerRole: principal.role === "owner" ? "owner" : "staff",

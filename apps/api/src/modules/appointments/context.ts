@@ -21,7 +21,7 @@ import { authorizeCalendarQuery, requirePermission, requireRole } from "../../au
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
-import { attendanceProtectionBlock, protectionView } from "../booking-protection/value";
+import { appointmentDepositStatus, protectionView } from "../booking-protection/value";
 import {
   booksyPaymentReviews,
   externallySettledAppointments,
@@ -57,7 +57,6 @@ export async function getAppointmentContext(db: Connection, id: string, principa
           throw error;
         })
       : null;
-  const attendanceBlock = protection ? attendanceProtectionBlock(protection.state) : undefined;
   return {
     appointmentVersion: visit.version,
     canEdit: editCalendar,
@@ -65,10 +64,7 @@ export async function getAppointmentContext(db: Connection, id: string, principa
     ...(protection
       ? {
           protection: {
-            state: protection.state,
-            expiresAt: protection.expiresAt,
-            cancellationCutoff: protection.cancellationCutoff,
-            ...(attendanceBlock ? { attendanceBlock } : {}),
+            ...appointmentDepositStatus(protection),
             ...(receipt?.appointmentId === id
               ? { checkoutId: receipt.id }
               : { receiptRestricted: true as const }),

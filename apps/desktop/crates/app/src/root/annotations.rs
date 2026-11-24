@@ -12,11 +12,11 @@ pub(super) enum Annotations {
 }
 
 impl Annotations {
-    pub(super) fn protection(&self) -> Option<&AppointmentProtection> {
+    pub(super) fn context(&self) -> Option<&AppointmentAnnotations> {
         match self {
-            Self::Loading { previous, .. } => previous.as_ref()?.protection.as_ref(),
-            Self::Ready(context) => context.protection.as_ref(),
-            Self::Editing(draft) => draft.notes.protection.as_ref(),
+            Self::Loading { previous, .. } => previous.as_ref(),
+            Self::Ready(context) => Some(context),
+            Self::Editing(draft) => Some(&draft.notes),
             Self::Unavailable => None,
         }
     }
@@ -39,7 +39,7 @@ impl Details {
         self.deposit_outcome_block = context
             .protection
             .as_ref()
-            .and_then(|deposit| deposit.attendance_block);
+            .and_then(|deposit| deposit.status.attendance_block);
         self.annotations = Some(Annotations::Ready(context));
     }
 }
@@ -355,7 +355,16 @@ impl Root {
                     return;
                 }
                 match result {
-                    Ok(notes) => details.install_annotation_context(notes),
+                    Ok(notes) => {
+                        let newer = notes
+                            .appointment_version
+                            .zip(details.annotations_requested_version)
+                            .is_some_and(|(remote, requested)| remote > requested);
+                        details.install_annotation_context(notes);
+                        if newer {
+                            this.svc.wake(Wake::Manual);
+                        }
+                    }
                     Err(_) => details.annotations = Some(Annotations::Unavailable),
                 }
                 this.refresh_open_annotations(this.time_off_scope != time_off_scope, cx);

@@ -526,6 +526,7 @@ describe("snapshot (since=0)", () => {
       generation: "initial",
       giftCardsScope,
       bookedResourceIds: true,
+      appointmentDepositStatus: true,
       changes: [],
       nextCursor: h,
       hasMore: false,

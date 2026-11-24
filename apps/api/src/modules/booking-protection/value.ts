@@ -35,6 +35,15 @@ export function attendanceProtectionBlock(state: BookingProtection["state"]) {
   if (terminal(state) || state === "completed") return "closed_protection" as const;
 }
 
+export function appointmentDepositStatus({
+  state,
+  expiresAt,
+  cancellationCutoff,
+}: Pick<BookingProtection, "state" | "expiresAt" | "cancellationCutoff">) {
+  const attendanceBlock = attendanceProtectionBlock(state);
+  return { state, expiresAt, cancellationCutoff, ...(attendanceBlock ? { attendanceBlock } : {}) };
+}
+
 async function funds(db: Connection, checkoutId: string) {
   const [r] = await db.execute<{ paid: string; refunded: string; held: string }>(sql`select
     (select coalesce(sum(p.amount_cents),0) from checkout_payment p where p.checkout_id=${checkoutId} and p.status in ('succeeded','reconciliation'))::text as paid,

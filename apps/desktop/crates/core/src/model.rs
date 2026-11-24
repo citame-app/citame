@@ -159,7 +159,7 @@ pub struct AppointmentAnnotations {
     pub business_message: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppointmentProtectionState {
     Pending,
@@ -173,23 +173,30 @@ pub enum AppointmentProtectionState {
     Unknown,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttendanceProtectionBlock {
     PendingDeposit,
     ClosedProtection,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentDepositStatus {
+    pub state: AppointmentProtectionState,
+    pub attendance_block: Option<AttendanceProtectionBlock>,
+    pub expires_at: DateTime<Utc>,
+    pub cancellation_cutoff: DateTime<Utc>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentProtection {
-    pub state: AppointmentProtectionState,
-    pub attendance_block: Option<AttendanceProtectionBlock>,
+    #[serde(flatten)]
+    pub status: AppointmentDepositStatus,
     pub checkout_id: Option<uuid::Uuid>,
     #[serde(default)]
     pub receipt_restricted: bool,
-    pub expires_at: DateTime<Utc>,
-    pub cancellation_cutoff: DateTime<Utc>,
     pub deposit_cents: Option<i64>,
     pub fee_cents: Option<i64>,
     pub refund_due_cents: Option<i64>,
@@ -241,6 +248,8 @@ pub struct Appointment {
     pub client_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deposit_status: Option<AppointmentDepositStatus>,
     pub starts_at: DateTime<Utc>,
     pub ends_at: DateTime<Utc>,
     pub status: AppointmentStatus,
@@ -507,6 +516,8 @@ pub struct PullResponse {
     pub client_groups: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub booked_resource_ids: Option<bool>,
+    #[serde(default)]
+    pub appointment_deposit_status: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,
     #[serde(default)]

@@ -42,5 +42,12 @@ export const bookingProtectionSchema = z.object({
   feeCents: z.number().int().nonnegative(),
   refundDueCents: z.number().int().nonnegative(),
 });
+/** Operational deposit state safe to include in the calendar replica. */
+export const appointmentDepositStatusSchema = bookingProtectionSchema
+  .pick({ state: true, expiresAt: true, cancellationCutoff: true })
+  .extend({
+    attendanceBlock: z.enum(["pending_deposit", "closed_protection"]).optional(),
+  });
+
 export type BookingPolicy = z.infer<typeof bookingPolicySchema>;
 export type BookingProtection = z.infer<typeof bookingProtectionSchema>;
