@@ -132,6 +132,25 @@ const open = (props: Partial<Parameters<typeof CalendarView>[0]> = {}) => {
   return { ...view, onSearchChange };
 };
 
+function RemountingCalendar() {
+  const [key, setKey] = useState(1);
+  return (
+    <>
+      <button type="button" onClick={() => setKey(key + 1)}>
+        Remount
+      </button>
+      <CalendarView
+        key={key}
+        search={{ view: "day", date: "2026-03-09" }}
+        onSearchChange={() => {}}
+        role="owner"
+        ownStaffId={null}
+        now={NOW}
+      />
+    </>
+  );
+}
+
 describe("CalendarView", () => {
   test("booked resources with the same name filter by ID and clear independently", async () => {
     const firstRoom = "0198f5a0-7b1c-7000-8000-000000000301";
@@ -313,24 +332,6 @@ describe("CalendarView", () => {
   });
 
   test("an in-flight move stays visible and locked when the calendar remounts", async () => {
-    function RemountingCalendar() {
-      const [key, setKey] = useState(1);
-      return (
-        <>
-          <button type="button" onClick={() => setKey(key + 1)}>
-            Remount
-          </button>
-          <CalendarView
-            key={key}
-            search={{ view: "day", date: "2026-03-09" }}
-            onSearchChange={() => {}}
-            role="owner"
-            ownStaffId={null}
-            now={NOW}
-          />
-        </>
-      );
-    }
     const response = Promise.withResolvers<void>();
     holdPatch = response.promise;
     const { queryClient } = renderApp(<RemountingCalendar />);
