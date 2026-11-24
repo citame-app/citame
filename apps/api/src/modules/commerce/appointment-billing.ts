@@ -11,6 +11,7 @@ import {
   recordedImportedSettlementSchema,
 } from "@sob/contracts";
 import {
+  activeAppointmentCheckout,
   appointment,
   appointmentContext,
   appointmentService,
@@ -21,7 +22,7 @@ import {
   checkoutRefund,
   type Database,
 } from "@sob/db";
-import { and, asc, eq, inArray, isNull, ne, or } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
@@ -295,7 +296,7 @@ async function assertPriceCanBeReviewed(
   const [receipt] = await db
     .select({ id: checkout.id })
     .from(checkout)
-    .where(and(eq(checkout.appointmentId, booking.id), ne(checkout.status, "void")))
+    .where(and(eq(checkout.appointmentId, booking.id), activeAppointmentCheckout))
     .limit(1);
   if (
     receipt ||
@@ -405,11 +406,11 @@ async function assertNativeCollectionReconciled(
   const [receipt] = await db
     .select({ id: checkout.id, status: checkout.status })
     .from(checkout)
-    .where(and(eq(checkout.appointmentId, id), ne(checkout.status, "void")))
+    .where(and(eq(checkout.appointmentId, id), activeAppointmentCheckout))
     .limit(1);
   if (receipt && (!allowFullyRefunded || receipt.status !== "refunded"))
     throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
-  if (allowFullyRefunded && !(await nativePaymentsResolved(db, id, receipt?.id)))
+  if (!(await nativePaymentsResolved(db, id, receipt?.id)))
     throw new DomainError("invalid_state", "Reconcile the existing Citame checkout first");
   const [nativeDeposit] = await db
     .select({ id: bookingProtection.appointmentId })
@@ -557,9 +558,10 @@ export async function confirmImportedUnpaid(
   });
 }
 
-async function originalPartialPaymentTotal(
+async function reviewPartialPaymentBasis(
   db: Pick<Database, "select">,
   booking: typeof appointment.$inferSelect,
+  allowFullyRefunded: boolean,
 ) {
   const id = booking.id;
   if (booking.status === "cancelled" || (await externallySettledAppointments(db, [id])).size)
@@ -570,7 +572,7 @@ async function originalPartialPaymentTotal(
     .where(and(eq(appointmentContext.appointmentId, id), eq(appointmentContext.source, "booksy")))
     .limit(1);
   if (!source) throw new DomainError("invalid_state", "This appointment has no Booksy origin");
-  await assertNativeCollectionReconciled(db, id);
+  const refundedCheckoutId = await assertNativeCollectionReconciled(db, id, { allowFullyRefunded });
   const lines = await db
     .select()
     .from(appointmentService)
@@ -586,7 +588,7 @@ async function originalPartialPaymentTotal(
   const total = lines.reduce((sum, line) => sum + (line.reviewedPriceCents ?? line.priceCents), 0);
   if (!moneyCentsSchema.safeParse(total).success || total <= 0)
     throw new DomainError("invalid_state", "Expected a positive original appointment price");
-  return total;
+  return { total, refundedCheckoutId };
 }
 
 export async function previewImportedPartialPayment(
@@ -601,12 +603,10 @@ export async function previewImportedPartialPayment(
       if (!booking || booking.deletedAt)
         throw new DomainError("not_found", "Appointment not found");
       const review = (await importedPartialPaymentReviews(tx, [id])).get(id);
-      return review?.current
-        ? { appointmentVersion: booking.version, externalBalance: review.balance }
-        : {
-            appointmentVersion: booking.version,
-            originalTotalCents: await originalPartialPaymentTotal(tx, booking),
-          };
+      if (review?.current)
+        return { appointmentVersion: booking.version, externalBalance: review.balance };
+      const { total } = await reviewPartialPaymentBasis(tx, booking, Boolean(review));
+      return { appointmentVersion: booking.version, originalTotalCents: total };
     },
     { isolationLevel: "repeatable read", accessMode: "read only" },
   );
@@ -621,6 +621,12 @@ export async function confirmImportedPartialPayment(
 ) {
   requireRole(principal, "owner");
   return db.transaction(async (tx) => {
+    // Payment and refund operations lock the receipt before scheduling.
+    const [locked] = await tx
+      .select({ id: checkout.id })
+      .from(checkout)
+      .where(and(eq(checkout.appointmentId, id), activeAppointmentCheckout))
+      .for("update");
     await lockScheduling(tx);
     const [booking] = await tx
       .select()
@@ -643,7 +649,11 @@ export async function confirmImportedPartialPayment(
         "version_conflict",
         "Reload the current appointment before reconciling",
       );
-    const total = await originalPartialPaymentTotal(tx, booking);
+    const { total, refundedCheckoutId } = await reviewPartialPaymentBasis(
+      tx,
+      booking,
+      Boolean(previous),
+    );
     if (input.amountCents <= 0 || input.amountCents >= total)
       throw new DomainError(
         "validation_error",
@@ -654,6 +664,14 @@ export async function confirmImportedPartialPayment(
       dueInCitameCents: total - input.amountCents,
     };
     const evidence = await booksyPaymentEvidence(tx, [id]);
+    if (refundedCheckoutId) {
+      if (refundedCheckoutId !== locked?.id)
+        throw new DomainError("version_conflict", "Reload the checkout before reconciling");
+      await tx
+        .update(checkout)
+        .set({ supersededAt: now })
+        .where(eq(checkout.id, refundedCheckoutId));
+    }
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: importedPartialAudit,
@@ -664,6 +682,7 @@ export async function confirmImportedPartialPayment(
         reference: input.reference,
         snapshot: JSON.stringify(evidence.get(id) ?? []),
         revision: (previous?.revision ?? 0) + 1,
+        ...(refundedCheckoutId ? { refundedCheckoutId } : {}),
       },
     });
     await tx

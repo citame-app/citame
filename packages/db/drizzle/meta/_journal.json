@@ -904,6 +904,13 @@
       "when": 1795518956724,
       "tag": "0128_campaign_email_layout",
       "breakpoints": true
+    },
+    {
+      "idx": 129,
+      "version": "7",
+      "when": 1795547300000,
+      "tag": "0129_superseded_checkout",
+      "breakpoints": true
     }
   ]
 }

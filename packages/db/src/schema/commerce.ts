@@ -68,6 +68,7 @@ export const checkout = pgTable(
     idempotencyKey: text().notNull(),
     requestHash: text().notNull(),
     fulfilledAt: timestamptz(),
+    supersededAt: timestamptz(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -75,18 +76,26 @@ export const checkout = pgTable(
     unique("checkout_actor_idempotency_unique").on(t.createdBy, t.idempotencyKey),
     uniqueIndex("checkout_active_appointment_unique")
       .on(t.appointmentId)
-      .where(sql`${t.status} <> 'void'`),
+      .where(sql`${t.status} <> 'void' and ${t.supersededAt} is null`),
+    index("checkout_appointment_history_idx")
+      .on(t.appointmentId)
+      .where(sql`${t.appointmentId} is not null`),
     index("checkout_client_idx").on(t.clientId),
     index("checkout_appointment_settlement_idx")
       .on(t.fulfilledAt, t.id)
       .where(sql`${t.appointmentId} is not null and ${t.fulfilledAt} is not null`),
     index("checkout_created_idx").on(t.createdAt),
     check(
+      "checkout_superseded_refund",
+      sql`${t.supersededAt} is null or (${t.appointmentId} is not null and ${t.status} = 'refunded')`,
+    ),
+    check(
       "checkout_money_valid",
       sql`${t.currency} = 'EUR' and ${t.subtotalCents} >= 0 and ${t.discountCents} between 0 and ${t.subtotalCents} and ${t.tipCents} >= 0 and ${t.taxCents} >= 0 and ${t.totalCents} = ${t.subtotalCents} - ${t.discountCents} + ${t.tipCents} and ${t.totalCents} <= 999999999`,
     ),
   ],
 );
+export const activeAppointmentCheckout = sql`${checkout.status} <> 'void' and ${checkout.supersededAt} is null`;
 export const checkoutLine = pgTable(
   "checkout_line",
   {

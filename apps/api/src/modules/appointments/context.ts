@@ -8,6 +8,7 @@ import type {
 } from "@sob/contracts";
 import { permissionsFor } from "@sob/contracts";
 import {
+  activeAppointmentCheckout,
   appointment,
   appointmentContext,
   appointmentService,
@@ -217,6 +218,7 @@ export async function calendarBadges(
           .where(
             and(
               inArray(checkout.appointmentId, ids),
+              activeAppointmentCheckout,
               inArray(checkout.status, ["paid", "partially_refunded", "refunded"]),
             ),
           )

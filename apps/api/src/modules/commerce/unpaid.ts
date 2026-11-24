@@ -1,5 +1,12 @@
 import { type CalendarQuery, permissionsFor, type UnpaidAppointments } from "@sob/contracts";
-import { checkout, checkoutLine, checkoutPayment, checkoutRefund, type Database } from "@sob/db";
+import {
+  activeAppointmentCheckout,
+  checkout,
+  checkoutLine,
+  checkoutPayment,
+  checkoutRefund,
+  type Database,
+} from "@sob/db";
 import { and, getTableName, inArray, sql } from "drizzle-orm";
 import { authorizeCalendarQuery } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
@@ -66,7 +73,7 @@ export async function unpaidAppointments(
               )`,
             })
             .from(checkout)
-            .where(and(inArray(checkout.appointmentId, ids), sql`${checkout.status} <> 'void'`))
+            .where(and(inArray(checkout.appointmentId, ids), activeAppointmentCheckout))
         : [];
       const byAppointment = new Map(receipts.map((receipt) => [receipt.appointmentId, receipt]));
       const billingReview = candidates.flatMap((row) =>
@@ -90,7 +97,7 @@ export async function unpaidAppointments(
           if (!receipt) return [row];
           const balance = receipt.totalCents - receipt.recordedCents;
           if (!receipt.pricePending && receipt.confirmedCents >= receipt.totalCents) return [];
-          // Refunded or closed receipts do not open a new collectible balance.
+          // Only an active open receipt can supply a collectible receipt balance.
           if (
             !receipt.pricePending &&
             !receipt.paymentInProgress &&

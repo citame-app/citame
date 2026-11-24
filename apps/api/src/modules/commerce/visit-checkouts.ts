@@ -7,6 +7,7 @@ import {
   type VisitPaymentInput,
 } from "@sob/contracts";
 import {
+  activeAppointmentCheckout,
   appointment,
   appointmentVisitPart,
   checkout,
@@ -15,7 +16,7 @@ import {
   staffProfile,
   visitPayment,
 } from "@sob/db";
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { canReviewVisitCheckouts } from "../../auth/policy";
 import { loadPrincipal, type Principal } from "../../auth/principal";
@@ -247,7 +248,7 @@ export async function collectVisitPayment(
     const locked = await tx
       .select()
       .from(checkout)
-      .where(and(inArray(checkout.appointmentId, initialIds), ne(checkout.status, "void")))
+      .where(and(inArray(checkout.appointmentId, initialIds), activeAppointmentCheckout))
       .orderBy(asc(checkout.id))
       .for("update");
     await lockScheduling(tx);

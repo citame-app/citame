@@ -7,6 +7,7 @@ import {
   stampProgramTermsSchema,
 } from "@sob/contracts";
 import {
+  activeAppointmentCheckout,
   appointmentService,
   checkout,
   checkoutLine,
@@ -648,7 +649,7 @@ export async function awardAppointmentStamp(
           and(
             eq(checkout.appointmentId, visit.id),
             eq(checkout.currency, "EUR"),
-            sql`${checkout.status} <> 'void'`,
+            activeAppointmentCheckout,
           ),
         )
         .orderBy(desc(checkout.createdAt), desc(checkout.id))

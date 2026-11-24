@@ -472,8 +472,8 @@ test("the owner can reconcile a full Booksy settlement without a receipt or a se
   expect(audit).toHaveLength(1);
 });
 
-test.each(["current", "legacy"] as const)(
-  "changed Booksy payment evidence freezes a %s reviewed balance",
+test.each(["current", "legacy", "refunded"] as const)(
+  "changed Booksy payment evidence safely reopens a %s payment review",
   async (kind) => {
     await t.db.insert(appointmentContext).values({
       appointmentId,
@@ -583,8 +583,15 @@ test.each(["current", "legacy"] as const)(
       reference: "Latest source receipt",
     };
     expect((await call(owner, path, "PUT", corrected)).status).toBe(200);
-    const sale = await checkout();
+    const originalCheckoutKey = crypto.randomUUID();
+    const sale = await checkout(owner, { idempotencyKey: originalCheckoutKey });
     expect(sale.totalCents).toBe(2000);
+    let paymentId: string | undefined;
+    if (kind === "refunded") {
+      const payment = await pay(sale.id, "external_card", 2000);
+      expect(payment.status).toBe(201);
+      paymentId = ((await payment.json()) as { payment: { id: string } }).payment.id;
+    }
     const correction = {
       rows: [
         {
@@ -635,6 +642,78 @@ test.each(["current", "legacy"] as const)(
     expect((await call(owner, path, "PUT", { ...corrected, appointmentVersion: 5 })).status).toBe(
       409,
     );
+    if (paymentId) {
+      const refund = (amountCents: number) =>
+        call(owner, `/admin/commerce/payments/${paymentId}/refunds`, "POST", {
+          amountCents,
+          reason: "Return the previous Citame balance",
+          idempotencyKey: crypto.randomUUID(),
+        });
+      const command = {
+        appointmentVersion: 5,
+        amountCents: 9000,
+        reference: "Verified revised source receipt",
+      };
+      await expect(refund(500)).resolves.toHaveProperty("status", 201);
+      expect((await call(owner, path, "PUT", command)).status).toBe(409);
+      await expect(refund(1500)).resolves.toHaveProperty("status", 201);
+      const oldReceipt = await readReceipt();
+      expect(oldReceipt).toMatchObject({
+        status: "refunded",
+        paidCents: 2000,
+        refundedCents: 2000,
+      });
+      expect(await (await call(owner, path)).json()).toEqual({
+        appointmentVersion: 5,
+        originalTotalCents: 10000,
+      });
+      expect((await call(staff, path, "PUT", command)).status).toBe(403);
+      expect((await call(owner, path, "PUT", { ...command, amountCents: 10000 })).status).toBe(400);
+      expect((await t.db.select().from(checkoutTable))[0]?.supersededAt).toBeNull();
+      const confirmations = await Promise.all(
+        [command, command].map((body) => call(owner, path, "PUT", body)),
+      );
+      const externalBalance = { paidInBooksyCents: 9000, dueInCitameCents: 1000 };
+      for (const response of confirmations) {
+        expect(response.status, await response.clone().text()).toBe(200);
+        expect(await response.json()).toEqual({ appointmentVersion: 6, externalBalance });
+      }
+      expect(await getDesk()).toMatchObject({
+        appointments: [{ id: appointmentId, externalBalance }],
+      });
+      expect((await checkout(owner, { idempotencyKey: originalCheckoutKey })).id).toBe(sale.id);
+      const replacements = await Promise.all([checkout(), checkout()]);
+      const [replacement] = replacements;
+      expect(replacement).toMatchObject({ externalBalance, totalCents: 1000, balanceCents: 1000 });
+      expect(replacements[1]?.id).toBe(replacement?.id);
+      expect(replacement?.id).not.toBe(sale.id);
+      if (!replacement) throw new Error("Missing balance checkout");
+      expect(await getDesk()).toMatchObject({
+        appointments: [
+          { id: appointmentId, receiptBalance: { id: replacement.id, balanceCents: 1000 } },
+        ],
+      });
+      expect((await pay(sale.id, "external_card", 1000)).status).toBe(409);
+      expect((await pay(replacement.id, "external_card", 1001)).status).toBe(409);
+      expect((await pay(replacement.id, "external_card", 1000)).status).toBe(201);
+      expect(await getDesk()).toEqual({ appointments: [] });
+      expect(await readReceipt()).toEqual(oldReceipt);
+      const recorded = await t.db.select().from(checkoutTable);
+      expect(recorded).toHaveLength(2);
+      expect(recorded.find(({ id }) => id === sale.id)?.supersededAt).toBeInstanceOf(Date);
+      expect(recorded.find(({ id }) => id === replacement.id)?.supersededAt).toBeNull();
+      const replica = syncPullResponseSchema.parse(
+        await (
+          await call(owner, `/sync/pull?since=${compatibility.nextCursor}&booksyBalanceReview=1`)
+        ).json(),
+      );
+      expect(replica.changes.find(({ id }) => id === appointmentId)?.data).toMatchObject({
+        version: 6,
+        externalBalance,
+        serviceBadges: [{ paid: true, billingSource: "citame" }],
+      });
+      return;
+    }
     expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
     expect((await call(owner, `/admin/commerce/checkouts/${sale.id}/void`, "POST")).status).toBe(
       200,

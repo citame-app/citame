@@ -11,6 +11,7 @@ import {
   type StartPaymentInput,
 } from "@sob/contracts";
 import {
+  activeAppointmentCheckout,
   appointment,
   appointmentService,
   bookingProtection,
@@ -390,7 +391,7 @@ export async function refreshAppointmentCheckout(tx: Tx, appointmentId: string, 
   const rows = await tx
     .select()
     .from(checkout)
-    .where(and(eq(checkout.appointmentId, appointmentId), sql`${checkout.status} <> 'void'`));
+    .where(and(eq(checkout.appointmentId, appointmentId), activeAppointmentCheckout));
   for (const row of rows) await refreshStatus(tx, row.id, now);
 }
 export async function voidCheckout(db: Database, id: string, principal: Principal) {
@@ -447,7 +448,7 @@ async function linkedAppointmentCheckout(db: Connection, appointmentId: string) 
     .where(
       and(
         eq(checkout.appointmentId, appointmentId),
-        or(sql`${checkout.status} <> 'void'`, isNotNull(bookingProtection.checkoutId)),
+        or(activeAppointmentCheckout, isNotNull(bookingProtection.checkoutId)),
       ),
     )
     .orderBy(desc(sql`${bookingProtection.checkoutId} IS NOT NULL`))
