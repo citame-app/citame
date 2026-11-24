@@ -4,9 +4,17 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+Desktop keeps appointment creation, moves, cancellations and attendance changes inside the account's writable calendars. A read-only agenda still opens appointment details.
+
 Reviewed client identity links now join duplicate salon profiles while preserving original history, balances, expiry dates and permissions. The EN/ES review supports uncertain-request recovery; search, CSV review, private history and offline pickers recognize surviving identities. [Operation and limits](docs/client-merging.md).
 
 ### Added
+
+- Desktop appointment details show the server-confirmed deposit state and payment deadlines. Staff with commerce access can also see the deposit amount, retained fee and refund due, and open the existing receipt.
+
+- Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
+
+- Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
 
 - Business profiles retain multiline descriptions up to 2,000 characters in Web and Desktop.
 

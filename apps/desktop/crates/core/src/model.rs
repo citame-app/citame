@@ -153,9 +153,46 @@ pub struct AppointmentAnnotations {
     pub appointment_version: Option<i64>,
     pub can_edit: Option<bool>,
     pub default_requested: Option<bool>,
+    pub protection: Option<AppointmentProtection>,
     pub rows: Vec<ServiceAnnotations>,
     pub customer_comment: Option<String>,
     pub business_message: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppointmentProtectionState {
+    Pending,
+    Confirmed,
+    Waived,
+    Completed,
+    Cancelled,
+    Expired,
+    NoShow,
+    #[serde(other)]
+    Unknown,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttendanceProtectionBlock {
+    PendingDeposit,
+    ClosedProtection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppointmentProtection {
+    pub state: AppointmentProtectionState,
+    pub attendance_block: Option<AttendanceProtectionBlock>,
+    pub checkout_id: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub receipt_restricted: bool,
+    pub expires_at: DateTime<Utc>,
+    pub cancellation_cutoff: DateTime<Utc>,
+    pub deposit_cents: Option<i64>,
+    pub fee_cents: Option<i64>,
+    pub refund_due_cents: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -472,6 +509,8 @@ pub struct PullResponse {
     pub booked_resource_ids: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,
+    #[serde(default)]
+    pub viewer_edit_calendar: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

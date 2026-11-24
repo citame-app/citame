@@ -72,6 +72,21 @@ impl SlotDrag {
 }
 
 impl Root {
+    pub(super) fn calendar_slot_step(&self) -> i64 {
+        self.svc
+            .store
+            .salon_settings()
+            .ok()
+            .flatten()
+            .map_or(15, |settings| {
+                settings.slot_granularity_minutes.clamp(1, 60)
+            })
+    }
+
+    fn can_select_calendar_slot(&self, staff: &Staff) -> bool {
+        self.can_edit_staff_calendar(&staff.id) || self.can_manage_block(staff)
+    }
+
     pub(super) fn start_slot_drag(
         &mut self,
         column: usize,
@@ -88,6 +103,9 @@ impl Root {
         let Some((date, staff_column)) = columns.get(column) else {
             return;
         };
+        if !self.can_select_calendar_slot(&staff_column.staff) {
+            return;
+        }
         let staff_id = staff_column.staff.id.clone();
         let height = f32::from(bounds.size.height);
         if height <= 0. {
@@ -123,15 +141,7 @@ impl Root {
             first: i64::from(first) * 60,
             last: i64::from(last) * 60,
             minutes_per_pixel,
-            step: self
-                .svc
-                .store
-                .salon_settings()
-                .ok()
-                .flatten()
-                .map_or(15, |settings| {
-                    settings.slot_granularity_minutes.clamp(1, 60)
-                }),
+            step: self.calendar_slot_step(),
             origin_y: bounds.top(),
             original_scroll_y: self.vertical_scroll.handle.offset().y,
             anchor_y: event.position.y,
@@ -158,6 +168,10 @@ impl Root {
             drag.pointer = event.position;
             if matches!(self.overlay, Overlay::None)
                 && let Some(slot) = drag.selection(self.vertical_scroll.handle.offset().y)
+                && self
+                    .staff
+                    .iter()
+                    .any(|staff| staff.id == slot.staff_id && self.can_select_calendar_slot(staff))
             {
                 self.overlay = Overlay::Slot(slot);
             }
@@ -276,25 +290,28 @@ impl Root {
                                 .debug_selector(|| "calendar-slot-block".to_string()),
                             )
                         })
-                        .when(valid, |row| {
-                            row.child(
-                                self.button(
-                                    "slot-book",
-                                    self.t(Key::NewAppointment),
-                                    Kind::Primary,
-                                    cx.listener(move |this, _, window, cx| {
-                                        this.open_new(window, cx);
-                                        if let Overlay::New(form) = &mut this.overlay {
-                                            form.date = booking.date;
-                                            form.staff_id = Some(booking.staff_id.clone());
-                                            form.minutes = booking.start;
-                                            form.selected_end = Some(booking.end);
-                                        }
-                                    }),
+                        .when(
+                            valid && self.can_edit_staff_calendar(&slot.staff_id),
+                            |row| {
+                                row.child(
+                                    self.button(
+                                        "slot-book",
+                                        self.t(Key::NewAppointment),
+                                        Kind::Primary,
+                                        cx.listener(move |this, _, window, cx| {
+                                            this.open_new(window, cx);
+                                            if let Overlay::New(form) = &mut this.overlay {
+                                                form.date = booking.date;
+                                                form.staff_id = Some(booking.staff_id.clone());
+                                                form.minutes = booking.start;
+                                                form.selected_end = Some(booking.end);
+                                            }
+                                        }),
+                                    )
+                                    .debug_selector(|| "calendar-slot-book".to_string()),
                                 )
-                                .debug_selector(|| "calendar-slot-book".to_string()),
-                            )
-                        }),
+                            },
+                        ),
                 ),
         )
     }

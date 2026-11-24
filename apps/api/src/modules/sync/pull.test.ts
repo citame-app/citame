@@ -465,6 +465,7 @@ describe("authorization", () => {
       changes: [],
       clientDirectory: true,
       calendarScope: "all",
+      viewerEditCalendar: true,
       viewerRole: "staff",
     });
     await t.db
@@ -475,6 +476,7 @@ describe("authorization", () => {
       changes: [],
       clientDirectory: false,
       calendarScope: f.anaId,
+      viewerEditCalendar: false,
     });
   });
 
@@ -533,6 +535,7 @@ describe("snapshot (since=0)", () => {
       calendarScope: "all",
       viewerRole: "owner",
       viewerEditCatalogue: true,
+      viewerEditCalendar: true,
     });
   });
 

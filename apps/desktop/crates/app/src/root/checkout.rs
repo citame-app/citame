@@ -15,6 +15,12 @@ mod refunds;
 mod rewards;
 mod stock_return;
 
+enum DetailCheckoutSource {
+    Start(Option<ExternalBalance>),
+    Existing(Uuid),
+    Deposit(Uuid),
+}
+
 pub(super) enum CheckoutReview {
     Loading(Arc<()>),
     Failed,
@@ -169,7 +175,48 @@ impl Root {
         if !self.can_open_appointment_checkout(&appointment) {
             return;
         }
-        let balance = appointment.external_balance;
+        let source = receipt.map_or(
+            DetailCheckoutSource::Start(appointment.external_balance),
+            DetailCheckoutSource::Existing,
+        );
+        self.load_details_checkout(id, source, cx);
+    }
+
+    pub(super) fn ready_deposit_receipt(&self) -> Option<Uuid> {
+        let Overlay::Details(details) = &self.overlay else {
+            return None;
+        };
+        if self.status.connectivity != Connectivity::Online || details.checkout.is_some() {
+            return None;
+        }
+        let Some(annotations::Annotations::Ready(context)) = &details.annotations else {
+            return None;
+        };
+        let protection = context.protection.as_ref()?;
+        if protection.receipt_restricted {
+            return None;
+        }
+        protection.checkout_id
+    }
+
+    pub(super) fn open_deposit_receipt(&mut self, cx: &mut Context<Self>) {
+        if let Some(receipt) = self.ready_deposit_receipt()
+            && let Overlay::Details(details) = &self.overlay
+        {
+            self.load_details_checkout(
+                details.id.clone(),
+                DetailCheckoutSource::Deposit(receipt),
+                cx,
+            );
+        }
+    }
+
+    fn load_details_checkout(
+        &mut self,
+        id: String,
+        source: DetailCheckoutSource,
+        cx: &mut Context<Self>,
+    ) {
         let Some(transport) = self.svc.transport() else {
             return;
         };
@@ -182,19 +229,24 @@ impl Root {
         let session = self.svc.session.clone();
         if let Overlay::Details(details) = &mut self.overlay {
             details.checkout = Some(CheckoutReview::Loading(token.clone()));
+            details.checkout_access = Some(DetailsCheckoutAccess {
+                scope: self.time_off_scope.clone(),
+                deposit: matches!(source, DetailCheckoutSource::Deposit(_)),
+            });
         }
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx.background_executor()
                 .spawn(async move {
-                    if let Some(receipt_id) = receipt {
-                        let receipt = transport.open_saved_checkout(receipt_id)?;
-                        if receipt.appointment_id.as_deref() != Some(id.as_str()) {
-                            return Err(sob_core::sync::TransportError::Server("Unexpected appointment on receipt".into()));
+                    match source {
+                        DetailCheckoutSource::Existing(receipt_id) | DetailCheckoutSource::Deposit(receipt_id) => {
+                            let receipt = transport.open_saved_checkout(receipt_id)?;
+                            if receipt.appointment_id.as_deref() != Some(id.as_str()) {
+                                return Err(sob_core::sync::TransportError::Server("Unexpected appointment on receipt".into()));
+                            }
+                            Ok(receipt)
                         }
-                        Ok(receipt)
-                    } else {
-                        transport.open_appointment_checkout(&id, balance)
+                        DetailCheckoutSource::Start(balance) => transport.open_appointment_checkout(&id, balance),
                     }
                 })
                 .await;
@@ -536,7 +588,9 @@ impl Root {
         let history = self.overlay.sales_history().is_some();
         let body = div().flex().flex_col().gap_3().child(
             div().text_lg().font_weight(FontWeight::BOLD).child(self.t(
-                if history
+                if matches!(&self.overlay, Overlay::Details(details) if details.checkout_access.as_ref().is_some_and(|access| access.deposit)) {
+                    Key::DepositReceipt
+                } else if history
                     || matches!(
                         self.overlay,
                         Overlay::WalkInReceipt(_) | Overlay::GiftCards(_)

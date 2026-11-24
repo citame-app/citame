@@ -70,6 +70,7 @@ impl Transport for Scripted {
             client_groups: None,
             booked_resource_ids: None,
             calendar_scope: None,
+            viewer_edit_calendar: None,
             viewer_role: None,
             viewer_edit_catalogue: None,
             peak_prices: None,

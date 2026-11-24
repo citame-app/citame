@@ -416,9 +416,13 @@ impl Root {
         else {
             return;
         };
-        if packet.mark_local_dispatch(&mut self.svc.store).is_err() {
+        if let Err(error) = packet.mark_local_dispatch(&mut self.svc.store) {
             if let Some(review) = self.visit_desk() {
-                review.error = Some(Key::BookingIntakeRestore);
+                review.error = Some(if matches!(error, CoreError::AppointmentScopeDenied) {
+                    Key::BookingIntakeAccessChanged
+                } else {
+                    Key::BookingIntakeRestore
+                });
             }
             cx.notify();
             return;
@@ -522,6 +526,11 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let online = self.status.connectivity == Connectivity::Online;
+        let can_edit = desk
+            .terms
+            .parts()
+            .iter()
+            .all(|part| self.can_edit_staff_calendar(part.staff_id()));
         let mut body = div()
             .id("visit-review-body")
             .min_h_0()
@@ -713,6 +722,7 @@ impl Root {
             )
             .when(
                 online
+                    && can_edit
                     && !desk.busy
                     && !desk.saved_changed
                     && (!desk.stages.is_empty() || desk.submitted),
@@ -752,14 +762,18 @@ impl Root {
                         .child(self.t(Key::VisitReview)),
                 )
                 .child(body)
-                .when_some(desk.error, |panel, error| {
-                    panel.child(
-                        div()
-                            .text_sm()
-                            .text_color(theme::conflict_fg())
-                            .child(self.t(error)),
-                    )
-                })
+                .when_some(
+                    desk.error
+                        .or((!can_edit).then_some(Key::BookingIntakeAccessChanged)),
+                    |panel, error| {
+                        panel.child(
+                            div()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(self.t(error)),
+                        )
+                    },
+                )
                 .when(!online, |panel| panel.child(self.t(Key::VisitOffline)))
                 .child(actions),
             (viewport.width - px(24.)).clamp(px(0.), px(660.)),

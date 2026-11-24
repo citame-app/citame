@@ -1192,6 +1192,106 @@ fn moving_an_appointment_offline_keeps_its_duration_and_bumps_the_local_version(
 }
 
 #[test]
+fn a_personal_calendar_rejects_reassigning_an_appointment_outside_its_scope() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", ANA).unwrap();
+
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, None, Some(BEA)),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    let start = at("2026-03-09T17:00:00Z");
+    store.set_meta("time_off_scope", "none").unwrap();
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, Some(start), None),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, Some(start), None),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    reschedule_appointment(&mut store, EXISTING, Some(start), None).unwrap();
+    assert_eq!(
+        effective_appointment(&store, EXISTING)
+            .unwrap()
+            .unwrap()
+            .starts_at,
+        start
+    );
+}
+
+#[test]
+fn appointment_creation_cancellation_and_outcomes_respect_current_calendar_access() {
+    use crate::error::CoreError;
+
+    let mut store = seeded();
+    let now = at("2026-03-09T16:00:00Z");
+    let mut booking = new_appt("2026-03-09T18:00:00Z");
+    booking.staff_id = ANA.into();
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+
+    assert!(matches!(
+        create_appointment(&mut store, booking.clone()),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        set_appointment_status(&mut store, EXISTING, AppointmentStatus::Completed, now),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    store.set_meta("calendar_scope", BEA).unwrap();
+    assert!(matches!(
+        create_appointment(&mut store, booking),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+}
+
+#[test]
+fn open_booking_review_rechecks_access_before_dispatch() {
+    use crate::booking::{BookingAttempt, BookingTerms};
+    use crate::error::CoreError;
+    use crate::intake::IntakeSelection;
+
+    let mut store = seeded();
+    let terms = BookingTerms::prepare(&store, new_appt("2026-03-09T18:00:00Z"), None).unwrap();
+    let reviewed = terms.reviewed(
+        "intake".into(),
+        IntakeSelection {
+            saved: Default::default(),
+            inline: Default::default(),
+        },
+    );
+    let packet = BookingAttempt::Single(reviewed);
+
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+    assert!(matches!(
+        packet.check_before_dispatch(&mut store),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    packet.check_before_dispatch(&mut store).unwrap();
+}
+
+#[test]
 fn queued_edits_of_one_appointment_carry_incrementing_versions() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
@@ -1275,6 +1375,38 @@ fn recording_an_outcome_offline_updates_the_calendar_and_preserves_the_version()
         assert_eq!(jobs[0].payload["status"], json!(status.as_str()));
         assert!(column(&day_view(&store, day("2026-03-09")).unwrap(), "Ana").items[0].pending);
     }
+}
+
+#[test]
+fn all_calendar_editors_can_correct_attendance_in_both_directions() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", "all").unwrap();
+    let now = at("2026-03-10T12:00:00Z");
+
+    for status in [
+        AppointmentStatus::NoShow,
+        AppointmentStatus::Completed,
+        AppointmentStatus::NoShow,
+    ] {
+        set_appointment_status(&mut store, EXISTING, status, now).unwrap();
+        assert_eq!(
+            effective_appointment(&store, EXISTING)
+                .unwrap()
+                .unwrap()
+                .status,
+            status
+        );
+    }
+    let outbox = store.outbox(10).unwrap();
+    assert_eq!(
+        outbox
+            .iter()
+            .map(|entry| &entry.payload["version"])
+            .collect::<Vec<_>>(),
+        [&json!(3), &json!(4), &json!(5)]
+    );
+    assert!(cancel_appointment(&mut store, EXISTING).is_err());
+    assert!(set_appointment_status(&mut store, EXISTING, AppointmentStatus::NoShow, now).is_err());
 }
 
 #[test]

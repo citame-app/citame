@@ -21,11 +21,13 @@ import { authorizeCalendarQuery, requirePermission, requireRole } from "../../au
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
+import { attendanceProtectionBlock, protectionView } from "../booking-protection/value";
 import {
   booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPayments,
 } from "../commerce/appointment-billing";
+import { saleRow } from "../commerce/service";
 
 type Connection = Database | Tx;
 const conflict = () =>
@@ -44,14 +46,42 @@ async function authorizedAppointment(db: Connection, id: string, principal: Prin
 export async function getAppointmentContext(db: Connection, id: string, principal: Principal) {
   const visit = await authorizedAppointment(db, id, principal);
   const { commerce, editCalendar } = permissionsFor(principal.role, principal.accessPreset);
-  const rows = await db
-    .select()
-    .from(appointmentContext)
-    .where(eq(appointmentContext.appointmentId, id));
+  const [rows, protection] = await Promise.all([
+    db.select().from(appointmentContext).where(eq(appointmentContext.appointmentId, id)),
+    protectionView(db, id),
+  ]);
+  const receipt =
+    commerce && protection
+      ? await saleRow(db, protection.checkoutId, principal).catch((error: unknown) => {
+          if (error instanceof DomainError && error.code === "not_found") return null;
+          throw error;
+        })
+      : null;
+  const attendanceBlock = protection ? attendanceProtectionBlock(protection.state) : undefined;
   return {
     appointmentVersion: visit.version,
     canEdit: editCalendar,
     defaultRequested: visit.requestedStaffId !== null,
+    ...(protection
+      ? {
+          protection: {
+            state: protection.state,
+            expiresAt: protection.expiresAt,
+            cancellationCutoff: protection.cancellationCutoff,
+            ...(attendanceBlock ? { attendanceBlock } : {}),
+            ...(receipt?.appointmentId === id
+              ? { checkoutId: receipt.id }
+              : { receiptRestricted: true as const }),
+            ...(commerce
+              ? {
+                  depositCents: protection.depositCents,
+                  feeCents: protection.feeCents,
+                  refundDueCents: protection.refundDueCents,
+                }
+              : {}),
+          },
+        }
+      : {}),
     ...(visit.sourceBusinessMessage ? { businessMessage: visit.sourceBusinessMessage } : {}),
     customerComment: visit.customerComment,
     rows: rows

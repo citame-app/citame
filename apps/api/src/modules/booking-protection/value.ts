@@ -30,6 +30,11 @@ import { getBookingPolicy } from "./policy";
 type Connection = Database | Tx;
 type Booking = typeof appointment.$inferSelect;
 const terminal = (state: string) => ["cancelled", "expired", "no_show"].includes(state);
+export function attendanceProtectionBlock(state: BookingProtection["state"]) {
+  if (state === "pending") return "pending_deposit" as const;
+  if (terminal(state) || state === "completed") return "closed_protection" as const;
+}
+
 async function funds(db: Connection, checkoutId: string) {
   const [r] = await db.execute<{ paid: string; refunded: string; held: string }>(sql`select
     (select coalesce(sum(p.amount_cents),0) from checkout_payment p where p.checkout_id=${checkoutId} and p.status in ('succeeded','reconciliation'))::text as paid,
@@ -495,14 +500,15 @@ export async function updateProtection(
     .from(bookingProtection)
     .where(eq(bookingProtection.appointmentId, after.id));
   if (!p) return;
-  if ((terminal(p.state) || p.state === "completed") && after.status !== before.status)
+  const attendanceBlock = attendanceProtectionBlock(p.state);
+  if (attendanceBlock === "closed_protection" && after.status !== before.status)
     throw new DomainError(
       "invalid_state",
       "A closed protected booking cannot be reopened; create a new appointment",
     );
   if (p.state === "pending" && p.expiresAt <= now && after.status !== "cancelled")
     throw new DomainError("invalid_state", "The deposit hold has expired");
-  if (["completed", "no_show"].includes(after.status) && p.state === "pending")
+  if (["completed", "no_show"].includes(after.status) && attendanceBlock === "pending_deposit")
     throw new DomainError(
       "invalid_state",
       "Confirm the required deposit or cancel the unpaid hold",

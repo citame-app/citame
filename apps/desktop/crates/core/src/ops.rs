@@ -419,11 +419,27 @@ pub(crate) struct ReviewedBookingServices {
     fixed_staff: Option<Vec<String>>,
 }
 
+pub fn calendar_scope_permits_edit(scope: Option<&str>, staff_id: Option<&str>) -> bool {
+    scope != Some("none")
+        && staff_id.is_none_or(|id| scope.is_none() || booking_calendar_allows(scope, id))
+}
+
+pub(crate) fn require_calendar_write(store: &Store, staff_id: &str) -> Result<()> {
+    let scope = store.get_meta("calendar_scope")?;
+    if !store.calendar_edits_allowed()?
+        || !calendar_scope_permits_edit(scope.as_deref(), Some(staff_id))
+    {
+        return Err(CoreError::AppointmentScopeDenied);
+    }
+    Ok(())
+}
+
 pub(crate) fn reviewed_service_terms(
     store: &Store,
     new: &NewAppointment,
     combination: Option<&FixedCombinationReview>,
 ) -> Result<ReviewedBookingServices> {
+    require_calendar_write(store, &new.staff_id)?;
     if new.service_ids.is_empty() {
         return Err(CoreError::Invalid("pick at least one service".into()));
     }
@@ -456,7 +472,8 @@ pub(crate) fn reviewed_service_terms(
         {
             return Err(CoreError::CatalogueEditPending);
         }
-        if !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), &new.staff_id) {
+        // The cached combination also requires a confirmed replica scope.
+        if store.get_meta("calendar_scope")?.is_none() {
             return Err(CoreError::IncompatibleServices);
         }
         let row = store
@@ -565,9 +582,15 @@ pub fn create_appointment_for_new_client_reviewed(
     })
 }
 
-fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
+fn writable_appointment(store: &Store, id: &str) -> Result<crate::model::Appointment> {
     let a = effective_appointment(store, id)?
         .ok_or_else(|| CoreError::NotFound(format!("appointment {id}")))?;
+    require_calendar_write(store, &a.staff_id)?;
+    Ok(a)
+}
+
+fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
+    let a = writable_appointment(store, id)?;
     if a.status != AppointmentStatus::Booked {
         return Err(CoreError::Invalid(format!(
             "appointment is {}",
@@ -678,6 +701,9 @@ fn queue_reschedule(
     let current = editable(store, id)?;
     let start = starts_at.unwrap_or(current.starts_at);
     let target = staff_id.unwrap_or(&current.staff_id);
+    if target != current.staff_id {
+        require_calendar_write(store, target)?;
+    }
     if target != current.staff_id || start != current.starts_at {
         if current.combination_id.is_some() {
             let permitted = current
@@ -687,7 +713,7 @@ fn queue_reschedule(
                     ids.iter().any(|id| id == target)
                 });
             if !permitted
-                || !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), target)
+                || store.get_meta("calendar_scope")?.is_none()
                 || !store
                     .staff()?
                     .iter()
@@ -703,9 +729,7 @@ fn queue_reschedule(
                 .filter_map(|service| service.service_id.as_ref())
                 .any(|id| !assigned.contains(id))
             {
-                return Err(CoreError::Invalid(
-                    "This staff member does not perform every service in the appointment".into(),
-                ));
+                return Err(CoreError::IncompatibleServices);
             }
         }
     }
@@ -739,6 +763,22 @@ pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Attendance transitions available after the appointment's calendar has been authorized.
+pub fn appointment_outcome_options(
+    appointment: &crate::model::Appointment,
+    now: DateTime<Utc>,
+    can_correct: bool,
+) -> &'static [AppointmentStatus] {
+    match appointment.status {
+        AppointmentStatus::Booked if appointment.starts_at <= now => {
+            &[AppointmentStatus::Completed, AppointmentStatus::NoShow]
+        }
+        AppointmentStatus::Completed if can_correct => &[AppointmentStatus::NoShow],
+        AppointmentStatus::NoShow if can_correct => &[AppointmentStatus::Completed],
+        _ => &[],
+    }
+}
+
 /// Records an outcome offline; the API rechecks the time, role and version at synchronization.
 pub fn set_appointment_status(
     store: &mut Store,
@@ -752,11 +792,22 @@ pub fn set_appointment_status(
     ) {
         return Err(CoreError::Invalid("choose completed or no_show".into()));
     }
-    let current = editable(store, id)?;
-    if current.starts_at > now {
-        return Err(CoreError::Invalid(
-            "an outcome can only be recorded once the appointment starts".into(),
-        ));
+    let current = writable_appointment(store, id)?;
+    let scope = store.get_meta("calendar_scope")?;
+    if !appointment_outcome_options(&current, now, scope.as_deref() == Some("all"))
+        .contains(&status)
+    {
+        return Err(match current.status {
+            AppointmentStatus::Booked => CoreError::Invalid(
+                "an outcome can only be recorded once the appointment starts".into(),
+            ),
+            AppointmentStatus::Completed | AppointmentStatus::NoShow
+                if current.status != status =>
+            {
+                CoreError::AppointmentScopeDenied
+            }
+            _ => CoreError::Invalid(format!("appointment is {}", current.status.as_str())),
+        });
     }
     store.enqueue(
         "appointment.set_status",
@@ -982,12 +1033,18 @@ fn resolve_conflict_in_transaction(
         Resolution::Cancel => {
             if c.kind != "appointment.create" {
                 // The appointment exists on the server (or did): cancel it if it is still live.
-                if let Ok(a) = editable(store, &c.entity_id) {
-                    store.enqueue(
-                        "appointment.cancel",
-                        &c.entity_id,
-                        json!({"id": c.entity_id, "version": a.version}),
-                    )?;
+                match editable(store, &c.entity_id) {
+                    Ok(a) => {
+                        store.enqueue(
+                            "appointment.cancel",
+                            &c.entity_id,
+                            json!({"id": c.entity_id, "version": a.version}),
+                        )?;
+                    }
+                    Err(CoreError::AppointmentScopeDenied) => {
+                        return Err(CoreError::AppointmentScopeDenied);
+                    }
+                    Err(_) => {}
                 }
             }
             store.resolve_conflict(mutation_id, "cancelled")
@@ -1007,6 +1064,10 @@ fn resolve_conflict_in_transaction(
                     if let Some(s) = staff_id {
                         p["staffId"] = json!(s);
                     }
+                    let target = p["staffId"].as_str().ok_or_else(|| {
+                        CoreError::Protocol("Missing appointment calendar".into())
+                    })?;
+                    require_calendar_write(store, target)?;
                     if let Some(review) = p.get("combination") {
                         let review =
                             serde_json::from_value::<FixedCombinationReview>(review.clone())?;

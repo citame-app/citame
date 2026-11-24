@@ -391,7 +391,10 @@ impl Root {
             }
         });
         let Some(packet) = packet else {
-            if form.recurrence.is_some() && review.submitted.is_none() {
+            if self.calendar_edits_allowed
+                && form.recurrence.is_some()
+                && review.submitted.is_none()
+            {
                 self.preview_booking_series(cx);
             }
             return;
@@ -402,6 +405,8 @@ impl Root {
                 review.restored = true;
                 form.error = Some(Key::BookingIntakeRestore);
                 self.svc.wake(Wake::Manual);
+            } else if matches!(error, CoreError::AppointmentScopeDenied) {
+                form.error = Some(Key::BookingIntakeAccessChanged);
             } else {
                 form.error = Some(Key::ErrGeneric);
             }
@@ -637,6 +642,7 @@ impl Root {
         }
         let online = self.status.connectivity == Connectivity::Online;
         let awaiting = review.submitted.is_some();
+        let can_edit = self.can_edit_staff_calendar(review.terms.staff_id());
         let mut body = div()
             .id("booking-intake-scroll")
             .min_h_0()
@@ -799,7 +805,7 @@ impl Root {
                 .focus(|style| style.border_color(theme::text())),
             );
         }
-        if online && !review.busy && !review.restored {
+        if online && can_edit && !review.busy && !review.restored {
             if !awaiting && (review.review_hash.is_none() || !review.forms.is_empty()) {
                 actions = actions.child(
                     self.button(
@@ -883,15 +889,19 @@ impl Root {
                         })),
                 )
                 .child(body)
-                .when_some(form.error, |panel, error| {
-                    panel.child(
-                        div()
-                            .flex_none()
-                            .text_sm()
-                            .text_color(theme::conflict_fg())
-                            .child(self.t(error)),
-                    )
-                })
+                .when_some(
+                    form.error
+                        .or((!can_edit).then_some(Key::BookingIntakeAccessChanged)),
+                    |panel, error| {
+                        panel.child(
+                            div()
+                                .flex_none()
+                                .text_sm()
+                                .text_color(theme::conflict_fg())
+                                .child(self.t(error)),
+                        )
+                    },
+                )
                 .when(!online, |panel| {
                     panel.child(self.t(Key::BookingIntakeOffline))
                 })

@@ -339,6 +339,29 @@ impl Root {
         };
         let rows = div()
             .id("resource-calendar-rows")
+            .when(matches!(self.overlay, Overlay::None), |rows| {
+                rows.tab_index(0)
+            })
+            .border_1()
+            .border_color(theme::panel())
+            .focus(|style| style.border_color(theme::accent()))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if !matches!(this.overlay, Overlay::None) || event.keystroke.modifiers.modified() {
+                    return;
+                }
+                let direction = match event.keystroke.key.as_str() {
+                    "left" => 1.,
+                    "right" => -1.,
+                    _ => return,
+                };
+                let scroll = &this.resource_calendar.horizontal_scroll;
+                let mut offset = scroll.offset();
+                offset.x =
+                    (offset.x + px(80.) * direction).clamp(-scroll.max_offset().width, px(0.));
+                scroll.set_offset(offset);
+                cx.stop_propagation();
+                cx.notify();
+            }))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -467,7 +490,7 @@ mod tests {
         let (_directory, config) = desk();
         let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
         cx.simulate_resize(gpui::size(px(1024.), px(880.)));
-        root.update(cx, |root, cx| {
+        let date = root.update(cx, |root, cx| {
             let date = root.date;
             let (from, to) = calendar::local_day_range(root.tz, date);
             root.svc.store.set_meta("calendar_scope", "all").unwrap();
@@ -480,19 +503,21 @@ mod tests {
                     appointments: Vec::new(),
                     resource_occupancy: Some(ResourceOccupancy {
                         captured_at: now,
-                        pools: vec![ResourceColumn {
-                            id: "room".into(),
-                            name: "Treatment room".into(),
-                            capacity: 2,
-                            active: true,
-                            windows: vec![ReservedWindow {
-                                starts_at: from + Span::hours(10),
-                                ends_at: from + Span::hours(12),
-                                quantity: 1,
-                                appointment_id: Some(EXISTING.into()),
-                                hold_expires_at: None,
-                            }],
-                        }],
+                        pools: (0..7)
+                            .map(|index| ResourceColumn {
+                                id: format!("room-{index}"),
+                                name: format!("Treatment room {}", index + 1),
+                                capacity: 2,
+                                active: true,
+                                windows: vec![ReservedWindow {
+                                    starts_at: from + Span::hours(10),
+                                    ends_at: from + Span::hours(12),
+                                    quantity: 1,
+                                    appointment_id: Some(EXISTING.into()),
+                                    hold_expires_at: None,
+                                }],
+                            })
+                            .collect(),
                     }),
                 },
                 now,
@@ -516,6 +541,13 @@ mod tests {
                     .query_pairs()
                     .any(|(key, value)| key == "view" && value == "resources")
             );
+            date
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("tab tab right");
+        root.update(cx, |root, cx| {
+            assert_eq!(root.date, date);
+            assert!(root.resource_calendar.horizontal_scroll.offset().x < px(0.));
             root.shift_day(1, cx);
             assert!(root.resource_calendar.day.is_none());
             root.shift_day(-1, cx);
