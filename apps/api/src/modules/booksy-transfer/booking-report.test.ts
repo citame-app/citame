@@ -578,12 +578,21 @@ test("the offline commands accept only private hash-linked inputs and print coun
       staleDays: 0,
       missingDays: 1,
       archiveArtifactsVerified: 1,
-      bookingReconciliation: { daysCompared: 1, daysWithDifferences: 1, changedHours: 1 },
+      bookingReconciliation: {
+        daysCompared: 1,
+        daysWithDifferences: 1,
+        changedHours: 1,
+        unverifiedStaff: 1,
+      },
       canCutOver: false,
     });
     expect(auditOutput).not.toContain(absentRef);
     expect(auditOutput).not.toContain(snapshot.lastObservedAppointmentAt);
-    expect(statSync(join(directory, windowSummary.receipt)).mode & 0o777).toBe(0o600);
+    const windowReceipt = join(directory, windowSummary.receipt);
+    expect(statSync(windowReceipt).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(windowReceipt, "utf8")).days[0]).toMatchObject({
+      reconciliation: { unverifiedStaff: [absentRef] },
+    });
     chmodSync(receipt, 0o644);
     expect(call(reportPath).exitCode).toBe(1);
     chmodSync(receipt, 0o600);

@@ -19,6 +19,8 @@ const calendar = z.object({
     }),
   ),
 });
+export type BooksyCalendarBookings = z.infer<typeof calendar>["bookings"];
+
 const detail = z.object({
   appointment: z.object({ appointment_uid: z.number().int(), status: z.string().optional() }),
 });

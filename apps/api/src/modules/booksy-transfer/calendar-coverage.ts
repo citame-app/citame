@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { collectBookingAbsences } from "./absence-evidence";
+import { type BooksyCalendarBookings, collectBookingAbsences } from "./absence-evidence";
 import { type CalendarSeen, latestByReference, sourceCalendarDate } from "./calendar-intervals";
 import { sourceUuid, stableJson } from "./plan";
 import { type BooksySourceReadModel, sourceInstant } from "./source-read-model";
@@ -24,12 +24,6 @@ export function auditCalendarCoverage(
   const fromInSnapshot = from > model.fromDate ? from : model.fromDate;
   const toInSnapshot = to < model.throughDate ? to : model.throughDate;
   type Interval = { date: string; startsAt: string; endsAt: string };
-  type RawBooking = {
-    id: number;
-    booked_from?: string;
-    booked_till?: string;
-    resources?: unknown;
-  };
   type ObservedBooking = Interval & { staffRefs: string[] };
   const staffRefsById = new Map(
     model.base.staff.map(({ sourceId }) => [
@@ -51,7 +45,7 @@ export function auditCalendarCoverage(
     });
   }
 
-  const latest = new Map<string, { at: string; captures: Record<string, RawBooking>[] }>();
+  const latest = new Map<string, { at: string; captures: BooksyCalendarBookings[] }>();
   // Defer parsing until the newest full-scope captures are known for every day.
   const evidence = collectBookingAbsences(
     model,
@@ -66,7 +60,7 @@ export function auditCalendarCoverage(
     },
   );
   const localTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?$/;
-  function readBookings(date: string, bookings: Record<string, RawBooking>) {
+  function readBookings(date: string, bookings: BooksyCalendarBookings) {
     const rows = new Map<string, ObservedBooking>();
     for (const { id, booked_from, booked_till, resources } of Object.values(bookings)) {
       if (
