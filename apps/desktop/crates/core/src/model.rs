@@ -472,6 +472,8 @@ pub struct PullResponse {
     pub booked_resource_ids: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calendar_scope: Option<String>,
+    #[serde(default)]
+    pub viewer_edit_calendar: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewer_role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

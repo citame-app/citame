@@ -72,6 +72,17 @@ impl SlotDrag {
 }
 
 impl Root {
+    pub(super) fn calendar_slot_step(&self) -> i64 {
+        self.svc
+            .store
+            .salon_settings()
+            .ok()
+            .flatten()
+            .map_or(15, |settings| {
+                settings.slot_granularity_minutes.clamp(1, 60)
+            })
+    }
+
     pub(super) fn start_slot_drag(
         &mut self,
         column: usize,
@@ -123,15 +134,7 @@ impl Root {
             first: i64::from(first) * 60,
             last: i64::from(last) * 60,
             minutes_per_pixel,
-            step: self
-                .svc
-                .store
-                .salon_settings()
-                .ok()
-                .flatten()
-                .map_or(15, |settings| {
-                    settings.slot_granularity_minutes.clamp(1, 60)
-                }),
+            step: self.calendar_slot_step(),
             origin_y: bounds.top(),
             original_scroll_y: self.vertical_scroll.handle.offset().y,
             anchor_y: event.position.y,

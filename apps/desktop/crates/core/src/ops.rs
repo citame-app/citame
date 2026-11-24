@@ -678,6 +678,16 @@ fn queue_reschedule(
     let current = editable(store, id)?;
     let start = starts_at.unwrap_or(current.starts_at);
     let target = staff_id.unwrap_or(&current.staff_id);
+    let scope = store.get_meta("calendar_scope")?;
+    if !store.calendar_edits_allowed()? {
+        return Err(CoreError::AppointmentScopeDenied);
+    }
+    if let Some(scope) = scope.as_deref()
+        && (!booking_calendar_allows(Some(scope), &current.staff_id)
+            || !booking_calendar_allows(Some(scope), target))
+    {
+        return Err(CoreError::AppointmentScopeDenied);
+    }
     if target != current.staff_id || start != current.starts_at {
         if current.combination_id.is_some() {
             let permitted = current
@@ -687,7 +697,7 @@ fn queue_reschedule(
                     ids.iter().any(|id| id == target)
                 });
             if !permitted
-                || !booking_calendar_allows(store.get_meta("calendar_scope")?.as_deref(), target)
+                || !booking_calendar_allows(scope.as_deref(), target)
                 || !store
                     .staff()?
                     .iter()
@@ -703,9 +713,7 @@ fn queue_reschedule(
                 .filter_map(|service| service.service_id.as_ref())
                 .any(|id| !assigned.contains(id))
             {
-                return Err(CoreError::Invalid(
-                    "This staff member does not perform every service in the appointment".into(),
-                ));
+                return Err(CoreError::IncompatibleServices);
             }
         }
     }

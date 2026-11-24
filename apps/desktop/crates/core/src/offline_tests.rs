@@ -1192,6 +1192,42 @@ fn moving_an_appointment_offline_keeps_its_duration_and_bumps_the_local_version(
 }
 
 #[test]
+fn a_personal_calendar_rejects_reassigning_an_appointment_outside_its_scope() {
+    let mut store = seeded();
+    store.set_meta("calendar_scope", ANA).unwrap();
+
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, None, Some(BEA)),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    let start = at("2026-03-09T17:00:00Z");
+    store.set_meta("time_off_scope", "none").unwrap();
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, Some(start), None),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+    assert!(matches!(
+        reschedule_appointment(&mut store, EXISTING, Some(start), None),
+        Err(crate::error::CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    reschedule_appointment(&mut store, EXISTING, Some(start), None).unwrap();
+    assert_eq!(
+        effective_appointment(&store, EXISTING)
+            .unwrap()
+            .unwrap()
+            .starts_at,
+        start
+    );
+}
+
+#[test]
 fn queued_edits_of_one_appointment_carry_incrementing_versions() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
