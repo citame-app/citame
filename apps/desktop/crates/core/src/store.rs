@@ -26,7 +26,7 @@ mod staff_portrait_draft;
 mod visit_payment;
 mod waitlist_cache;
 pub use staff_portrait_draft::StaffPortraitDraft;
-pub use waitlist_cache::SavedWaitlistPages;
+pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheWrite};
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
@@ -1212,8 +1212,11 @@ impl Store {
     }
 
     pub fn live_view_revision(&self, topic: &str) -> Result<i64> {
-        Ok(self
-            .get_meta(&format!("live_view:{topic}"))?
+        Self::live_view_revision_at(&self.conn, topic)
+    }
+
+    fn live_view_revision_at(db: &rusqlite::Connection, topic: &str) -> Result<i64> {
+        Ok(Self::meta_at(db, &format!("live_view:{topic}"))?
             .and_then(|value| value.parse().ok())
             .unwrap_or(0))
     }

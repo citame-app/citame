@@ -157,34 +157,34 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut store = Store::open(&dir.path().join("waitlist-live-count.db")).unwrap();
         let date = "2026-03-10".parse().unwrap();
-        let range = Some(WaitlistRange {
+        let range = WaitlistRange {
             from: date,
             to: date,
-        });
+        };
         let now = Instant::now();
         let mut count = WaitlistCount::default();
 
-        let initial = count.refresh(&store, range, true, now).0.unwrap();
+        let initial = count.refresh(&store, Some(range), true, now).0.unwrap();
         store.set_meta("live_view:waitlist", "1").unwrap();
-        let after_change = count.refresh(&store, range, true, now).0.unwrap();
+        let after_change = count.refresh(&store, Some(range), true, now).0.unwrap();
         assert_eq!(
-            count.apply(&mut store, range, initial, Ok(9)),
+            count.apply(&mut store, Some(range), initial, Ok(9)),
             WaitlistCountUpdate::Unchanged
         );
-        assert!(count.refresh(&store, range, true, now).0.is_none());
+        assert!(count.refresh(&store, Some(range), true, now).0.is_none());
 
         store.set_meta("live_view:waitlist", "2").unwrap();
         assert_eq!(
-            count.apply(&mut store, range, after_change, Ok(8)),
+            count.apply(&mut store, Some(range), after_change, Ok(8)),
             WaitlistCountUpdate::Unchanged
         );
-        assert!(count.total_for(range.unwrap()).is_none());
-        let latest = count.refresh(&store, range, true, now).0.unwrap();
+        assert!(count.total_for(range).is_none());
+        let latest = count.refresh(&store, Some(range), true, now).0.unwrap();
         assert_eq!(
-            count.apply(&mut store, range, latest, Ok(2)),
+            count.apply(&mut store, Some(range), latest, Ok(2)),
             WaitlistCountUpdate::DisplayChanged
         );
-        assert_eq!(count.total_for(range.unwrap()), Some(2));
+        assert_eq!(count.total_for(range), Some(2));
     }
 
     #[test]

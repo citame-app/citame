@@ -1,6 +1,6 @@
 use super::*;
 use chrono::NaiveTime;
-use sob_core::store::CalendarCacheScope;
+use sob_core::store::{CalendarCacheScope, WaitlistCacheWrite};
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
     AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistCountUpdate,
@@ -464,11 +464,6 @@ impl Root {
                 };
                 d.busy = false;
                 d.reading = false;
-                // An event can reach the replica between the GET and this UI callback.
-                if reading && this.svc.store.live_view_revision("waitlist").is_ok_and(|current| current != revision) {
-                    this.waitlist_request(Action::Read, cx);
-                    return;
-                }
                 match notice {
                     Some(ReloadNotice::IntakeChanged) => {
                         if let Some(review) = &mut d.offer_review {
@@ -495,9 +490,14 @@ impl Root {
                 }
                 match result {
                     Ok(data) => {
-                        match this.svc.store.cache_waitlist(&scope, view, &data) {
-                            Ok(Some(pages)) => d.saved_pages = pages,
-                            Ok(None) => {
+                        match this.svc.store.cache_waitlist_at_revision(&scope, view, &data, Some(revision)) {
+                            Ok(WaitlistCacheWrite::Saved(pages)) => d.saved_pages = pages,
+                            Ok(WaitlistCacheWrite::NewerRevision) => {
+                                // Acknowledgements stay visible while a new read replaces the stale page.
+                                this.waitlist_request(Action::Read, cx);
+                                return;
+                            }
+                            Ok(WaitlistCacheWrite::AccessChanged) => {
                                 d.reject_scope();
                                 cx.notify();
                                 return;

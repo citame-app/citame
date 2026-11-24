@@ -15,6 +15,12 @@ pub struct SavedWaitlistPages {
     pub scope: Option<CalendarCacheScope>,
 }
 
+pub enum WaitlistCacheWrite {
+    Saved(Vec<u32>),
+    AccessChanged,
+    NewerRevision,
+}
+
 fn prefix(view: WaitlistView) -> String {
     match view {
         WaitlistView::Active => "desk_waitlist:active:".into(),
@@ -96,14 +102,34 @@ impl Store {
         view: WaitlistView,
         page: &WaitlistPage,
     ) -> Result<Option<Vec<u32>>> {
+        Ok(
+            match self.cache_waitlist_at_revision(scope, view, page, None)? {
+                WaitlistCacheWrite::Saved(pages) => Some(pages),
+                WaitlistCacheWrite::AccessChanged | WaitlistCacheWrite::NewerRevision => None,
+            },
+        )
+    }
+
+    pub fn cache_waitlist_at_revision(
+        &mut self,
+        scope: &CalendarCacheScope,
+        view: WaitlistView,
+        page: &WaitlistPage,
+        requested_revision: Option<i64>,
+    ) -> Result<WaitlistCacheWrite> {
         if !scope.permits_read() || page.page == 0 {
-            return Ok(None);
+            return Ok(WaitlistCacheWrite::AccessChanged);
         }
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if &CalendarCacheScope::read(&tx)? != scope {
-            return Ok(None);
+            return Ok(WaitlistCacheWrite::AccessChanged);
+        }
+        if let Some(expected) = requested_revision
+            && Store::live_view_revision_at(&tx, "waitlist")? != expected
+        {
+            return Ok(WaitlistCacheWrite::NewerRevision);
         }
         let prefix = prefix(view);
         let first = format!("{prefix}1");
@@ -141,7 +167,7 @@ impl Store {
         }
         let pages = saved_pages(&tx, view)?;
         tx.commit()?;
-        Ok(Some(pages))
+        Ok(WaitlistCacheWrite::Saved(pages))
     }
 
     pub fn invalidate_waitlist_access(
@@ -177,6 +203,32 @@ mod tests {
             entries: vec![],
             imported: vec![],
         }
+    }
+
+    #[test]
+    fn network_page_commit_checks_the_revision_inside_the_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("waitlist-page-revision.db");
+        let mut store = Store::open(&path).unwrap();
+        let sync = Store::open(&path).unwrap();
+        let scope = store.calendar_cache_scope().unwrap();
+        let view = WaitlistView::Active;
+        let requested = store.live_view_revision("waitlist").unwrap();
+        sync.set_meta("live_view:waitlist", "1").unwrap();
+        assert!(matches!(
+            store
+                .cache_waitlist_at_revision(&scope, view, &page(1), Some(requested))
+                .unwrap(),
+            WaitlistCacheWrite::NewerRevision
+        ));
+        assert!(store.waitlist_cache(view, 1).unwrap().current.is_none());
+        assert!(matches!(
+            store
+                .cache_waitlist_at_revision(&scope, view, &page(1), Some(1))
+                .unwrap(),
+            WaitlistCacheWrite::Saved(_)
+        ));
+        assert_eq!(store.waitlist_cache(view, 1).unwrap().pages, vec![1]);
     }
 
     #[test]
