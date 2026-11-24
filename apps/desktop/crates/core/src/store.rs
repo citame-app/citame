@@ -1882,6 +1882,29 @@ impl Store {
         raw.iter().map(|j| Ok(serde_json::from_str(j)?)).collect()
     }
 
+    pub fn time_off(&self, id: &str) -> Result<Option<TimeOff>> {
+        let json: Option<String> = self
+            .conn
+            .query_row("SELECT json FROM time_off WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        json.map(|json| Ok(serde_json::from_str(&json)?))
+            .transpose()
+    }
+
+    /// Returns whether the replica has reached the head recorded on this rejection.
+    pub(crate) fn time_off_review_ready(&self, mutation_id: &str) -> Result<Option<bool>> {
+        let head = self.get_meta(&format!("time_off_review_head:{mutation_id}"))?;
+        head.map(|value| {
+            let expected: i64 = value.parse().map_err(|_| {
+                CoreError::Protocol("Invalid time block conflict checkpoint".into())
+            })?;
+            Ok(self.cursor()? >= expected)
+        })
+        .transpose()
+    }
+
     pub fn salon_settings(&self) -> Result<Option<SalonSettings>> {
         let j: Option<String> = self
             .conn
@@ -2056,6 +2079,13 @@ impl Store {
         tx.execute(
             "DELETE FROM meta WHERE key GLOB 'assignment_ack:*' AND CAST(value AS INTEGER) <= ?1",
             [cursor],
+        )?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'time_off_review_head:*'
+             AND NOT EXISTS (SELECT 1 FROM conflict
+                WHERE mutation_id = substr(meta.key, length('time_off_review_head:') + 1)
+                AND resolved_at IS NULL)",
+            [],
         )?;
         Ok(())
     }
@@ -2358,6 +2388,16 @@ impl Store {
                         ],
                     )?;
                     out.rejected += 1;
+                    if let Some(head) = response_head
+                        && reason == "conflict"
+                        && matches!(s.kind.as_str(), "time_off.update" | "time_off.delete")
+                    {
+                        Self::set_meta_at(
+                            &tx,
+                            &format!("time_off_review_head:{}", s.mutation_id),
+                            &head.to_string(),
+                        )?;
+                    }
                     if s.kind.starts_with("appointment.") {
                         let last_sent = sent.last().map_or(s.seq, |entry| entry.seq);
                         let moved = tx.execute(

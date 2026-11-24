@@ -621,10 +621,11 @@ pub fn effective_time_off(
             )
         })
         .collect();
+    let mut unavailable = HashSet::new();
     for entry in store.calendar_outbox()? {
         let p = &entry.payload;
         match entry.kind.as_str() {
-            "time_off.create" | "time_off.update" => {
+            "time_off.create" => {
                 if let (Some(staff_id), Some(starts_at), Some(ends_at), Ok(updated_at)) = (
                     str_of(p, "staffId"),
                     p.get("startsAt").and_then(parse_instant),
@@ -647,8 +648,46 @@ pub fn effective_time_off(
                     );
                 }
             }
-            "time_off.delete" => {
-                blocks.remove(&entry.entity_id);
+            "time_off.update" | "time_off.delete" => {
+                if unavailable.contains(&entry.entity_id) {
+                    continue;
+                }
+                let mut row = match blocks.get(&entry.entity_id) {
+                    Some(existing) => existing.time_off.clone(),
+                    None => match store.time_off(&entry.entity_id)? {
+                        Some(current) => current,
+                        None => continue,
+                    },
+                };
+                let expected = p.get("expectedUpdatedAt").and_then(parse_instant);
+                if expected.is_some_and(|version| version != row.updated_at) {
+                    unavailable.insert(entry.entity_id);
+                    continue;
+                }
+                if entry.kind == "time_off.delete" {
+                    blocks.remove(&entry.entity_id);
+                    unavailable.insert(entry.entity_id);
+                    continue;
+                }
+                if let Ok(updated_at) = entry.created_at.parse() {
+                    if let Some(start) = p.get("startsAt").and_then(parse_instant) {
+                        row.starts_at = start;
+                    }
+                    if let Some(end) = p.get("endsAt").and_then(parse_instant) {
+                        row.ends_at = end;
+                    }
+                    if p.get("reason").is_some() {
+                        row.reason = str_of(p, "reason");
+                    }
+                    row.updated_at = updated_at;
+                    blocks.insert(
+                        entry.entity_id,
+                        CalendarBlock {
+                            time_off: row,
+                            pending: true,
+                        },
+                    );
+                }
             }
             _ => {}
         }

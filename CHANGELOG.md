@@ -23,6 +23,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 - Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
 
+- Desktop reviews rejected offline edits and removals of time blocks against the current Cloud version. The calendar stops showing an outdated proposal when a newer block arrives.
+
 - Business profiles retain multiline descriptions up to 2,000 characters in Web and Desktop.
 
 - Compare delivery totals for up to four campaigns or booking invitations in Cloud Web and Desktop. The selection persists between pages.
