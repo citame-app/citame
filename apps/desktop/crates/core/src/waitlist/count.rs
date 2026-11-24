@@ -73,9 +73,9 @@ impl WaitlistCount {
             return (None, changed);
         };
         let revision = store.live_view_revision("waitlist").ok();
-        if self.pending.is_some()
-            || (self.revision == revision
-                && self
+        if self.revision == revision
+            && (self.pending.is_some()
+                || self
                     .requested_at
                     .is_some_and(|last| now.saturating_duration_since(last) < REFRESH_INTERVAL))
         {
@@ -121,6 +121,7 @@ impl WaitlistCount {
         self.pending = None;
         if range != Some(request.range)
             || store.calendar_cache_scope().ok().as_ref() != Some(&request.scope)
+            || store.live_view_revision("waitlist").ok() != self.revision
         {
             return WaitlistCountUpdate::Unchanged;
         }
@@ -150,6 +151,41 @@ impl WaitlistCount {
 mod tests {
     use super::*;
     use crate::waitlist::{WaitlistPage, WaitlistPolicy};
+
+    #[test]
+    fn live_events_replace_pending_counts_and_discard_older_responses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = Store::open(&dir.path().join("waitlist-live-count.db")).unwrap();
+        let date = "2026-03-10".parse().unwrap();
+        let range = Some(WaitlistRange {
+            from: date,
+            to: date,
+        });
+        let now = Instant::now();
+        let mut count = WaitlistCount::default();
+
+        let initial = count.refresh(&store, range, true, now).0.unwrap();
+        store.set_meta("live_view:waitlist", "1").unwrap();
+        let after_change = count.refresh(&store, range, true, now).0.unwrap();
+        assert_eq!(
+            count.apply(&mut store, range, initial, Ok(9)),
+            WaitlistCountUpdate::Unchanged
+        );
+        assert!(count.refresh(&store, range, true, now).0.is_none());
+
+        store.set_meta("live_view:waitlist", "2").unwrap();
+        assert_eq!(
+            count.apply(&mut store, range, after_change, Ok(8)),
+            WaitlistCountUpdate::Unchanged
+        );
+        assert!(count.total_for(range.unwrap()).is_none());
+        let latest = count.refresh(&store, range, true, now).0.unwrap();
+        assert_eq!(
+            count.apply(&mut store, range, latest, Ok(2)),
+            WaitlistCountUpdate::DisplayChanged
+        );
+        assert_eq!(count.total_for(range.unwrap()), Some(2));
+    }
 
     #[test]
     fn changing_period_and_losing_access_discards_old_counts_and_pages() {

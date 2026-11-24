@@ -19,6 +19,7 @@ pub(super) struct Desk {
     scope: Option<CalendarCacheScope>,
     data: Option<WaitlistPage>,
     busy: bool,
+    reading: bool,
     cached: bool,
     saved_pages: Vec<u32>,
     error: Option<Key>,
@@ -37,6 +38,7 @@ impl Desk {
         self.clear_private_data();
         self.saved_pages.clear();
         self.busy = false;
+        self.reading = false;
         self.error = Some(Key::WaitlistError);
     }
 
@@ -285,10 +287,10 @@ impl Root {
         cx: &mut Context<Self>,
     ) {
         if matches!(&self.overlay, Overlay::Waitlist(desk)
-            if !desk.busy && (reconnected
-                || self.svc.store.live_view_revision("waitlist").ok()
-                    .is_some_and(|revision| revision != desk.observed_revision)
-                || ((desk.cached || desk.data.is_none()) && desk.requested_at.elapsed() >= Duration::from_secs(15))))
+            if (reconnected || self.svc.store.live_view_revision("waitlist").ok()
+                    .is_some_and(|revision| revision != desk.observed_revision))
+                || (!desk.busy && (desk.cached || desk.data.is_none())
+                    && desk.requested_at.elapsed() >= Duration::from_secs(15)))
         {
             self.waitlist_request(Action::Read, cx);
         }
@@ -311,6 +313,7 @@ impl Root {
                 .scope
                 .or_else(|| self.svc.store.calendar_cache_scope().ok()),
             busy: false,
+            reading: false,
             cached: saved.current.is_some(),
             data: saved.current,
             saved_pages: saved.pages,
@@ -335,7 +338,8 @@ impl Root {
         let Overlay::Waitlist(d) = &mut self.overlay else {
             return;
         };
-        if d.busy {
+        let reading = matches!(action, Action::Read);
+        if d.busy && !(reading && d.reading) {
             return;
         }
         d.requested_at = Instant::now();
@@ -368,12 +372,14 @@ impl Root {
         let generation = self.waitlist_generation;
         let session = self.svc.session.clone();
         let (view, page) = (d.view, d.page);
-        d.observed_revision = self
+        let revision = self
             .svc
             .store
             .live_view_revision("waitlist")
             .unwrap_or_default();
+        d.observed_revision = revision;
         d.busy = true;
+        d.reading = reading;
         d.error = None;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -457,6 +463,12 @@ impl Root {
                     return;
                 };
                 d.busy = false;
+                d.reading = false;
+                // An event can reach the replica between the GET and this UI callback.
+                if reading && this.svc.store.live_view_revision("waitlist").is_ok_and(|current| current != revision) {
+                    this.waitlist_request(Action::Read, cx);
+                    return;
+                }
                 match notice {
                     Some(ReloadNotice::IntakeChanged) => {
                         if let Some(review) = &mut d.offer_review {
@@ -1525,6 +1537,7 @@ mod tests {
                     entries: vec![],
                 }),
                 busy: false,
+                reading: false,
                 cached: false,
                 saved_pages: vec![],
                 error: None,
