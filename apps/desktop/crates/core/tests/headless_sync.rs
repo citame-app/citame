@@ -6228,21 +6228,24 @@ fn urlenc(s: &str) -> String {
 
 #[test]
 #[ignore = "needs the real API, Postgres and Valkey (see README)"]
-fn a_cloud_move_stays_visible_before_a_stale_cancel_is_reconciled() {
+fn a_web_move_stays_visible_before_a_stale_desktop_cancel_is_reconciled() {
     let mut a = Device::sign_in();
-    let mut b = Device::sign_in();
     a.sync();
-    b.sync();
     let c = catalog(&a);
     let start = free_slot(&a, &c.staff);
     let client = ops::create_client(&mut a.store, "Synthetic calendar race", None).unwrap();
     let id = ops::create_appointment(&mut a.store, booking(&c, &c.staff, &client, start)).unwrap();
     a.sync();
-    b.sync();
+    let current = a.store.appointment(&id).unwrap().unwrap();
     ops::cancel_appointment(&mut a.store, &id).unwrap();
     let moved = start + Span::hours(1);
-    ops::reschedule_appointment(&mut b.store, &id, Some(moved), None).unwrap();
-    assert_eq!(b.sync().push.applied, 1);
+    let prefix = std::env::var("SOB_TEST_REST_PREFIX").unwrap_or_default();
+    let response = ureq::patch(&format!("{}{prefix}/appointments/{id}", a.base))
+        .header("Cookie", &a.cookie)
+        .content_type("application/json")
+        .send(json!({ "version": current.version, "startsAt": moved }).to_string())
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
 
     let page = a.transport.pull(a.store.cursor().unwrap(), 100).unwrap();
     a.store.apply_page(&page.changes, page.next_cursor).unwrap();
