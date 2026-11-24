@@ -13,6 +13,14 @@ pub enum CalendarNoticeKind {
 }
 
 impl CalendarNoticeKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Rescheduled => "rescheduled",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
     pub fn appointment_status(self) -> AppointmentStatus {
         match self {
             Self::New | Self::Rescheduled => AppointmentStatus::Booked,

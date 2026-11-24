@@ -1038,16 +1038,46 @@ fn calendar_inbox_keeps_separate_pages_and_clears_on_replica_reset() {
         ..page.clone()
     };
     {
-        let store = Store::open(&path).unwrap();
-        store.cache_calendar_inbox(false, &page).unwrap();
-        store.cache_calendar_inbox(true, &archived).unwrap();
+        let mut store = Store::open(&path).unwrap();
+        let scope = store.calendar_cache_scope().unwrap();
+        store
+            .cache_calendar_inbox(&scope, false, None, &page)
+            .unwrap();
+        store
+            .cache_calendar_inbox(&scope, true, Some(CalendarNoticeKind::Cancelled), &archived)
+            .unwrap();
     }
     let mut store = Store::open(&path).unwrap();
-    assert_eq!(store.calendar_inbox_cache(false).unwrap(), Some(page));
-    assert_eq!(store.calendar_inbox_cache(true).unwrap(), Some(archived));
-    store.reset_replica().unwrap();
-    assert!(store.calendar_inbox_cache(false).unwrap().is_none());
-    assert!(store.calendar_inbox_cache(true).unwrap().is_none());
+    let scope = store.calendar_cache_scope().unwrap();
+    assert_eq!(store.calendar_inbox_cache(false, None).unwrap(), Some(page));
+    assert_eq!(
+        store
+            .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))
+            .unwrap(),
+        Some(archived.clone())
+    );
+    assert!(store.calendar_inbox_cache(true, None).unwrap().is_none());
+    store
+        .apply_visibility_scopes(Some(true), Some("none"), INITIAL_GENERATION)
+        .unwrap();
+    assert!(store.calendar_inbox_cache(false, None).unwrap().is_none());
+    assert!(
+        store
+            .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        !store
+            .cache_calendar_inbox(&scope, true, Some(CalendarNoticeKind::Cancelled), &archived)
+            .unwrap()
+    );
+    assert!(
+        store
+            .calendar_inbox_cache(true, Some(CalendarNoticeKind::Cancelled))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]

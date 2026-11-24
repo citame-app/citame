@@ -6699,7 +6699,7 @@ fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
             .any(|(_, _, appointment)| appointment.id == id)
     );
 
-    let inbox = device.transport.calendar_inbox(false, 1).unwrap();
+    let inbox = device.transport.calendar_inbox(false, None, 1).unwrap();
     let notices = inbox
         .entries
         .iter()
@@ -6712,41 +6712,51 @@ fn native_calendar_inbox_reads_lifecycle_and_archives_a_notice() {
     assert_eq!(notices[2].starts_at, starts_at);
     assert_eq!(notices[2].appointment_starts_at, starts_at + Span::hours(1));
 
-    let notice_id = &notices[0].id;
+    let cancelled = observer
+        .transport
+        .calendar_inbox(false, Some(CalendarNoticeKind::Cancelled), 1)
+        .unwrap();
+    assert!(
+        cancelled
+            .entries
+            .iter()
+            .all(|entry| entry.kind == CalendarNoticeKind::Cancelled)
+    );
+    assert!(
+        cancelled
+            .entries
+            .iter()
+            .any(|entry| entry.id == notices[0].id)
+    );
+    let notice_ids = [notices[0].id.clone(), notices[1].id.clone()];
     device
         .transport
-        .set_calendar_notice_archived(notice_id, true)
+        .set_calendar_notices_archived(&notice_ids, true)
         .unwrap();
     assert!(
         !device
             .transport
-            .calendar_inbox(false, 1)
+            .calendar_inbox(false, None, 1)
             .unwrap()
             .entries
             .iter()
-            .any(|n| n.id == *notice_id)
+            .any(|n| notice_ids.contains(&n.id))
     );
+    let archived = observer.transport.calendar_inbox(true, None, 1).unwrap();
     assert!(
-        device
-            .transport
-            .calendar_inbox(true, 1)
-            .unwrap()
-            .entries
+        notice_ids
             .iter()
-            .any(|n| n.id == *notice_id)
+            .all(|id| archived.entries.iter().any(|n| &n.id == id))
     );
     device
         .transport
-        .set_calendar_notice_archived(notice_id, false)
+        .set_calendar_notices_archived(&notice_ids, false)
         .unwrap();
+    let active = observer.transport.calendar_inbox(false, None, 1).unwrap();
     assert!(
-        device
-            .transport
-            .calendar_inbox(false, 1)
-            .unwrap()
-            .entries
+        notice_ids
             .iter()
-            .any(|n| n.id == *notice_id)
+            .all(|id| active.entries.iter().any(|n| &n.id == id))
     );
 }
 

@@ -1330,6 +1330,8 @@ keys! {
     InboxActive => ("Inbox", "Bandeja"),
     InboxArchived => ("Archived", "Archivados"),
     InboxArchive => ("Archive", "Archivar"),
+    InboxArchiveDay => ("Archive this group", "Archivar este grupo"),
+    InboxAllKinds => ("All types", "Todos los tipos"),
     InboxRestore => ("Restore", "Recuperar"),
     InboxRescheduled => ("Appointment moved", "Cita reprogramada"),
     InboxCancelled => ("Appointment cancelled", "Cita cancelada"),

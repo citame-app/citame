@@ -42,6 +42,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.
 
 - Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.
+- Desktop groups calendar notifications by day, filters them by appointment event, and can archive a visible group in one action. The first page of each filter stays available offline.
 
 - Cloud and Desktop group appointment outcomes by the promotion reviewed at booking, with the same filters and CSV export as the appointment report.
 

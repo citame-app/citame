@@ -112,7 +112,7 @@ impl Root {
         let Overlay::Waitlist(desk) = &mut self.overlay else {
             return;
         };
-        let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
+        let Ok(scope) = self.svc.store.calendar_cache_scope() else {
             return;
         };
         if desk.cached {
@@ -154,7 +154,7 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
-                if this.svc.store.waitlist_cache_scope().ok().as_ref() != Some(&scope) {
+                if this.svc.store.calendar_cache_scope().ok().as_ref() != Some(&scope) {
                     desk.reject_scope();
                     cx.notify();
                     return;
@@ -612,7 +612,7 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
     root.overlay = Overlay::Waitlist(Box::new(Desk {
         active: true,
         page: 1,
-        scope: root.svc.store.waitlist_cache_scope().ok(),
+        scope: root.svc.store.calendar_cache_scope().ok(),
         data: None,
         saved_pages: vec![],
         busy: false,

@@ -1250,13 +1250,15 @@ impl HttpTransport {
     pub fn calendar_inbox(
         &self,
         archived: bool,
+        kind: Option<CalendarNoticeKind>,
         page: u32,
     ) -> Result<CalendarInbox, TransportError> {
-        let response = self.get(
-            &self.agent,
-            &format!("/admin/notifications/inbox?archived={archived}&page={page}"),
-            Some("application/json"),
-        )?;
+        let mut path = format!("/admin/notifications/inbox?archived={archived}&page={page}");
+        if let Some(kind) = kind {
+            path.push_str("&kind=");
+            path.push_str(kind.as_str());
+        }
+        let response = self.get(&self.agent, &path, Some("application/json"))?;
         read_response(response, false)
     }
 
@@ -2017,12 +2019,12 @@ impl HttpTransport {
         Ok(())
     }
 
-    pub fn set_calendar_notice_archived(
+    pub fn set_calendar_notices_archived(
         &self,
-        id: &str,
+        ids: &[String],
         archived: bool,
     ) -> Result<(), TransportError> {
-        let body = serde_json::json!({ "ids": [id], "archived": archived }).to_string();
+        let body = serde_json::json!({ "ids": ids, "archived": archived }).to_string();
         let mut request = self.agent.post(&format!(
             "{}/admin/notifications/inbox/archive",
             self.base_url

@@ -1,6 +1,6 @@
 use super::*;
 use chrono::NaiveTime;
-use sob_core::store::WaitlistCacheScope;
+use sob_core::store::CalendarCacheScope;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
     AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistPage,
@@ -15,7 +15,7 @@ pub(super) use review::show_intake_test_offer;
 pub(super) struct Desk {
     active: bool,
     page: u32,
-    scope: Option<WaitlistCacheScope>,
+    scope: Option<CalendarCacheScope>,
     data: Option<WaitlistPage>,
     busy: bool,
     cached: bool,
@@ -133,7 +133,7 @@ enum ReloadNotice {
 impl Root {
     pub(super) fn refresh_open_waitlist_scope(&mut self) {
         if let Overlay::Waitlist(desk) = &self.overlay
-            && self.svc.store.waitlist_cache_scope().ok() != desk.scope
+            && self.svc.store.calendar_cache_scope().ok() != desk.scope
         {
             self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
             self.overlay = Overlay::None;
@@ -170,7 +170,7 @@ impl Root {
             page,
             scope: saved
                 .scope
-                .or_else(|| self.svc.store.waitlist_cache_scope().ok()),
+                .or_else(|| self.svc.store.calendar_cache_scope().ok()),
             busy: false,
             cached: saved.current.is_some(),
             data: saved.current,
@@ -199,7 +199,7 @@ impl Root {
             return;
         }
         d.requested_at = Instant::now();
-        let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
+        let Ok(scope) = self.svc.store.calendar_cache_scope() else {
             d.reject_scope();
             cx.notify();
             return;
@@ -288,7 +288,7 @@ impl Root {
                 {
                     return;
                 }
-                if this.svc.store.waitlist_cache_scope().ok().as_ref() != Some(&scope) {
+                if this.svc.store.calendar_cache_scope().ok().as_ref() != Some(&scope) {
                     if generation == this.waitlist_generation
                         && let Overlay::Waitlist(d) = &mut this.overlay
                     {
@@ -1095,7 +1095,7 @@ mod tests {
             root.overlay = Overlay::Waitlist(Box::new(Desk {
                 active: true,
                 page: 1,
-                scope: root.svc.store.waitlist_cache_scope().ok(),
+                scope: root.svc.store.calendar_cache_scope().ok(),
                 data: Some(WaitlistPage {
                     page: 1,
                     page_size: 15,
@@ -1170,7 +1170,7 @@ mod tests {
                     imported: vec![],
                     entries: vec![],
                 };
-                let scope = root.svc.store.waitlist_cache_scope().unwrap();
+                let scope = root.svc.store.calendar_cache_scope().unwrap();
                 let mut first_page = history.clone();
                 first_page.page = 1;
                 root.svc
@@ -1250,7 +1250,7 @@ mod tests {
                     duration_minutes: 60,
                     flexible: true,
                 };
-                let scope = root.svc.store.waitlist_cache_scope().unwrap();
+                let scope = root.svc.store.calendar_cache_scope().unwrap();
                 root.svc
                     .store
                     .cache_waitlist(

@@ -4773,7 +4773,9 @@ impl Render for Root {
                         }
                         Overlay::Block(f) => Some(self.render_block_form(f, cx)),
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
-                        Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
+                        Overlay::Inbox(inbox) => {
+                            Some(self.render_inbox(inbox, content_viewport, cx))
+                        }
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
                         Overlay::Loyalty(desk) => {
                             Some(self.render_loyalty(desk, content_viewport, cx))

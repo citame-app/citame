@@ -1,50 +1,17 @@
 use rusqlite::{Connection, TransactionBehavior, params};
 
-use super::{GENERATION_KEY, INITIAL_GENERATION, Store};
+use super::{CALENDAR_VISIBILITY_EPOCH, CalendarCacheScope, Store};
 use crate::error::Result;
 use crate::waitlist::WaitlistPage;
 
 const LEGACY_FIRST_ACTIVE_PAGE: &str = "desk_waitlist";
-const VISIBILITY_EPOCH: &str = "waitlist_visibility_epoch";
 const RECENT_PAGES_PER_TAB: i64 = 7;
-
-#[derive(Debug, PartialEq, Eq)]
-pub struct WaitlistCacheScope {
-    generation: String,
-    calendar: Option<String>,
-    directory: Option<String>,
-    epoch: i64,
-}
-
-impl WaitlistCacheScope {
-    fn read(db: &Connection) -> Result<Self> {
-        Ok(db.query_row(
-            "SELECT coalesce((SELECT value FROM meta WHERE key=?1),?2),
-                    (SELECT value FROM meta WHERE key='calendar_scope'),
-                    (SELECT value FROM meta WHERE key='client_directory'),
-                    coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key=?3),0)",
-            params![GENERATION_KEY, INITIAL_GENERATION, VISIBILITY_EPOCH],
-            |row| {
-                Ok(Self {
-                    generation: row.get(0)?,
-                    calendar: row.get(1)?,
-                    directory: row.get(2)?,
-                    epoch: row.get(3)?,
-                })
-            },
-        )?)
-    }
-
-    pub fn permits_read(&self) -> bool {
-        self.calendar.as_deref() != Some("none") && self.directory.as_deref() != Some("denied")
-    }
-}
 
 #[derive(Debug, Default)]
 pub struct SavedWaitlistPages {
     pub current: Option<WaitlistPage>,
     pub pages: Vec<u32>,
-    pub scope: Option<WaitlistCacheScope>,
+    pub scope: Option<CalendarCacheScope>,
 }
 
 fn prefix(active: bool) -> &'static str {
@@ -68,7 +35,7 @@ pub(super) fn invalidate_visibility(db: &Connection) -> Result<()> {
     db.execute(
         "INSERT INTO meta(key,value) VALUES (?1,'1')
          ON CONFLICT(key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
-        [VISIBILITY_EPOCH],
+        [CALENDAR_VISIBILITY_EPOCH],
     )?;
     Ok(())
 }
@@ -90,13 +57,9 @@ fn saved_pages(db: &Connection, active: bool) -> Result<Vec<u32>> {
 }
 
 impl Store {
-    pub fn waitlist_cache_scope(&self) -> Result<WaitlistCacheScope> {
-        WaitlistCacheScope::read(&self.conn)
-    }
-
     pub fn waitlist_cache(&self, active: bool, page: u32) -> Result<SavedWaitlistPages> {
         let tx = self.conn.unchecked_transaction()?;
-        let scope = WaitlistCacheScope::read(&tx)?;
+        let scope = CalendarCacheScope::read(&tx)?;
         if !scope.permits_read() {
             return Ok(SavedWaitlistPages {
                 scope: Some(scope),
@@ -122,7 +85,7 @@ impl Store {
 
     pub fn cache_waitlist(
         &mut self,
-        scope: &WaitlistCacheScope,
+        scope: &CalendarCacheScope,
         active: bool,
         page: &WaitlistPage,
     ) -> Result<Option<Vec<u32>>> {
@@ -132,7 +95,7 @@ impl Store {
         let tx = self
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if &WaitlistCacheScope::read(&tx)? != scope {
+        if &CalendarCacheScope::read(&tx)? != scope {
             return Ok(None);
         }
         let prefix = prefix(active);
@@ -172,6 +135,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::INITIAL_GENERATION;
     use crate::waitlist::WaitlistPolicy;
 
     fn page(page: u32) -> WaitlistPage {
@@ -200,7 +164,7 @@ mod tests {
                 &serde_json::to_string(&page(1)).unwrap(),
             )
             .unwrap();
-        let scope = store.waitlist_cache_scope().unwrap();
+        let scope = store.calendar_cache_scope().unwrap();
         for number in 2..=10 {
             store.cache_waitlist(&scope, true, &page(number)).unwrap();
         }
@@ -225,7 +189,7 @@ mod tests {
                 .apply_visibility_scopes(Some(true), Some("all"), INITIAL_GENERATION)
                 .unwrap();
             store.set_meta("cursor", cursor).unwrap();
-            let old_scope = store.waitlist_cache_scope().unwrap();
+            let old_scope = store.calendar_cache_scope().unwrap();
             store.cache_waitlist(&old_scope, true, &page(1)).unwrap();
             store.cache_waitlist(&old_scope, false, &page(3)).unwrap();
             assert_eq!(
@@ -234,7 +198,7 @@ mod tests {
                     .unwrap(),
                 cursor != "0"
             );
-            assert!(!store.waitlist_cache_scope().unwrap().permits_read());
+            assert!(!store.calendar_cache_scope().unwrap().permits_read());
             store
                 .apply_visibility_scopes(Some(true), Some("all"), INITIAL_GENERATION)
                 .unwrap();

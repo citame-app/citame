@@ -6,14 +6,6 @@ use crate::error::{CoreError, Result};
 use crate::model::{Appointment, AppointmentStatus, CalendarNoticeKind, OutboxEntry};
 
 impl CalendarNoticeKind {
-    pub(super) fn as_str(self) -> &'static str {
-        match self {
-            Self::New => "new",
-            Self::Rescheduled => "rescheduled",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
     fn parse(value: &str) -> Result<Self> {
         match value {
             "new" => Ok(Self::New),
