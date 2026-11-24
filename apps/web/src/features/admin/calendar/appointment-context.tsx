@@ -18,8 +18,8 @@ import { invalidateCalendarData } from "./cache";
 
 const contextKey = (id: string) => ["admin", "appointment-context", id] as const;
 type NoteValues = { note: string; requested: boolean };
-type NoteDraft = NoteValues & {
-  baseline: NoteValues & { staffId: string; requestedStaffId: string | null };
+type NoteDraft = Partial<NoteValues> & {
+  baseline: { note: string; staffId: string; requestedStaffId: string | null };
 };
 
 export function AppointmentContext({
@@ -117,20 +117,23 @@ function ServiceContext({
       : (defaultRequested ?? badges?.some((b) => b.requested) ?? false),
   };
   const [draft, setDraft] = useState<NoteDraft | null>(null);
-  const noteEdited = draft !== null && draft.note !== draft.baseline.note;
-  const requestEdited = draft !== null && draft.requested !== draft.baseline.requested;
   const values = {
-    note: noteEdited ? draft.note : latest.note,
-    requested: requestEdited ? draft.requested : latest.requested,
+    note: draft?.note ?? latest.note,
+    requested: draft?.requested ?? latest.requested,
   };
-  const noteChanged = noteEdited && values.note.trim() !== latest.note.trim();
-  const requestChanged = values.requested !== latest.requested;
+  const noteChanged = draft?.note !== undefined && values.note.trim() !== latest.note.trim();
+  const requestChanged =
+    draft?.requested !== undefined &&
+    (values.requested !== latest.requested ||
+      (values.requested &&
+        latest.requestedStaffId !== null &&
+        latest.requestedStaffId !== latest.staffId));
   const noteOverlap = noteChanged && draft !== null && draft.baseline.note !== latest.note;
   const requestOverlap =
-    requestChanged &&
-    draft !== null &&
-    (draft.baseline.requestedStaffId !== latest.requestedStaffId ||
+    draft?.requested !== undefined &&
+    ((requestChanged && draft.baseline.requestedStaffId !== latest.requestedStaffId) ||
       (values.requested && draft.baseline.staffId !== latest.staffId));
+  const rowVersion = row?.version ?? 0;
   const refresh = () =>
     Promise.all([
       queries.invalidateQueries({ queryKey: contextKey(appointment.id) }),
@@ -159,10 +162,16 @@ function ServiceContext({
     },
   });
   const conflicted = save.isError && save.error instanceof ApiError && save.error.status === 409;
-  const needsRefresh = conflicted && appointmentVersion <= save.variables.appointment.version;
+  const needsRefresh =
+    conflicted &&
+    (appointmentVersion < save.variables.appointment.version ||
+      (appointmentVersion === save.variables.appointment.version &&
+        rowVersion <= save.variables.context.version));
   // A new professional request only applies to the assignment currently shown in the drawer.
   const awaitingAssignment =
-    requestChanged && values.requested && appointment.version < appointmentVersion;
+    draft?.requested !== undefined &&
+    values.requested &&
+    appointment.version !== appointmentVersion;
   const reviewRequired = noteOverlap || requestOverlap;
   const canSave =
     !readOnly &&
@@ -173,23 +182,29 @@ function ServiceContext({
     (noteChanged || requestChanged);
 
   function update(change: Partial<NoteValues>) {
-    const baseline = draft?.baseline ?? latest;
-    const next = { ...values, ...change };
-    const reviewed = {
+    const note =
+      change.note === undefined
+        ? draft?.note
+        : change.note === latest.note
+          ? undefined
+          : change.note;
+    const requested =
+      change.requested === undefined
+        ? draft?.requested
+        : change.requested === latest.requested
+          ? undefined
+          : change.requested;
+    const nextBaseline = {
       ...latest,
-      ...((noteEdited && change.note === undefined) || noteOverlap ? { note: baseline.note } : {}),
-      ...((requestEdited && change.requested === undefined) || requestOverlap
-        ? {
-            requested: baseline.requested,
-            requestedStaffId: baseline.requestedStaffId,
-            staffId: baseline.staffId,
-          }
+      ...(draft?.note !== undefined ? { note: draft.baseline.note } : {}),
+      ...(draft?.requested !== undefined
+        ? { requestedStaffId: draft.baseline.requestedStaffId, staffId: draft.baseline.staffId }
         : {}),
     };
     setDraft(
-      next.note === reviewed.note && next.requested === reviewed.requested
+      note === undefined && requested === undefined
         ? null
-        : { ...next, baseline: reviewed },
+        : { note, requested, baseline: nextBaseline },
     );
     if (save.isError && !conflicted) save.reset();
   }
@@ -263,7 +278,11 @@ function ServiceContext({
           variant="secondary"
           disabled={refreshing || writePending}
           onClick={() => {
-            setDraft({ ...values, baseline: latest });
+            setDraft({
+              note: noteChanged ? values.note : undefined,
+              requested: requestChanged ? values.requested : undefined,
+              baseline: latest,
+            });
             save.reset();
           }}
         >
@@ -282,11 +301,11 @@ function ServiceContext({
               {
                 appointment: {
                   id: appointment.id,
-                  version: Math.max(appointment.version, appointmentVersion),
+                  version: appointmentVersion,
                 },
                 context: {
                   servicePosition: position,
-                  version: row?.version ?? 0,
+                  version: rowVersion,
                   ...(requestChanged ? { requested: values.requested } : {}),
                   internalNote: values.note,
                 },

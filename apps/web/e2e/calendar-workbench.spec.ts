@@ -469,8 +469,8 @@ test("service badges preserve private notes, explicit professional preference an
   await expect(page.getByRole("img", { name: "Live updates connected" })).toBeVisible();
   const card = page.getByRole("button", { name: /10:20.*11:20.*Invoiced in Booksy/ }).first();
   await expect(card.getByRole("img", { name: "Internal notes", exact: true })).toBeVisible();
-  const contextResponse = page.waitForResponse(
-    (r) => r.url().endsWith("/context") && r.request().method() === "GET",
+  const contextRequest = page.waitForRequest(
+    (r) => r.url().endsWith("/context") && r.method() === "GET",
   );
   await card.click();
   const dialog = page.getByRole("dialog", { name: "Cliente de demostración", exact: true });
@@ -484,9 +484,10 @@ test("service badges preserve private notes, explicit professional preference an
   const save = dialog.getByRole("button", { name: "Save service details", exact: true });
   const original = await note.inputValue();
   await note.fill(`${original} · synthetic verification`);
-  const context = await contextResponse;
+  const endpoint = new URL((await contextRequest).url()).pathname;
+  const context = await page.request.get(endpoint);
+  expect(context.ok(), await context.text()).toBe(true);
   const saved = await context.json();
-  const endpoint = new URL(context.url()).pathname;
   const headers = { origin: baseURL ?? "http://localhost:4273" };
   const other = await page.request.patch(endpoint, {
     headers,
@@ -513,7 +514,7 @@ test("service badges preserve private notes, explicit professional preference an
   await save.click();
   const committed = await firstSave;
   expect(committed.status()).toBe(200);
-  expect((await committed.json()).rows[0]).toMatchObject({
+  expect((await (await page.request.get(endpoint)).json()).rows[0]).toMatchObject({
     requestedStaffId: expect.any(String),
     internalNote: `${original} · synthetic verification`,
   });

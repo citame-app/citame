@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import type { AppointmentContextRow, CalendarAppointment } from "@sob/contracts";
+import { useQueryClient } from "@tanstack/react-query";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { useState } from "react";
 import { renderApp } from "../../../../test/render";
@@ -137,6 +138,7 @@ function LiveUpdateHarness({
   remoteStaff?: string;
 }) {
   const [version, setVersion] = useState(appointment.version);
+  const queries = useQueryClient();
   return (
     <>
       <AppointmentDrawer
@@ -152,7 +154,16 @@ function LiveUpdateHarness({
         ownStaffId={null}
         now={NOW}
       />
-      <button type="button" onClick={() => setVersion(4)}>
+      <button
+        type="button"
+        onClick={() => {
+          setVersion(4);
+          queries.setQueryData(["admin", "appointment-context", appointment.id], {
+            ...serviceContext,
+            appointmentVersion: 4,
+          });
+        }}
+      >
         Receive remote calendar update
       </button>
     </>
@@ -290,7 +301,7 @@ describe("AppointmentDrawer", () => {
       source: "citame",
       sourceRef: null,
     };
-    serviceContext = { appointmentVersion: 4, rows: [latest] };
+    serviceContext = { appointmentVersion: 3, rows: [latest] };
     fireEvent.click(screen.getByRole("button", { name: "Reload latest" }));
     await screen.findByText("Latest note from Desktop");
     expect(note).toHaveValue("Keep my colour notes");
@@ -304,7 +315,7 @@ describe("AppointmentDrawer", () => {
     fireEvent.click(save());
     await waitFor(() => expect(patches).toHaveLength(2));
     expect(patches[1]).toEqual({
-      appointmentVersion: 4,
+      appointmentVersion: 3,
       servicePosition: 0,
       version: 1,
       internalNote: "Keep my colour notes",
@@ -317,6 +328,19 @@ describe("AppointmentDrawer", () => {
       name: "Client requested a specific professional",
     });
     fireEvent.click(requested);
+    serviceContext.rows = [
+      {
+        servicePosition: 0,
+        version: 1,
+        requestedStaffId: STAFF,
+        internalNote: null,
+        customerComment: null,
+        paid: null,
+        invoiced: null,
+        source: "citame",
+        sourceRef: null,
+      },
+    ];
     fireEvent.click(screen.getByText("Receive remote calendar update"));
     expect(
       screen.getByText("The assigned professional changed. Confirm whom this request applies to."),
@@ -330,7 +354,7 @@ describe("AppointmentDrawer", () => {
         {
           appointmentVersion: 4,
           servicePosition: 0,
-          version: 0,
+          version: 1,
           requested: true,
           internalNote: "",
         },
