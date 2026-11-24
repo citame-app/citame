@@ -9,7 +9,9 @@ use crate::error::{CoreError, Result};
 use crate::intake::IntakeResponse;
 use crate::intake::IntakeSelection;
 use crate::model::AppointmentService;
-use crate::ops::{NewAppointment, reviewed_service_terms, validate_contact};
+use crate::ops::{
+    NewAppointment, require_calendar_write, reviewed_service_terms, validate_contact,
+};
 use crate::store::Store;
 use crate::sync::TransportError;
 pub mod visit;
@@ -497,6 +499,7 @@ impl ReviewedBooking {
 
     /// Keep an opaque origin marker only. The booking and its responses stay in memory.
     pub fn mark_local_dispatch(&self, store: &mut Store) -> Result<()> {
+        require_calendar_write(store, self.terms.staff_id())?;
         store.mark_local_booking_dispatch(&self.terms.id, &self.terms.generation)
     }
 
@@ -581,10 +584,13 @@ impl BookingAttempt {
     pub fn check_before_dispatch(&self, store: &mut Store) -> Result<()> {
         match self {
             Self::Single(booking) => booking.mark_local_dispatch(store),
-            Self::Series(series) => store.mark_local_bookings_dispatch(
-                series.appointment_ids.iter().map(String::as_str),
-                &series.packet.desktop_generation,
-            ),
+            Self::Series(series) => {
+                require_calendar_write(store, &series.packet.fields.staff_id)?;
+                store.mark_local_bookings_dispatch(
+                    series.appointment_ids.iter().map(String::as_str),
+                    &series.packet.desktop_generation,
+                )
+            }
         }
     }
 }

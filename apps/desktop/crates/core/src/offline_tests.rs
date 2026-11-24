@@ -1228,6 +1228,70 @@ fn a_personal_calendar_rejects_reassigning_an_appointment_outside_its_scope() {
 }
 
 #[test]
+fn appointment_creation_cancellation_and_outcomes_respect_current_calendar_access() {
+    use crate::error::CoreError;
+
+    let mut store = seeded();
+    let now = at("2026-03-09T16:00:00Z");
+    let mut booking = new_appt("2026-03-09T18:00:00Z");
+    booking.staff_id = ANA.into();
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+
+    assert!(matches!(
+        create_appointment(&mut store, booking.clone()),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        set_appointment_status(&mut store, EXISTING, AppointmentStatus::Completed, now),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    store.set_meta("calendar_scope", BEA).unwrap();
+    assert!(matches!(
+        create_appointment(&mut store, booking),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+    assert!(store.outbox(10).unwrap().is_empty());
+}
+
+#[test]
+fn open_booking_review_rechecks_access_before_dispatch() {
+    use crate::booking::{BookingAttempt, BookingTerms};
+    use crate::error::CoreError;
+    use crate::intake::IntakeSelection;
+
+    let mut store = seeded();
+    let terms = BookingTerms::prepare(&store, new_appt("2026-03-09T18:00:00Z"), None).unwrap();
+    let reviewed = terms.reviewed(
+        "intake".into(),
+        IntakeSelection {
+            saved: Default::default(),
+            inline: Default::default(),
+        },
+    );
+    let packet = BookingAttempt::Single(reviewed);
+
+    store.set_meta("viewer_edit_calendar", "0").unwrap();
+    assert!(matches!(
+        packet.check_before_dispatch(&mut store),
+        Err(CoreError::AppointmentScopeDenied)
+    ));
+
+    store.set_meta("viewer_edit_calendar", "1").unwrap();
+    packet.check_before_dispatch(&mut store).unwrap();
+}
+
+#[test]
 fn queued_edits_of_one_appointment_carry_incrementing_versions() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
