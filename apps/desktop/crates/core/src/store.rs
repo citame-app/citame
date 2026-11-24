@@ -1399,6 +1399,15 @@ impl Store {
         }
         Self::retire_confirmed_outbox(&tx, next_cursor)?;
         if complete {
+            if metadata.generation.is_some() {
+                tx.execute(
+                    "INSERT OR IGNORE INTO meta (key, value)
+                     SELECT 'appointment_review_head:' || mutation_id, ?1 FROM conflict
+                     WHERE kind IN ('appointment.reschedule','appointment.cancel','appointment.set_status')
+                     AND reason <> ?2 AND resolved_at IS NULL",
+                    params![next_cursor, RESTORED_HISTORY],
+                )?;
+            }
             tx.execute(
                 "INSERT OR IGNORE INTO meta (key,value) VALUES ('calendar_snapshot_complete','1')",
                 [],
@@ -2095,9 +2104,15 @@ impl Store {
             [],
         )?;
         tx.execute(
-            "DELETE FROM meta WHERE (key GLOB 'note_review_head:*' OR key GLOB 'appointment_review_head:*')
-             AND CAST(value AS INTEGER) <= ?1",
+            "DELETE FROM meta WHERE key GLOB 'note_review_head:*' AND CAST(value AS INTEGER) <= ?1",
             [cursor],
+        )?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'appointment_review_head:*'
+             AND NOT EXISTS (SELECT 1 FROM conflict
+                WHERE mutation_id = substr(meta.key, length('appointment_review_head:') + 1)
+                AND resolved_at IS NULL)",
+            [],
         )?;
         Ok(())
     }
@@ -2108,19 +2123,44 @@ impl Store {
         mutation_id: &str,
         appointment_id: &str,
     ) -> Result<bool> {
-        let current = self.get_meta(&format!("appointment_review_head:{mutation_id}"))?;
-        let legacy_note = self.get_meta(&format!("note_review_head:{mutation_id}"))?;
-        let required = current
-            .or(legacy_note)
+        self.review_checkpoint_ready(
+            &format!("appointment_review_head:{mutation_id}"),
+            appointment_id,
+            false,
+        )
+    }
+
+    pub fn appointment_note_review_ready(
+        &self,
+        mutation_id: &str,
+        appointment_id: &str,
+    ) -> Result<bool> {
+        self.review_checkpoint_ready(
+            &format!("note_review_head:{mutation_id}"),
+            appointment_id,
+            true,
+        )
+    }
+
+    fn review_checkpoint_ready(
+        &self,
+        key: &str,
+        appointment_id: &str,
+        allow_missing: bool,
+    ) -> Result<bool> {
+        let required = self
+            .get_meta(key)?
             .map(|value| {
                 value.parse::<i64>().map_err(|_| {
                     CoreError::Protocol("Invalid appointment conflict checkpoint".into())
                 })
             })
-            .transpose()?
-            .unwrap_or_default();
-        Ok(self.cursor()? >= required
-            && self.appointment_edit_sync(appointment_id)? != AppointmentEditSync::Pending)
+            .transpose()?;
+        let cursor = self.cursor()?;
+        Ok(
+            required.map_or(allow_missing, |required| cursor >= required)
+                && self.appointment_edit_sync(appointment_id)? != AppointmentEditSync::Pending,
+        )
     }
 
     pub(crate) fn calendar_outbox(&self) -> Result<Vec<OutboxEntry>> {

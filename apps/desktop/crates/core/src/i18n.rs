@@ -2386,6 +2386,7 @@ keys! {
     ConflictAppointmentAction => ("Choose the action from this conflict or keep the saved appointment.", "Elige la acción de este conflicto o conserva la cita guardada."),
     ConflictAppointmentKeepSaved => ("Keep saved appointment", "Conservar cita guardada"),
     ConflictAppointmentProposedNote => ("Note from the rejected change", "Nota del cambio rechazado"),
+    ConflictAppointmentCopyNote => ("Copy proposed note", "Copiar nota propuesta"),
     ConflictOther => ("Change", "Cambio"),
     UnknownClient => ("Unknown client", "Cliente desconocido"),
     ErrPickService => ("Pick at least one service.", "Elige al menos un servicio."),

@@ -33,7 +33,7 @@ Show the local version while a calendar edit waits for its receipt and the displ
 
 An acknowledged time block remains visible and blocks booking. Editing it again requires the authoritative block revision, because the server can adjust the device's edit timestamp. The display name of a newly booked client stays on the local appointment even if the client directory is no longer available to that account.
 
-Desktop records the rejection head for existing appointment conflicts, including dependent edits, and waits for that cursor before opening review. Explicit retry uses the saved appointment revision shown during review and the original action. A move can choose a new slot or professional. An attendance retry must use the requested outcome. The saved appointment can also be kept by dismissing the local proposal.
+Desktop records the rejection head for existing appointment conflicts, including dependent edits, and waits for that cursor before opening review. A scheduling conflict saved by an older build needs a completed pull before review. Explicit retry uses the saved appointment revision shown during review and the original action. A move can choose a new slot or professional. An attendance retry must use the requested outcome. The saved appointment can also be kept by dismissing the local proposal.
 
 Clients that understand the `unknown_booksy_payment` appointment billing hold request
 `booksyPaymentReview=1` on pull. Clients using the original reason set receive an

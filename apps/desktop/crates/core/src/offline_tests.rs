@@ -700,7 +700,7 @@ fn appointment_notes_survive_restart_and_keep_the_cloud_note_on_conflict() {
     assert_eq!(retry.payload["version"], 4);
     assert!(
         !store
-            .appointment_conflict_review_ready(&sent[1].mutation_id, EXISTING)
+            .appointment_note_review_ready(&sent[1].mutation_id, EXISTING)
             .unwrap()
     );
 
@@ -1961,6 +1961,20 @@ fn a_rejected_move_can_be_rescheduled_again_with_the_fresh_server_version() {
         at("2026-03-09T15:00:00Z")
     );
     assert!(day_view(&s, day("2026-03-09")).unwrap().columns[0].items[0].conflict);
+    assert!(matches!(
+        review_appointment_conflict(&s, &entry.mutation_id),
+        Err(crate::error::CoreError::AppointmentConflictRefreshRequired)
+    ));
+    let cursor = s.cursor().unwrap();
+    s.apply_sync_page(
+        &[],
+        cursor,
+        false,
+        true,
+        &[],
+        Some(crate::store::INITIAL_GENERATION),
+    )
+    .unwrap();
     let reviewed = review_appointment_conflict(&s, &entry.mutation_id).unwrap();
     queue_reviewed_appointment_edit(
         &mut s,

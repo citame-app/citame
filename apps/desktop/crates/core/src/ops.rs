@@ -758,9 +758,6 @@ pub enum AppointmentConflictAction {
 
 impl AppointmentConflictAction {
     pub fn requested(conflict: &crate::model::Conflict) -> Option<Self> {
-        if conflict.requires_restored_review() {
-            return None;
-        }
         match conflict.kind.as_str() {
             "appointment.reschedule" => Some(Self::Move),
             "appointment.cancel" => Some(Self::Cancel),
@@ -784,8 +781,10 @@ impl AppointmentConflictAction {
 
 pub struct AppointmentConflictReview {
     pub appointment: Appointment,
-    pub conflict: crate::model::Conflict,
     pub action: AppointmentConflictAction,
+    pub starts_at: Option<DateTime<Utc>>,
+    pub staff_id: Option<String>,
+    pub note: Option<String>,
 }
 
 pub fn review_appointment_conflict(
@@ -795,15 +794,23 @@ pub fn review_appointment_conflict(
     store.read_snapshot(|store| {
         let conflict = store
             .conflict(mutation_id)?
+            .filter(|conflict| !conflict.requires_restored_review())
             .ok_or_else(|| CoreError::NotFound(format!("open conflict {mutation_id}")))?;
         let action = AppointmentConflictAction::requested(&conflict)
             .ok_or(CoreError::AppointmentConflictActionMismatch)?;
         require_appointment_review_checkpoint(store, &conflict)?;
         let appointment = writable_appointment(store, &conflict.entity_id)?;
+        let starts_at = conflict.payload["startsAt"]
+            .as_str()
+            .and_then(|value| value.parse().ok());
+        let staff_id = conflict.payload["staffId"].as_str().map(str::to_owned);
+        let note = conflict.payload["notes"].as_str().map(str::to_owned);
         Ok(AppointmentConflictReview {
             appointment,
-            conflict,
             action,
+            starts_at,
+            staff_id,
+            note,
         })
     })
 }
@@ -866,8 +873,9 @@ pub fn queue_reviewed_appointment_edit(
             })
             .transpose()?;
         if let Some(conflict) = &conflict {
-            if AppointmentConflictAction::requested(conflict)
-                != Some(AppointmentConflictAction::of_edit(&edit))
+            if conflict.requires_restored_review()
+                || AppointmentConflictAction::requested(conflict)
+                    != Some(AppointmentConflictAction::of_edit(&edit))
             {
                 return Err(CoreError::AppointmentConflictActionMismatch);
             }
@@ -876,17 +884,14 @@ pub fn queue_reviewed_appointment_edit(
         if effective_appointment(store, id)?.is_none_or(|a| !reviewed.matches(&a)) {
             return Err(CoreError::AppointmentChanged);
         }
+        let notes = conflict.as_ref().and_then(|c| c.payload["notes"].as_str());
         match edit {
             AppointmentEdit::Move {
                 starts_at,
                 staff_id,
-            } => {
-                let notes = conflict.as_ref().and_then(|c| c.payload["notes"].as_str());
-                queue_reschedule(store, id, starts_at, staff_id, notes)
-            }
+            } => queue_reschedule(store, id, starts_at, staff_id, notes),
             AppointmentEdit::Cancel => cancel_appointment(store, id),
             AppointmentEdit::Outcome { status, now } => {
-                let notes = conflict.as_ref().and_then(|c| c.payload["notes"].as_str());
                 queue_appointment_status(store, id, status, now, notes)
             }
         }?;
@@ -1009,7 +1014,7 @@ pub fn queue_appointment_notes(
             )));
         }
         if let Some(mutation_id) = conflict_to_resolve
-            && !store.appointment_conflict_review_ready(mutation_id, id)?
+            && !store.appointment_note_review_ready(mutation_id, id)?
         {
             return Err(CoreError::AppointmentNoteRefreshRequired);
         }

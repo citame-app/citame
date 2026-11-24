@@ -153,7 +153,7 @@ impl Root {
         if !self
             .svc
             .store
-            .appointment_conflict_review_ready(&conflict.mutation_id, &conflict.entity_id)
+            .appointment_note_review_ready(&conflict.mutation_id, &conflict.entity_id)
             .unwrap_or(false)
         {
             self.explain_note_review_wait(cx);
