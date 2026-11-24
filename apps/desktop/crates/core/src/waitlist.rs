@@ -4,6 +4,32 @@ use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaitlistRange {
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitlistView {
+    Calendar(WaitlistRange),
+    Active,
+    History,
+}
+
+impl WaitlistView {
+    pub fn active(self) -> bool {
+        self != Self::History
+    }
+
+    pub fn range(self) -> Option<WaitlistRange> {
+        match self {
+            Self::Calendar(range) => Some(range),
+            Self::Active | Self::History => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitlistPage {

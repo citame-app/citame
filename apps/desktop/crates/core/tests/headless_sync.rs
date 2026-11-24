@@ -40,7 +40,8 @@ use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
 use sob_core::store::{AssignmentWork, SalonConfigurationWork, ServiceAssignment, Store};
 use sob_core::sync::{self, Transport, TransportError};
 use sob_core::waitlist::{
-    AcceptOffer, WaitlistPage, WaitlistPolicy, WaitlistRequest, WaitlistState,
+    AcceptOffer, WaitlistPage, WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState,
+    WaitlistView,
 };
 
 #[path = "support/proxy_device.rs"]
@@ -6772,7 +6773,20 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
     let date = free_slot(&desk, &catalog.staff)
         .with_timezone(&salon_tz(&desk.store).unwrap())
         .date_naive();
-    let policy = desk.transport.waitlist(1, true).unwrap().policy;
+    let range = WaitlistRange {
+        from: date,
+        to: date,
+    };
+    let later = date + chrono::Duration::days(2);
+    let other = WaitlistRange {
+        from: later,
+        to: later,
+    };
+    let policy = desk
+        .transport
+        .waitlist(1, WaitlistView::Active)
+        .unwrap()
+        .policy;
     if !policy.enabled {
         let updated = desk
             .transport
@@ -6787,6 +6801,8 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
     }
     let client = ops::create_client(&mut desk.store, "Native waitlist test", None).unwrap();
     desk.sync();
+    let visible_before = desk.transport.waitlist_count(range).unwrap();
+    let other_before = desk.transport.waitlist_count(other).unwrap();
     let draft = WaitlistRequest {
         client_id: client,
         staff_id: Some(catalog.staff),
@@ -6801,9 +6817,20 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
     let created = desk.transport.join_waitlist(&draft).unwrap();
     assert_eq!(created.state, WaitlistState::Waiting);
     assert_eq!(desk.transport.join_waitlist(&draft).unwrap().id, created.id);
+    assert_eq!(
+        desk.transport.waitlist_count(range).unwrap(),
+        visible_before + 1
+    );
+    assert_eq!(desk.transport.waitlist_count(other).unwrap(), other_before);
+    let ranged = desk
+        .transport
+        .waitlist(1, WaitlistView::Calendar(range))
+        .unwrap();
+    assert_eq!(ranged.total, visible_before + 1);
+    assert!(ranged.entries.iter().any(|row| row.id == created.id));
     assert!(
         desk.transport
-            .waitlist(1, true)
+            .waitlist(1, WaitlistView::Active)
             .unwrap()
             .entries
             .iter()
@@ -6816,10 +6843,14 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
             .state,
         WaitlistState::Cancelled
     );
+    assert_eq!(
+        desk.transport.waitlist_count(range).unwrap(),
+        visible_before
+    );
     assert!(
         !desk
             .transport
-            .waitlist(1, true)
+            .waitlist(1, WaitlistView::Active)
             .unwrap()
             .entries
             .iter()
@@ -6827,7 +6858,7 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
     );
     assert!(
         desk.transport
-            .waitlist(1, false)
+            .waitlist(1, WaitlistView::History)
             .unwrap()
             .entries
             .iter()
@@ -6843,7 +6874,7 @@ fn native_imported_waitlist_follows_the_web_policy_through_the_proxy() {
     let mut browser = Device::sign_in();
     browser.sync();
     let haircut = catalog(&browser).haircut;
-    let list = device.transport.waitlist(1, true).unwrap();
+    let list = device.transport.waitlist(1, WaitlistView::Active).unwrap();
     let source = list
         .imported
         .iter()
@@ -6883,12 +6914,19 @@ fn native_imported_waitlist_follows_the_web_policy_through_the_proxy() {
         device.transport.join_waitlist(&draft),
         Err(TransportError::BadRequest(message)) if message.contains("Pause automatic offers")
     ));
-    let refresh = device.transport.waitlist(1, true).unwrap();
+    let refresh = device.transport.waitlist(1, WaitlistView::Active).unwrap();
     assert_eq!(refresh.policy.version, enabled.version);
     assert!(refresh.imported.iter().any(|row| row == source));
 
     let paused = set_offers(&enabled, false);
-    assert!(!device.transport.waitlist(1, true).unwrap().policy.enabled);
+    assert!(
+        !device
+            .transport
+            .waitlist(1, WaitlistView::Active)
+            .unwrap()
+            .policy
+            .enabled
+    );
     device.assert_import_requires_staff_preference(&draft);
     let saved = device.transport.join_waitlist(&draft).unwrap();
     assert_eq!(saved.state, WaitlistState::Waiting);
@@ -6900,7 +6938,10 @@ fn native_imported_waitlist_follows_the_web_policy_through_the_proxy() {
     assert!(saved.offer.is_none());
 
     let assert_linked_entry = || {
-        for refreshed in [device.transport.waitlist(1, true).unwrap(), web_list()] {
+        for refreshed in [
+            device.transport.waitlist(1, WaitlistView::Active).unwrap(),
+            web_list(),
+        ] {
             assert!(!refreshed.imported.iter().any(|row| row.id == import_id));
             let client_entries = refreshed
                 .entries
@@ -6950,7 +6991,11 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
     );
     let service_id = service["id"].as_str().unwrap();
     let tz = salon_tz(&desk.store).unwrap();
-    let policy = desk.transport.waitlist(1, true).unwrap().policy;
+    let policy = desk
+        .transport
+        .waitlist(1, WaitlistView::Active)
+        .unwrap()
+        .policy;
     if !policy.enabled {
         desk.transport
             .update_waitlist_policy(&WaitlistPolicy {
@@ -6994,7 +7039,7 @@ fn native_waitlist_reviews_accepts_and_requeues_real_offers() {
             next_probe = Instant::now() + Duration::from_secs(1);
             offers = desk
                 .transport
-                .waitlist(1, true)
+                .waitlist(1, WaitlistView::Active)
                 .unwrap()
                 .entries
                 .into_iter()

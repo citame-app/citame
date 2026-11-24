@@ -4,7 +4,7 @@ use sob_core::store::CalendarCacheScope;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
     AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistPage,
-    WaitlistPolicy, WaitlistRequest, WaitlistState,
+    WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState, WaitlistView,
 };
 use std::sync::Arc;
 
@@ -12,8 +12,19 @@ mod review;
 #[cfg(test)]
 pub(super) use review::show_intake_test_offer;
 
+const COUNT_REFRESH_INTERVAL: Duration = Duration::from_secs(15);
+
+#[derive(Default)]
+pub(super) struct WaitlistCount {
+    query: Option<(WaitlistRange, CalendarCacheScope)>,
+    total: Option<u32>,
+    revision: Option<i64>,
+    requested_at: Option<Instant>,
+    request: Option<Arc<()>>,
+}
+
 pub(super) struct Desk {
-    active: bool,
+    view: WaitlistView,
     page: u32,
     scope: Option<CalendarCacheScope>,
     data: Option<WaitlistPage>,
@@ -131,9 +142,140 @@ enum ReloadNotice {
 }
 
 impl Root {
+    fn calendar_waitlist_range(&self) -> WaitlistRange {
+        if !matches!(
+            self.calendar_mode,
+            CalendarMode::Day | CalendarMode::Resources
+        ) && let Some((first, last)) = self.period_views.first().zip(self.period_views.last())
+        {
+            return WaitlistRange {
+                from: first.date,
+                to: last.date,
+            };
+        }
+        WaitlistRange {
+            from: self.date,
+            to: self.date,
+        }
+    }
+
+    pub(super) fn can_view_waitlist(&self) -> bool {
+        self.calendar_edits_allowed && self.directory_enabled()
+    }
+
+    pub(super) fn waitlist_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let range = self.calendar_waitlist_range();
+        let total = self
+            .waitlist_count
+            .query
+            .as_ref()
+            .filter(|(shown, _)| *shown == range)
+            .and(self.waitlist_count.total);
+        let label = total.map_or_else(
+            || self.t(Key::Waitlist).to_owned(),
+            |total| {
+                i18n::fill(
+                    self.t(Key::WaitlistCalendarCount),
+                    &[("n", &total.to_string())],
+                )
+            },
+        );
+        self.button(
+            "waitlist",
+            label,
+            Kind::Ghost,
+            cx.listener(move |root, _, _, cx| {
+                root.open_waitlist(WaitlistView::Calendar(range), 1, cx)
+            }),
+        )
+    }
+
+    pub(super) fn refresh_waitlist_count(&mut self, status: &SyncStatus, cx: &mut Context<Self>) {
+        let range = self.calendar_waitlist_range();
+        let query = self
+            .can_view_waitlist()
+            .then(|| self.svc.store.calendar_cache_scope().ok())
+            .flatten()
+            .map(|scope| (range, scope));
+        let count = &mut self.waitlist_count;
+        if count.query != query {
+            *count = WaitlistCount {
+                total: query.as_ref().and_then(|(_, scope)| {
+                    self.svc
+                        .store
+                        .waitlist_cache(WaitlistView::Calendar(range), 1)
+                        .ok()
+                        .filter(|saved| saved.scope.as_ref() == Some(scope))
+                        .and_then(|saved| saved.current.map(|page| page.total))
+                }),
+                query,
+                ..Default::default()
+            };
+            cx.notify();
+        }
+        if status.connectivity != Connectivity::Online {
+            count.revision = None;
+            return;
+        }
+        let Some(transport) = self.svc.transport().filter(|_| count.query.is_some()) else {
+            return;
+        };
+        let revision = self.svc.store.live_view_revision("waitlist").ok();
+        if count.request.is_some()
+            || (count.revision == revision
+                && count
+                    .requested_at
+                    .is_some_and(|last| last.elapsed() < COUNT_REFRESH_INTERVAL))
+        {
+            return;
+        }
+        let request = Arc::new(());
+        count.request = Some(request.clone());
+        count.revision = revision;
+        count.requested_at = Some(Instant::now());
+        let session = self.svc.session.clone();
+        cx.spawn(async move |root, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { transport.waitlist_count(range) })
+                .await;
+            let _ = root.update(cx, |root, cx| {
+                if !Arc::ptr_eq(&session, &root.svc.session)
+                    || !root
+                        .waitlist_count
+                        .request
+                        .as_ref()
+                        .is_some_and(|pending| Arc::ptr_eq(pending, &request))
+                {
+                    return;
+                }
+                root.waitlist_count.request = None;
+                if !root.can_view_waitlist()
+                    || root.calendar_waitlist_range() != range
+                    || root.waitlist_count.query.as_ref().is_none_or(|(_, scope)| {
+                        root.svc.store.calendar_cache_scope().ok().as_ref() != Some(scope)
+                    })
+                {
+                    return;
+                }
+                match result {
+                    Ok(total) => root.waitlist_count.total = Some(total),
+                    Err(TransportError::Unauthorized | TransportError::Forbidden(_)) => {
+                        root.waitlist_count.total = None;
+                        let _ = root.svc.store.clear_waitlist_cache();
+                    }
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_open_waitlist_scope(&mut self) {
         if let Overlay::Waitlist(desk) = &self.overlay
-            && self.svc.store.calendar_cache_scope().ok() != desk.scope
+            && (!self.can_view_waitlist()
+                || self.svc.store.calendar_cache_scope().ok() != desk.scope)
         {
             self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
             self.overlay = Overlay::None;
@@ -155,7 +297,7 @@ impl Root {
         }
     }
 
-    pub(super) fn open_waitlist(&mut self, active: bool, page: u32, cx: &mut Context<Self>) {
+    pub(super) fn open_waitlist(&mut self, view: WaitlistView, page: u32, cx: &mut Context<Self>) {
         if matches!(&self.overlay, Overlay::Waitlist(d) if d.busy) {
             return;
         }
@@ -163,10 +305,10 @@ impl Root {
         let saved = self
             .svc
             .store
-            .waitlist_cache(active, page)
+            .waitlist_cache(view, page)
             .unwrap_or_default();
         self.overlay = Overlay::Waitlist(Box::new(Desk {
-            active,
+            view,
             page,
             scope: saved
                 .scope
@@ -227,7 +369,7 @@ impl Root {
         self.waitlist_generation = self.waitlist_generation.wrapping_add(1);
         let generation = self.waitlist_generation;
         let session = self.svc.session.clone();
-        let (active, page) = (d.active, d.page);
+        let (view, page) = (d.view, d.page);
         d.observed_revision = self
             .svc
             .store
@@ -257,13 +399,13 @@ impl Root {
                             Ok(response) => Ok(Some(response.appointment)),
                             Err(AcceptOfferError::Transport(error)) => Err(error),
                             Err(AcceptOfferError::IntakeChanged) => {
-                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::IntakeChanged));
+                                return (false, None, transport.waitlist(page, view), Some(ReloadNotice::IntakeChanged));
                             }
                             Err(AcceptOfferError::ResponseLimit) => {
-                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::OfferRejected(Key::WaitlistResponseLimit)));
+                                return (false, None, transport.waitlist(page, view), Some(ReloadNotice::OfferRejected(Key::WaitlistResponseLimit)));
                             }
                             Err(AcceptOfferError::Rejected) => {
-                                return (false, None, transport.waitlist(page, active), Some(ReloadNotice::OfferRejected(Key::WaitlistOfferRejected)));
+                                return (false, None, transport.waitlist(page, view), Some(ReloadNotice::OfferRejected(Key::WaitlistOfferRejected)));
                             }
                         },
                     };
@@ -272,13 +414,13 @@ impl Root {
                         Err(TransportError::BadRequest(_))
                             if matches!(&action, Action::Join(input) if input.imported_entry_id.is_some()) =>
                         {
-                            return (false, None, transport.waitlist(page, active), Some(ReloadNotice::ImportedRejected));
+                            return (false, None, transport.waitlist(page, view), Some(ReloadNotice::ImportedRejected));
                         }
                         Err(e) => return (false, None, Err(e), None),
                     };
-                    let mut result = transport.waitlist(page, active);
+                    let mut result = transport.waitlist(page, view);
                     if page > 1 && result.as_ref().is_ok_and(|page| page.entries.is_empty()) {
-                        result = transport.waitlist(1, active);
+                        result = transport.waitlist(1, view);
                     }
                     (changed, booked, result, None)
                 })
@@ -343,7 +485,7 @@ impl Root {
                 }
                 match result {
                     Ok(data) => {
-                        match this.svc.store.cache_waitlist(&scope, active, &data) {
+                        match this.svc.store.cache_waitlist(&scope, view, &data) {
                             Ok(Some(pages)) => d.saved_pages = pages,
                             Ok(None) => {
                                 d.reject_scope();
@@ -386,7 +528,16 @@ impl Root {
         }
         let date = imported
             .as_ref()
-            .map_or(self.date, |row| row.requested_date)
+            .map_or_else(
+                || match &self.overlay {
+                    Overlay::Waitlist(desk) => desk
+                        .view
+                        .range()
+                        .map_or(self.date, |range| range.from.max(today)),
+                    _ => self.date,
+                },
+                |row| row.requested_date,
+            )
             .to_string();
         let client_search = cx.new(|cx| TextField::new(self.t(Key::SearchClients), false, cx));
         let service_search =
@@ -507,12 +658,19 @@ impl Root {
         self.waitlist_request(Action::Join(request), cx);
     }
 
-    pub(super) fn render_waitlist(&self, desk: &Desk, cx: &mut Context<Self>) -> gpui::Div {
+    pub(super) fn render_waitlist(
+        &self,
+        desk: &Desk,
+        viewport: gpui::Size<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let online = self.status.connectivity == Connectivity::Online;
         let can_write = !desk.busy && !desk.cached && online;
         let can_join = can_write && desk.data.as_ref().is_some_and(|data| data.policy.enabled);
         let today = self.calendar_now.with_timezone(&self.tz).date_naive();
-        let active = desk.active;
+        let view = desk.view;
+        let calendar_view = WaitlistView::Calendar(self.calendar_waitlist_range());
+        let active = view.active();
         let page = desk.page;
         let (previous, next) = desk.adjacent_pages(online);
         let rows = div()
@@ -540,22 +698,48 @@ impl Root {
             div()
                 .flex()
                 .flex_col()
+                .min_h_0()
                 .gap_2()
                 .child(
                     div()
                         .flex()
+                        .flex_wrap()
                         .gap_2()
+                        .child(self.button(
+                            "wl-calendar",
+                            self.t(Key::WaitlistThisPeriod),
+                            if view.range().is_some() {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(move |this, _, _, cx| {
+                                this.open_waitlist(calendar_view, 1, cx)
+                            }),
+                        ))
                         .child(self.button(
                             "wl-active",
                             self.t(Key::WaitlistActive),
-                            if active { Kind::Primary } else { Kind::Ghost },
-                            cx.listener(|this, _, _, cx| this.open_waitlist(true, 1, cx)),
+                            if view == WaitlistView::Active {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(|this, _, _, cx| {
+                                this.open_waitlist(WaitlistView::Active, 1, cx)
+                            }),
                         ))
                         .child(self.button(
                             "wl-all",
                             self.t(Key::WaitlistAll),
-                            if active { Kind::Ghost } else { Kind::Primary },
-                            cx.listener(|this, _, _, cx| this.open_waitlist(false, 1, cx)),
+                            if view == WaitlistView::History {
+                                Kind::Primary
+                            } else {
+                                Kind::Ghost
+                            },
+                            cx.listener(|this, _, _, cx| {
+                                this.open_waitlist(WaitlistView::History, 1, cx)
+                            }),
                         ))
                         .when(can_join, |d| {
                             d.child(self.button(
@@ -749,7 +933,7 @@ impl Root {
                                 self.t(Key::InboxPrevious),
                                 Kind::Ghost,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.open_waitlist(active, previous, cx)
+                                    this.open_waitlist(view, previous, cx)
                                 }),
                             ))
                         })
@@ -762,13 +946,13 @@ impl Root {
                                 self.t(Key::InboxNext),
                                 Kind::Ghost,
                                 cx.listener(move |this, _, _, cx| {
-                                    this.open_waitlist(active, next, cx)
+                                    this.open_waitlist(view, next, cx)
                                 }),
                             ))
                         }),
                 )
         };
-        self.modal(
+        self.modal_with_height(
             div()
                 .child(
                     div()
@@ -776,6 +960,15 @@ impl Root {
                         .font_weight(FontWeight::BOLD)
                         .child(self.t(Key::Waitlist)),
                 )
+                .when_some(view.range(), |d, range| {
+                    let start = i18n::date_label(self.locale, range.from);
+                    let label = if range.from == range.to {
+                        start
+                    } else {
+                        format!("{start} – {}", i18n::date_label(self.locale, range.to))
+                    };
+                    d.child(div().text_sm().text_color(theme::muted()).child(label))
+                })
                 .when(
                     desk.data.as_ref().is_some_and(|data| !data.policy.enabled),
                     |d| d.child(div().text_sm().child(self.t(Key::WaitlistPaused))),
@@ -841,6 +1034,9 @@ impl Root {
                             }),
                         )),
                 ),
+            (viewport.width - px(24.)).clamp(px(240.), px(560.)),
+            (viewport.height - px(24.)).clamp(px(240.), px(720.)),
+            None,
         )
     }
 
@@ -1093,7 +1289,7 @@ mod tests {
             root.calendar_now = "2026-03-09T23:30:00Z".parse().unwrap();
             root.status.connectivity = Connectivity::Online;
             root.overlay = Overlay::Waitlist(Box::new(Desk {
-                active: true,
+                view: WaitlistView::Active,
                 page: 1,
                 scope: root.svc.store.calendar_cache_scope().ok(),
                 data: Some(WaitlistPage {
@@ -1152,6 +1348,49 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn the_waitlist_uses_the_visible_calendar_period_and_its_saved_pages(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, window) = super::super::tests::open(cx);
+        window
+            .update(cx, |root, _, cx| {
+                root.svc.stop_sync();
+                root.date = "2026-03-11".parse().unwrap();
+                root.calendar_mode = CalendarMode::Week;
+                root.reload(cx);
+                root.status.connectivity = Connectivity::Offline;
+                let range = root.calendar_waitlist_range();
+                assert_eq!(range.from.to_string(), "2026-03-09");
+                assert_eq!(range.to.to_string(), "2026-03-15");
+                let view = WaitlistView::Calendar(range);
+                let data = WaitlistPage {
+                    page: 1,
+                    page_size: 15,
+                    total: 3,
+                    policy: WaitlistPolicy {
+                        enabled: true,
+                        offer_minutes: 20,
+                        version: 1,
+                    },
+                    imported: vec![],
+                    entries: vec![],
+                };
+                let scope = root.svc.store.calendar_cache_scope().unwrap();
+                root.svc.store.cache_waitlist(&scope, view, &data).unwrap();
+                root.open_waitlist(view, 1, cx);
+                let Overlay::Waitlist(desk) = &root.overlay else {
+                    panic!("missing calendar waitlist")
+                };
+                assert_eq!(desk.view, view);
+                assert!(desk.cached);
+                assert_eq!(desk.data, Some(data));
+                root.open_waitlist(WaitlistView::Active, 1, cx);
+                assert!(matches!(&root.overlay, Overlay::Waitlist(desk) if desk.data.is_none()));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     async fn an_offline_desk_opens_a_previously_saved_history_page(cx: &mut TestAppContext) {
         let (_dir, window) = super::super::tests::open(cx);
         window
@@ -1175,19 +1414,19 @@ mod tests {
                 first_page.page = 1;
                 root.svc
                     .store
-                    .cache_waitlist(&scope, false, &first_page)
+                    .cache_waitlist(&scope, WaitlistView::History, &first_page)
                     .unwrap();
                 root.svc
                     .store
-                    .cache_waitlist(&scope, false, &history)
+                    .cache_waitlist(&scope, WaitlistView::History, &history)
                     .unwrap();
-                root.open_waitlist(false, 1, cx);
+                root.open_waitlist(WaitlistView::History, 1, cx);
                 let Overlay::Waitlist(desk) = &root.overlay else {
                     panic!("missing waitlist");
                 };
                 assert_eq!(desk.adjacent_pages(false), (None, Some(3)));
                 let previous_request = root.waitlist_generation;
-                root.open_waitlist(false, 3, cx);
+                root.open_waitlist(WaitlistView::History, 3, cx);
                 assert_ne!(root.waitlist_generation, previous_request);
                 let Overlay::Waitlist(desk) = &root.overlay else {
                     panic!("missing waitlist");
@@ -1255,7 +1494,7 @@ mod tests {
                     .store
                     .cache_waitlist(
                         &scope,
-                        true,
+                        WaitlistView::Active,
                         &WaitlistPage {
                             page: 1,
                             page_size: 15,
@@ -1270,7 +1509,7 @@ mod tests {
                         },
                     )
                     .unwrap();
-                root.open_waitlist(true, 1, cx);
+                root.open_waitlist(WaitlistView::Active, 1, cx);
                 let Overlay::Waitlist(desk) = &root.overlay else {
                     panic!("missing waitlist");
                 };

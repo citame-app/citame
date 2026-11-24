@@ -610,7 +610,7 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
     let waiver = cx.new(|cx| TextField::new("", false, cx));
     let waiver_sub = cx.observe(&waiver, |_, _, cx| cx.notify());
     root.overlay = Overlay::Waitlist(Box::new(Desk {
-        active: true,
+        view: WaitlistView::Active,
         page: 1,
         scope: root.svc.store.calendar_cache_scope().ok(),
         data: None,
