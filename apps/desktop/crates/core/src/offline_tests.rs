@@ -2060,6 +2060,25 @@ fn schedule_conflicts_wait_for_the_rejection_cursor_and_match_the_reviewed_actio
     store
         .apply_page(&[up(9, "appointment", EXISTING, json!(cloud))], 9)
         .unwrap();
+    assert!(review_appointment_conflict(&store, id).is_ok());
+    store
+        .set_meta(&format!("appointment_review_head:{id}"), "500")
+        .unwrap();
+    store.reset_replica().unwrap();
+    assert!(matches!(
+        review_appointment_conflict(&store, id),
+        Err(CoreError::AppointmentConflictRefreshRequired)
+    ));
+    store
+        .apply_sync_page(
+            &[up(9, "appointment", EXISTING, json!(cloud))],
+            9,
+            false,
+            true,
+            &[],
+            Some(crate::store::INITIAL_GENERATION),
+        )
+        .unwrap();
     let review = review_appointment_conflict(&store, id).unwrap();
     let stamp = ReviewedAppointment::from(&review.appointment);
     assert_eq!(

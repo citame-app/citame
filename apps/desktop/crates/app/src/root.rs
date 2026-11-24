@@ -1777,11 +1777,28 @@ impl Root {
         cx.notify();
     }
 
-    fn copy_conflict_schedule_note(&self, mutation_id: &str, cx: &App) {
-        if let Ok(review) = ops::review_appointment_conflict(&self.svc.store, mutation_id)
-            && let Some(note) = review.note
-        {
-            cx.write_to_clipboard(gpui::ClipboardItem::new_string(note));
+    fn copy_conflict_schedule_note(&mut self, mutation_id: &str, cx: &mut Context<Self>) {
+        match ops::review_appointment_conflict(&self.svc.store, mutation_id) {
+            Ok(review) => {
+                if let Some(note) = review.note {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(note));
+                }
+            }
+            Err(error) => {
+                let key = match error {
+                    CoreError::AppointmentConflictRefreshRequired => {
+                        self.svc.wake(Wake::Manual);
+                        Key::ConflictAppointmentSync
+                    }
+                    CoreError::AppointmentScopeDenied => Key::ConflictForbidden,
+                    _ => Key::AppointmentChanged,
+                };
+                let message = self.t(key).to_owned();
+                if let Overlay::Details(details) = &mut self.overlay {
+                    details.error = Some(message);
+                    cx.notify();
+                }
+            }
         }
     }
 
@@ -3873,17 +3890,20 @@ impl Root {
                         .gap_1()
                         .child(self.label(Key::ConflictAppointmentProposedNote))
                         .child(div().text_sm().child(note.clone()));
-                    let section = section.when_some(d.conflict_to_resolve(), |section, id| {
-                        let id = id.to_owned();
-                        section.child(self.button(
-                            "copy-appointment-conflict-note",
-                            self.t(Key::ConflictAppointmentCopyNote),
-                            Kind::Ghost,
-                            cx.listener(move |root, _, _, cx| {
-                                root.copy_conflict_schedule_note(&id, cx)
-                            }),
-                        ))
-                    });
+                    let section = section.when_some(
+                        d.conflict_to_resolve().filter(|_| !waiting_for_conflict),
+                        |section, id| {
+                            let id = id.to_owned();
+                            section.child(self.button(
+                                "copy-appointment-conflict-note",
+                                self.t(Key::ConflictAppointmentCopyNote),
+                                Kind::Ghost,
+                                cx.listener(move |root, _, _, cx| {
+                                    root.copy_conflict_schedule_note(&id, cx)
+                                }),
+                            ))
+                        },
+                    );
                     details.child(section)
                 },
             )
@@ -4190,14 +4210,19 @@ impl Root {
                         .child(self.t(Key::ConflictAppointmentSync)),
                 )
             })
-            .when_some(d.error.clone().filter(|_| !stale), |x, e| {
-                x.child(
-                    div()
-                        .text_sm()
-                        .text_color(theme::conflict_fg())
-                        .child(SharedString::from(e)),
-                )
-            });
+            .when_some(
+                d.error
+                    .clone()
+                    .filter(|_| !stale || schedule_conflict.is_some()),
+                |x, e| {
+                    x.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::conflict_fg())
+                            .child(SharedString::from(e)),
+                    )
+                },
+            );
         let footer = div()
             .flex()
             .flex_none()

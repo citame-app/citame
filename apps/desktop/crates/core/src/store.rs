@@ -1481,6 +1481,10 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, generation)?;
+        tx.execute(
+            "DELETE FROM meta WHERE key GLOB 'appointment_review_head:*'",
+            [],
+        )?;
         Self::clear_replica(&tx)?;
         tx.commit()?;
         Ok(())
