@@ -71,9 +71,15 @@ impl TextField {
         self.paste_newlines_remaining = Some(remaining);
         self
     }
-    pub fn with_paste_validation(mut self, validate: fn(&str) -> bool) -> Self {
-        self.paste_validation = Some(validate);
-        self
+    pub fn with_validated_bounded_line_paste(
+        self,
+        limit: usize,
+        remaining: Rc<Cell<usize>>,
+        validate: fn(&str) -> bool,
+    ) -> Self {
+        let mut field = self.with_bounded_line_paste(limit, remaining);
+        field.paste_validation = Some(validate);
+        field
     }
     pub fn set_text(&mut self, text: &str, cx: &mut Context<Self>) {
         self.text = text.to_owned();

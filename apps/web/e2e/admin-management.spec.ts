@@ -60,6 +60,11 @@ test("the owner can draft, publish, revise and withdraw the public business prof
     await save.click();
     await expect(description).toHaveAttribute("aria-invalid", "true");
     await expect(description).toBeFocused();
+    const overlong = "x".repeat(2_001);
+    await description.fill(overlong);
+    await save.click();
+    await expect(description).toHaveAttribute("aria-invalid", "true");
+    await expect(description).toHaveValue(overlong);
     await description.fill(longDescription);
     await form.getByLabel("Public address").fill("9 Synthetic Street");
     await form.getByLabel("Website (HTTPS)").fill("https://example.test/studio");

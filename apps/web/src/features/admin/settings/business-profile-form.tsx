@@ -1,7 +1,6 @@
 import {
   applyOpeningScheduleEdits,
   BUSINESS_AMENITIES,
-  BUSINESS_DESCRIPTION_MAX_LENGTH,
   type BusinessProfile,
   type BusinessProfileChanges,
   businessProfileSchema,
@@ -172,7 +171,6 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
           label={t("settings.profile.description")}
           value={form.description ?? ""}
           rows={6}
-          maxLength={BUSINESS_DESCRIPTION_MAX_LENGTH}
           hint={t("settings.profile.descriptionLimit")}
           error={errors.has("description") ? t("settings.profile.descriptionInvalid") : undefined}
           onChange={(event) => edit("description", event.currentTarget.value || null)}

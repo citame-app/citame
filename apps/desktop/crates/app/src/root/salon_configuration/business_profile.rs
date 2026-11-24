@@ -154,9 +154,11 @@ fn description_line(
     cx: &mut Context<Root>,
 ) -> DescriptionLine {
     let input = cx.new(|cx| {
-        let mut input = TextField::new("", false, cx)
-            .with_bounded_line_paste(DESCRIPTION_LIMIT, remaining)
-            .with_paste_validation(valid_description_text);
+        let mut input = TextField::new("", false, cx).with_validated_bounded_line_paste(
+            DESCRIPTION_LIMIT,
+            remaining,
+            valid_description_text,
+        );
         input.set_text(value, cx);
         input
     });
