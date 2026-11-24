@@ -16,12 +16,17 @@ export type CalendarStatusChange = {
   status: "completed" | "no_show" | "cancelled";
 };
 
-type CalendarWrite = CalendarMove | CalendarStatusChange;
+export type CalendarNoteChange = {
+  appointment: Pick<Appointment, "id" | "version">;
+  notes: string;
+};
+
+type CalendarWrite = CalendarMove | CalendarStatusChange | CalendarNoteChange;
 
 export const calendarWriteKey = ["appointments", "calendar-write"] as const;
 const writeFilter = { mutationKey: calendarWriteKey, exact: true };
 
-// Writers sharing this key use one of the two reviewed commands.
+// Writers sharing this key use a reviewed appointment command.
 const requestFor = (mutation: Mutation) => mutation.state.variables as CalendarWrite;
 
 export function usePendingCalendarWrites() {
@@ -72,6 +77,7 @@ export function isLocalCalendarWrite(
       const committed = status === "success" ? (data as Appointment) : undefined;
       if ((committed?.version ?? write.appointment.version + 1) !== appointment.version)
         return false;
+      if ("notes" in write) return false;
       if ("status" in write)
         return kind === "cancelled" && committed?.status === appointment.status;
       return (

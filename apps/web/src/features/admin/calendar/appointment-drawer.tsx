@@ -27,6 +27,7 @@ import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
 import { AppointmentContext } from "./appointment-context";
 import {
+  type CalendarNoteChange,
   calendarWriteKey,
   persistCalendarMove,
   startCalendarWrite,
@@ -121,7 +122,6 @@ function DrawerBody({
   const [notesDraft, setNotesDraft] = useState<{
     notes: string;
     original: string;
-    version: number;
   } | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [moving, setMoving] = useState(false);
@@ -145,12 +145,11 @@ function DrawerBody({
     void invalidateCalendarData(queryClient);
   };
 
+  const writePending = usePendingCalendarWrites().has(appointment.id);
   const saveNotes = useMutation({
-    mutationFn: (draft: NonNullable<typeof notesDraft>) =>
-      api().appointments.update(appointment.id, {
-        version: draft.original === savedNotes ? appointment.version : draft.version,
-        notes: draft.notes,
-      }),
+    mutationKey: calendarWriteKey,
+    mutationFn: ({ appointment, notes }: CalendarNoteChange) =>
+      api().appointments.update(appointment.id, { version: appointment.version, notes }),
     onSuccess: (saved) => {
       setNotesDraft(null);
       setProblem(null);
@@ -159,9 +158,13 @@ function DrawerBody({
     },
     onError: (error) => setProblem(describeProblem(error)),
   });
-  const notesConflict = saveNotes.isError && describeProblem(saveNotes.error).recovery === "reload";
+  const noteChanged = notesDraft !== null && notesDraft.notes !== savedNotes;
+  const notesNeedReview = noteChanged && notesDraft.original !== savedNotes;
+  const noteNeedsRefresh =
+    saveNotes.isError &&
+    describeProblem(saveNotes.error).recovery === "reload" &&
+    appointment.version <= saveNotes.variables.appointment.version;
 
-  const movePending = usePendingCalendarWrites().has(appointment.id);
   const move = useMutation({
     mutationKey: calendarWriteKey,
     mutationFn: persistCalendarMove,
@@ -218,7 +221,7 @@ function DrawerBody({
                 variant="secondary"
                 className="mt-3"
                 onClick={() => {
-                  setProblem(null);
+                  if (!noteNeedsRefresh) setProblem(null);
                   onReload?.();
                   void queryClient.invalidateQueries({ queryKey: ["admin"] });
                 }}
@@ -336,29 +339,58 @@ function DrawerBody({
           onChange={(e) => {
             const notes = e.target.value;
             setNotesDraft((draft) =>
-              notes === (draft?.original ?? savedNotes)
-                ? null
-                : { original: savedNotes, version: appointment.version, ...draft, notes },
+              notes === savedNotes ? null : { original: draft?.original ?? savedNotes, notes },
             );
           }}
         />
         <Button
           variant="secondary"
           loading={saveNotes.isPending}
-          disabled={readOnly || !notesDraft || notesConflict}
-          onClick={() => notesDraft && saveNotes.mutate(notesDraft)}
+          disabled={readOnly || writePending || !noteChanged || notesNeedReview || noteNeedsRefresh}
+          onClick={() => {
+            if (!notesDraft || !noteChanged || notesNeedReview || noteNeedsRefresh || readOnly)
+              return;
+            startCalendarWrite(
+              queryClient,
+              { appointment, notes: notesDraft.notes },
+              saveNotes.mutate,
+            );
+          }}
         >
           {t("drawer.notes.save")}
         </Button>
-        {!readOnly && notesConflict && (
+        {!readOnly && notesNeedReview && (
+          <div className="space-y-2 rounded-xl border border-line bg-sunken p-4 text-sm">
+            <p role="status">{t("drawer.notes.changed")}</p>
+            <p className="font-semibold">{t("drawer.notes.current")}</p>
+            <p className="whitespace-pre-wrap break-words">
+              {savedNotes || t("drawer.notes.empty")}
+            </p>
+            <Button
+              variant="secondary"
+              disabled={writePending || noteNeedsRefresh}
+              onClick={() => {
+                setNotesDraft((draft) => draft && { ...draft, original: savedNotes });
+                saveNotes.reset();
+                setProblem(null);
+              }}
+            >
+              {t("drawer.notes.keepDraft")}
+            </Button>
+          </div>
+        )}
+        {!readOnly && (notesNeedReview || noteNeedsRefresh) && (
           <Button
             variant="secondary"
+            disabled={writePending}
             onClick={() => {
               setNotesDraft(null);
               saveNotes.reset();
               setProblem(null);
-              onReload?.();
-              void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
+              if (noteNeedsRefresh) {
+                onReload?.();
+                void queryClient.invalidateQueries({ queryKey: ["admin", "calendar"] });
+              }
             }}
           >
             {t("badge.discardDraft")}
@@ -492,7 +524,7 @@ function DrawerBody({
           className="border-t border-line pt-5"
         >
           {!moving ? (
-            <Button variant="secondary" disabled={movePending} onClick={() => setMoving(true)}>
+            <Button variant="secondary" disabled={writePending} onClick={() => setMoving(true)}>
               {t("drawer.reschedule.open")}
             </Button>
           ) : !reschedulable ? (
@@ -534,7 +566,7 @@ function DrawerBody({
                 <span className="font-medium">{t("drawer.reschedule.override")}</span>
               </label>
               <Button
-                disabled={!slot || movePending}
+                disabled={!slot || writePending}
                 loading={move.isPending}
                 onClick={() =>
                   slot &&

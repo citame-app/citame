@@ -12,4 +12,6 @@ Keep confirmed calendar responses in TanStack Query. Project a pending move or s
 
 Grid moves, drawer actions and staff reassignment share one mutation key and a per-appointment admission check in the QueryClient. Pending writes survive client-side navigation within that session. Reschedule notices match the appointment, destination and revision of a local move. Cancellation notices require a confirmed local response before suppression. The deactivation panel keeps confirmed blockers until the server accepts a change.
 
+Appointment notes use the same admission check. The note editor retains the draft while showing the latest saved text and requires explicit review before resubmission.
+
 The protocol, server version check and conflict messages continue to determine acceptance and recovery.
