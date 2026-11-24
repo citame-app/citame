@@ -95,17 +95,6 @@ export const adminStaffQuery = staffQuery();
 
 export const teamShiftWeekKey = ["admin", "team-shifts"] as const;
 
-export const calendarWaitlistQuery = (
-  range: { fromDate: string; toDate: string },
-  endpoints = api,
-) =>
-  queryOptions({
-    queryKey: ["waitlist", "calendar-count", range],
-    queryFn: async () =>
-      (await endpoints().waitlist.list("admin", { ...range, active: "true", pageSize: 1 })).total,
-    refetchInterval: 15_000,
-  });
-
 export const adminServicesQuery = queryOptions({
   queryKey: ["admin", "services"],
   queryFn: async ({ signal }) => (await api().admin.services.list(signal)).services,

@@ -15,6 +15,7 @@ import { calendarScope, clearCalendarInbox } from "~/lib/admin-queries";
 import { ApiError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { resolveAccess } from "~/lib/auth/access";
+import { clearWaitlist } from "~/lib/waitlist-queries";
 import { bootstrapQuery } from "~/server/request";
 
 /** Staff and owner area: guard, role-based navigation shell and the `/admin/*` pages. */
@@ -63,7 +64,10 @@ function AdminLayout() {
       if (!cached || !prior || prior.user.id !== accountId) return;
       const priorScope = calendarScope(prior);
       if (current && calendarScope(current) === priorScope) return;
-      await clearCalendarInbox(queryClient, prior.user.id);
+      await Promise.all([
+        clearCalendarInbox(queryClient, prior.user.id),
+        clearWaitlist(queryClient, "admin", prior.user.id),
+      ]);
       const latest = queryClient.getQueryData(bootstrapQuery.queryKey);
       if (signal.aborted || !latest?.session || calendarScope(latest.session) !== priorScope)
         return;

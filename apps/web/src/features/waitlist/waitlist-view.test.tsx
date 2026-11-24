@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { WaitlistSourceEntry } from "@sob/contracts";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { CalendarWaitlist } from "~/features/admin/calendar/waitlist";
+import { calendarWaitlistQuery, waitlistQuery } from "~/lib/waitlist-queries";
 import { renderApp } from "../../../test/render";
 import { WaitlistView } from "./waitlist-view";
 
@@ -102,7 +105,7 @@ function addImportedRequest(days = 1) {
 
 test("the imported review explains why the request cannot be saved while offers are enabled", async () => {
   addImportedRequest();
-  renderApp(<WaitlistView mode="admin" role="owner" />);
+  renderApp(<WaitlistView viewer={{ userId: "viewer" }} mode="admin" role="owner" />);
   fireEvent.click(await screen.findByRole("button", { name: "Complete request" }));
   const save = await screen.findByRole("button", { name: "Save waitlist request" });
   expect(save).toBeDisabled();
@@ -119,7 +122,7 @@ test("the imported review explains why the request cannot be saved while offers 
 
 test("the previous salon date remains visible as a past Booksy request", async () => {
   addImportedRequest(-1);
-  renderApp(<WaitlistView mode="admin" role="owner" />);
+  renderApp(<WaitlistView viewer={{ userId: "viewer" }} mode="admin" role="owner" />);
   expect(await screen.findByText("Imported customer")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Past Booksy requests" })).toBeInTheDocument();
   expect(screen.getByText("The requested date has passed.")).toBeInTheDocument();
@@ -129,7 +132,14 @@ test("the previous salon date remains visible as a past Booksy request", async (
 test("an operator can complete a Booksy request while automatic offers are paused", async () => {
   enabled = false;
   const { id, requestedDate } = addImportedRequest();
-  renderApp(<WaitlistView mode="admin" role="owner" initialServices={[serviceId]} />);
+  renderApp(
+    <WaitlistView
+      viewer={{ userId: "viewer" }}
+      mode="admin"
+      role="owner"
+      initialServices={[serviceId]}
+    />,
+  );
   expect(await screen.findByText("Imported customer")).toBeInTheDocument();
   expect(screen.getByText(/while automatic offers are paused/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Complete request" }));
@@ -162,7 +172,7 @@ afterEach(() => {
 });
 test("a paused waitlist explains the state without offering a join action", async () => {
   enabled = false;
-  renderApp(<WaitlistView mode="client" role="client" clientId={clientId} />);
+  renderApp(<WaitlistView viewer={{ userId: "viewer" }} mode="client" role="client" />);
   expect(
     await screen.findByText("The salon has paused new waitlist requests."),
   ).toBeInTheDocument();
@@ -174,9 +184,9 @@ test("a customer joins with explicit services and a preferred window without sen
   const toDate = today.add({ days: 20 }).toString();
   renderApp(
     <WaitlistView
+      viewer={{ userId: "viewer" }}
       mode="client"
       role="client"
-      clientId={clientId}
       initialServices={[serviceId]}
       initialStaff={staffId}
     />,
@@ -233,7 +243,13 @@ test("a professional can read an unassigned request without being offered a forb
     return previous(input, init);
   }) as unknown as typeof fetch;
   renderApp(
-    <WaitlistView mode="admin" role="staff" accessPreset="professional" ownStaffId={staffId} />,
+    <WaitlistView
+      viewer={{ userId: "viewer" }}
+      mode="admin"
+      role="staff"
+      accessPreset="professional"
+      ownStaffId={staffId}
+    />,
   );
   expect(await screen.findByRole("heading", { name: "Unassigned haircut" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Cancel waitlist request" })).toBeNull();
@@ -351,7 +367,9 @@ test("an uncertain waitlist booking keeps the reviewed request through a list re
     }
     return defaultFetch(input, init);
   }) as unknown as typeof fetch;
-  const { queryClient } = renderApp(<WaitlistView mode="admin" role="owner" />);
+  const { queryClient } = renderApp(
+    <WaitlistView viewer={{ userId: "viewer" }} mode="admin" role="owner" />,
+  );
   expect(await screen.findByText(/^Services: From/)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Review this offer" }));
   const waiver = await screen.findByLabelText(/Deposit waiver reason/);
@@ -396,4 +414,107 @@ test("an uncertain waitlist booking keeps the reviewed request through a list re
   expect(await screen.findAllByText("Your waitlist appointment is booked")).not.toHaveLength(0);
   expect(attempts).toHaveLength(4);
   expect(new Set(attempts).size).toBe(1);
+});
+
+function TeamWaitlist() {
+  const [accessScope, setAccessScope] = useState("reception");
+  const role = "staff";
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => {
+          imports = [];
+          setAccessScope("professional");
+        }}
+      >
+        Use own calendar
+      </button>
+      <WaitlistView
+        key={accessScope}
+        viewer={{ userId: "team-member", accessScope }}
+        mode="admin"
+        role={role}
+        accessPreset={accessScope === "reception" ? "manager" : "professional"}
+        ownStaffId={staffId}
+      />
+    </>
+  );
+}
+
+test("permission changes isolate previously cached requests on the same staff account", async () => {
+  addImportedRequest();
+  renderApp(<TeamWaitlist />);
+  expect(await screen.findByText("Imported customer")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Complete request" }));
+  expect(await screen.findByRole("form", { name: "New waitlist request" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Use own calendar" }));
+  expect(screen.queryByText("Imported customer")).toBeNull();
+  expect(screen.queryByRole("form", { name: "New waitlist request" })).toBeNull();
+  expect(await screen.findByText("No waitlist requests yet")).toBeVisible();
+});
+
+test("a denied calendar count clears cached waitlist pages and cancels an earlier read", async () => {
+  const { requestedDate } = addImportedRequest();
+  const range = { fromDate: requestedDate, toDate: requestedDate };
+  const viewer = { userId: "team-member", accessScope: "reception" };
+  const list = waitlistQuery("admin", viewer, { page: 1, pageSize: 10 });
+  const count = calendarWaitlistQuery(viewer, range);
+  const anotherAccount = calendarWaitlistQuery({ ...viewer, userId: "colleague" }, range);
+  const pending = Promise.withResolvers<Response>();
+  let countDenied = false;
+  let staleSignal: AbortSignal | null | undefined;
+  const defaultFetch = globalThis.fetch;
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/admin/waitlist") {
+      if (url.searchParams.get("pageSize") === "1") {
+        return countDenied
+          ? json({ error: { code: "forbidden", message: "Access changed" } }, 403)
+          : json({
+              entries: [],
+              total: 2,
+              page: 1,
+              pageSize: 1,
+              policy: { enabled, offerMinutes: 30, version: 1 },
+            });
+      }
+      if (countDenied) {
+        staleSignal = init?.signal;
+        return pending.promise;
+      }
+    }
+    return defaultFetch(input, init);
+  }) as unknown as typeof fetch;
+  const { queryClient } = renderApp(
+    <>
+      <WaitlistView viewer={viewer} mode="admin" role="owner" />
+      <CalendarWaitlist viewer={viewer} {...range} role="owner" ownStaffId={null} />
+    </>,
+  );
+  try {
+    expect(await screen.findByText("Imported customer")).toBeVisible();
+    expect(await screen.findByRole("button", { name: "View waitlist (2)" })).toBeVisible();
+    queryClient.setQueryData(anotherAccount.queryKey, 8);
+    countDenied = true;
+    void queryClient.invalidateQueries({ queryKey: list.queryKey });
+    await waitFor(() => expect(staleSignal).toBeDefined());
+    await act(() => queryClient.invalidateQueries({ queryKey: count.queryKey }));
+    expect(await screen.findByRole("button", { name: "Waitlist" })).toBeVisible();
+    expect(screen.queryByText("Imported customer")).toBeNull();
+    expect(staleSignal?.aborted).toBe(true);
+    expect(queryClient.getQueryData(list.queryKey)).toBeNull();
+    expect(queryClient.getQueryData(anotherAccount.queryKey)).toBe(8);
+  } finally {
+    pending.resolve(
+      json({
+        entries: [],
+        total: 4,
+        page: 1,
+        pageSize: 10,
+        policy: { enabled, offerMinutes: 30, version: 1 },
+      }),
+    );
+  }
+  await waitFor(() => expect(queryClient.getQueryData(list.queryKey)).toBeNull());
 });

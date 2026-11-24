@@ -816,6 +816,7 @@ export function CalendarView({
             </fieldset>
             {permissions.clients && permissions.editCalendar && (
               <CalendarWaitlist
+                viewer={{ userId, accessScope }}
                 fromDate={range.dates[0] ?? search.date}
                 toDate={range.dates.at(-1) ?? search.date}
                 role={bookingRole}

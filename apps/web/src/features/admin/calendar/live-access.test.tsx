@@ -6,6 +6,7 @@ import { calendarQuery, reportQuery } from "~/lib/admin-queries";
 import { renderApp } from "../../../../test/render";
 import { CalendarInbox } from "./inbox";
 import { CalendarLiveProvider } from "./live-provider";
+import { CalendarWaitlist } from "./waitlist";
 
 const staffId = "0198f5a0-7b1c-7000-8000-000000000201";
 const colleagueId = "0198f5a0-7b1c-7000-8000-000000000202";
@@ -52,6 +53,23 @@ function InboxNavigation() {
   ) : (
     <button type="button" onClick={() => setOpen(true)}>
       Open inbox workspace
+    </button>
+  );
+}
+
+function WaitlistNavigation() {
+  const [opened, setOpened] = useState(false);
+  return opened ? (
+    <CalendarWaitlist
+      viewer={{ userId: "operator", accessScope: "manager" }}
+      fromDate="2026-11-23"
+      toDate="2026-11-23"
+      role="owner"
+      ownStaffId={null}
+    />
+  ) : (
+    <button type="button" onClick={() => setOpened(true)}>
+      Open waitlist workspace
     </button>
   );
 }
@@ -312,6 +330,57 @@ test("a live bank reservation replaces an in-flight first checkout load", async 
     expect(screen.queryByText("Stale receipt")).toBeNull();
   } finally {
     stale.resolve("Stale receipt");
+    refresh.mockRestore();
+  }
+});
+
+test("a live waitlist change replaces an in-flight first calendar count", async () => {
+  globalThis.EventSource = Stream as unknown as typeof EventSource;
+  const pending = Promise.withResolvers<Response>();
+  let signal: AbortSignal | null | undefined;
+  const counts = (total: number) =>
+    Response.json({
+      entries: [],
+      policy: { enabled: true, offerMinutes: 30, version: 1 },
+      page: 1,
+      pageSize: 1,
+      total,
+    });
+  const fetchCount = mock(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (fetchCount.mock.calls.length === 1) {
+      signal = init?.signal;
+      return pending.promise;
+    }
+    return counts(2);
+  });
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (String(input).includes("/admin/waitlist")) return fetchCount(input, init);
+    return Response.json({
+      changes: [{ seq: 11, entity: "waitlist", id: staffId, op: "delete", data: null }],
+      nextCursor: 11,
+      headSeq: 11,
+      hasMore: false,
+    });
+  }) as unknown as typeof fetch;
+  const { queryClient } = renderApp(
+    <CalendarLiveProvider>
+      <WaitlistNavigation />
+    </CalendarLiveProvider>,
+  );
+  const refresh = spyOn(queryClient, "invalidateQueries");
+  try {
+    act(() => Stream.instance.send(10));
+    await waitFor(() => expect(refresh).toHaveBeenCalledWith({ queryKey: ["waitlist"] }));
+    fireEvent.click(screen.getByRole("button", { name: "Open waitlist workspace" }));
+    expect(fetchCount).toHaveBeenCalledTimes(1);
+    act(() => Stream.instance.send(11));
+    expect(await screen.findByRole("button", { name: "View waitlist (2)" })).toBeVisible();
+    expect(signal?.aborted).toBe(true);
+    expect(fetchCount).toHaveBeenCalledTimes(2);
+    await act(async () => pending.resolve(counts(1)));
+    expect(screen.getByRole("button", { name: "View waitlist (2)" })).toBeVisible();
+  } finally {
+    pending.resolve(counts(1));
     refresh.mockRestore();
   }
 });

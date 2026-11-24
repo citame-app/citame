@@ -6,16 +6,18 @@ import { CalendarIcon } from "~/components/ui/icons";
 import { Sheet } from "~/components/ui/sheet";
 import { WaitlistView } from "~/features/waitlist/waitlist-view";
 import { useI18n } from "~/i18n/react";
-import { calendarWaitlistQuery } from "~/lib/admin-queries";
 import { formatDateLong } from "~/lib/format";
+import { calendarWaitlistQuery, type WaitlistViewer } from "~/lib/waitlist-queries";
 
 export function CalendarWaitlist({
+  viewer,
   fromDate,
   toDate,
   role,
   ownStaffId,
   accessPreset,
 }: {
+  viewer: WaitlistViewer;
   fromDate: string;
   toDate: string;
   role: UserRole;
@@ -25,8 +27,11 @@ export function CalendarWaitlist({
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
   const range = { fromDate, toDate };
-  const count = useQuery(calendarWaitlistQuery(range));
-  const label = t("calendar.waitlist.open", { count: count.data ?? "…" });
+  const count = useQuery(calendarWaitlistQuery(viewer, range));
+  const label =
+    count.data === null
+      ? t("waitlist.title")
+      : t("calendar.waitlist.open", { count: count.data ?? "…" });
   return (
     <>
       <button
@@ -63,6 +68,7 @@ export function CalendarWaitlist({
           <WaitlistView
             key={`${fromDate}:${toDate}`}
             mode="admin"
+            viewer={viewer}
             role={role}
             ownStaffId={ownStaffId}
             accessPreset={accessPreset}

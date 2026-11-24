@@ -7,6 +7,7 @@ import { useI18n } from "~/i18n/react";
 import { calendarInboxQueryKey } from "~/lib/admin-queries";
 import { api } from "~/lib/api/instance";
 import { formatTime, localDateOf } from "~/lib/format";
+import { waitlistQueryKey } from "~/lib/waitlist-queries";
 import { isLocalCalendarWrite } from "./appointment-writes";
 import { connectCalendarLive } from "./live-connection";
 import { liveQueryKeys } from "./live-queries";
@@ -74,6 +75,7 @@ export function CalendarLiveProvider({
             queryKey[0] === "portfolio" ||
             queryKey[0] === "marketing" ||
             queryKey[0] === calendarInboxQueryKey[0] ||
+            queryKey[0] === waitlistQueryKey[0] ||
             ((queryKey[0] === "rewards" || queryKey[0] === "creative") &&
               queryKey[1] === "promotions") ||
             (queryKey[0] === "rewards" &&

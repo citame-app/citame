@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+The web waitlist and calendar badge refresh together when the list changes. Cached requests and counts are cleared when the team member loses access.
+
 The web calendar inbox refreshes during the first load when a new notice arrives. It clears saved notices and counts after access changes and keeps archive results scoped to the account that submitted them.
 
 Desktop keeps appointment creation, moves, cancellations and attendance changes inside the account's writable calendars. A read-only agenda still opens appointment details.

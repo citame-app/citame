@@ -14,6 +14,7 @@ import {
   stampNoticesQueryKey,
   stampProgramQueryKey,
 } from "~/lib/api/reward-endpoints";
+import { waitlistQueryKey } from "~/lib/waitlist-queries";
 
 const calendar = [["admin", "calendar"], calendarEntryQueryKey(), ["availability"]] as const;
 const report = ["admin", "report"] as const;
@@ -100,7 +101,7 @@ const shared: Record<SyncEntity | SyncLiveView, readonly (readonly string[])[]> 
     teamShiftWeekKey,
   ],
   commerce: [...commerce, ["admin", "calendar"], ["admin", "appointment-context"]],
-  waitlist: [["waitlist"], calendarResourceQueryKey],
+  waitlist: [waitlistQueryKey, calendarResourceQueryKey],
   inbox: [calendarInboxQueryKey],
   review_requests: [reviewRequestQueryKey, moderation],
   portfolio: [["portfolio"]],

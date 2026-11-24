@@ -14,8 +14,8 @@ import type { CommerceMode } from "./commerce-endpoints";
 const base = (mode: CommerceMode) => (mode === "admin" ? "/admin/waitlist" : "/me/waitlist");
 export function waitlistEndpoints(client: ApiClient) {
   return {
-    list: (mode: CommerceMode, query: WaitlistQuery = {}) =>
-      client.get(base(mode), waitlistListSchema, { query: { ...query } }),
+    list: (mode: CommerceMode, query: WaitlistQuery = {}, signal?: AbortSignal) =>
+      client.get(base(mode), waitlistListSchema, { query: { ...query }, signal }),
     join: (
       mode: CommerceMode,
       input: WaitlistInput & { clientId?: string; importedEntryId?: string },

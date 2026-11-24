@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { WaitlistView } from "~/features/waitlist/waitlist-view";
 import { createTranslator } from "~/i18n";
+import { calendarScope } from "~/lib/admin-queries";
 import { salonQuery } from "~/lib/queries";
 import { pageMeta } from "~/lib/seo";
 export const Route = createFileRoute("/account/waitlist")({
@@ -47,12 +48,14 @@ function WaitlistPage() {
   const search = Route.useSearch();
   const { data: salon } = useQuery({ ...salonQuery, refetchOnMount: "always" });
   if (!session) return null;
+  const accessScope = calendarScope(session);
   return (
     <WaitlistView
+      key={JSON.stringify([accessScope, session.clientId])}
       mode="client"
+      viewer={{ userId: session.user.id, accessScope: session.clientId ?? undefined }}
       role="client"
       onlineBookingEnabled={salon?.onlineBookingEnabled}
-      clientId={session.clientId}
       initialServices={search.services?.split(",")}
       initialStaff={search.staff}
       initialDate={search.date}

@@ -6,13 +6,9 @@ import { rangeFor } from "~/features/admin/calendar/logic";
 import { type CalendarSearch, validateCalendarSearch } from "~/features/admin/calendar/search";
 import { adminHead } from "~/features/admin/route-head";
 import { useI18n } from "~/i18n/react";
-import {
-  calendarQuery,
-  calendarScope,
-  calendarWaitlistQuery,
-  staffQuery,
-} from "~/lib/admin-queries";
+import { calendarQuery, calendarScope, staffQuery } from "~/lib/admin-queries";
 import { localDateOf } from "~/lib/format";
+import { calendarWaitlistQuery } from "~/lib/waitlist-queries";
 import { routeEndpoints } from "~/server/request";
 
 type RawSearch = Partial<CalendarSearch> & { notice?: "forbidden" };
@@ -58,6 +54,7 @@ export const Route = createFileRoute("/admin/calendar")({
         ? [
             context.queryClient.prefetchQuery(
               calendarWaitlistQuery(
+                { userId: user.id, accessScope },
                 { fromDate: dates[0] ?? date, toDate: dates.at(-1) ?? date },
                 routeEndpoints,
               ),

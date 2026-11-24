@@ -11,10 +11,10 @@ import { useNow } from "~/features/admin/use-now";
 import { BookingProtectionNotice } from "~/features/booking/protection";
 import { totalPriceLabel } from "~/features/booking/service-price";
 import { useI18n } from "~/i18n/react";
-import { ApiError } from "~/lib/api/client";
 import type { CommerceMode } from "~/lib/api/commerce-endpoints";
 import { api } from "~/lib/api/instance";
 import { formatDateLong, formatTime, localDateOf } from "~/lib/format";
+import { type WaitlistViewer, waitlistQuery, waitlistUserKey } from "~/lib/waitlist-queries";
 import { type JoinFormProps, WaitlistJoinForm } from "./join-form";
 import { WaitlistOfferReview } from "./offer-review";
 import { WaitlistPolicyForm } from "./policy-form";
@@ -25,7 +25,7 @@ export function WaitlistView({
   role,
   accessPreset,
   ownStaffId,
-  clientId,
+  viewer,
   initialServices,
   initialStaff,
   initialDate,
@@ -33,7 +33,7 @@ export function WaitlistView({
   calendarRange,
   onNavigate,
 }: Omit<JoinFormProps, "onJoined"> & {
-  clientId?: string | null;
+  viewer: WaitlistViewer;
   onlineBookingEnabled?: boolean;
   calendarRange?: { fromDate: string; toDate: string };
   onNavigate?: () => void;
@@ -57,18 +57,16 @@ export function WaitlistView({
   const [cancelling, setCancelling] = useState<WaitlistEntry | null>(null);
   const [booked, setBooked] = useState<Appointment | null>(null);
   const query = useQuery({
-    queryKey: ["waitlist", mode, clientId ?? ownStaffId ?? "operator", page, state, calendarRange],
-    queryFn: () =>
-      api().waitlist.list(mode, {
-        page,
-        pageSize: 10,
-        ...(state ? { state } : {}),
-        ...(calendarRange ? { ...calendarRange, active: "true" as const } : {}),
-      }),
+    ...waitlistQuery(mode, viewer, {
+      page,
+      pageSize: 10,
+      ...(state ? { state } : {}),
+      ...(calendarRange ? { ...calendarRange, active: "true" as const } : {}),
+    }),
     refetchInterval: online ? 15000 : false,
   });
   const invalidate = () => {
-    void queries.invalidateQueries({ queryKey: ["waitlist"] });
+    void queries.invalidateQueries({ queryKey: waitlistUserKey(mode, viewer.userId) });
     void queries.invalidateQueries({ queryKey: ["availability"] });
   };
   const cancel = useMutation({
@@ -93,11 +91,15 @@ export function WaitlistView({
       invalidate();
     },
   });
-  const lostAccess = query.error instanceof ApiError && [401, 403].includes(query.error.status);
+  const lostAccess = query.data === null;
   useEffect(() => {
     if (!lostAccess) return;
     setReview(null);
     setBooked(null);
+    setCancelling(null);
+    setExpanded(null);
+    setImported(null);
+    setJoining(false);
   }, [lostAccess]);
   const reviewPanel = review && !lostAccess && (
     <WaitlistOfferReview
@@ -129,7 +131,7 @@ export function WaitlistView({
       />
     </div>
   );
-  if (query.isPending || query.isError) {
+  if (query.isPending || query.isError || query.data === null) {
     return (
       <>
         <div className="space-y-3">
