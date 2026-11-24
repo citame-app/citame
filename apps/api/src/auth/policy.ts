@@ -35,6 +35,28 @@ export function requirePermission(principal: Principal, permission: keyof StaffP
     throw forbidden("Your access profile does not permit this operation");
 }
 
+export type VisitCheckoutScope = { staffId: string | null; actorId: string };
+
+function visitCheckoutScopeFor(
+  principal: Principal,
+  permissions: StaffPermissions,
+): VisitCheckoutScope | undefined {
+  if (!permissions.commerce) return;
+  if (permissions.allCalendars && permissions.allSales)
+    return { staffId: null, actorId: principal.userId };
+  if (principal.staffId) return { staffId: principal.staffId, actorId: principal.userId };
+}
+
+export function canReviewVisitCheckouts(principal: Principal, staffIds: ReadonlyArray<string>) {
+  const scope = visitCheckoutScopeFor(
+    principal,
+    permissionsFor(principal.role, principal.accessPreset),
+  );
+  return (
+    scope !== undefined && (scope.staffId === null || staffIds.every((id) => id === scope.staffId))
+  );
+}
+
 /**
  * Returns the request to execute. Clients are pinned to their own booking profile (an inline
  * `client` payload is dropped, so they cannot mint or impersonate profiles); staff are pinned
@@ -217,15 +239,18 @@ export function authorizeReportQuery(principal: Principal, query: ReportQuery): 
 export function authorizeCalendarQuery(
   principal: Principal,
   query: Partial<CalendarQuery>,
-): { staffIds?: string[]; includeBilling: boolean } {
+): { staffIds?: string[]; includeBilling: boolean; visitCheckoutScope?: VisitCheckoutScope } {
   requireRole(principal, "owner", "staff");
-  const { allCalendars, commerce } = permissionsFor(principal.role, principal.accessPreset);
+  const permissions = permissionsFor(principal.role, principal.accessPreset);
+  const { allCalendars, commerce } = permissions;
   if (query.resourceOccupancy && !allCalendars)
     throw forbidden("Resource occupancy requires access to all calendars");
-  if (allCalendars) return { staffIds: query.staffIds, includeBilling: commerce };
+  const visitCheckoutScope = visitCheckoutScopeFor(principal, permissions);
+  if (allCalendars)
+    return { staffIds: query.staffIds, includeBilling: commerce, visitCheckoutScope };
   if (!principal.staffId) throw forbidden("Your account has no calendar");
   if (query.staffIds?.some((staffId) => staffId !== principal.staffId)) {
     throw forbidden("Staff can only see their own calendar");
   }
-  return { staffIds: [principal.staffId], includeBilling: commerce };
+  return { staffIds: [principal.staffId], includeBilling: commerce, visitCheckoutScope };
 }

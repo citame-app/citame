@@ -152,6 +152,8 @@ pub struct CalendarServiceBadge {
 pub struct AppointmentAnnotations {
     pub appointment_version: Option<i64>,
     pub can_edit: Option<bool>,
+    #[serde(default)]
+    pub has_visit_checkout: bool,
     pub default_requested: Option<bool>,
     pub protection: Option<AppointmentProtection>,
     pub rows: Vec<ServiceAnnotations>,

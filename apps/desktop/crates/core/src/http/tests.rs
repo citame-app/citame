@@ -1970,3 +1970,122 @@ fn stamp_programme_transport_reviews_all_terms_and_checks_the_save_acknowledgeme
     assert_eq!(body(1), expected);
     assert_eq!(body(2), expected);
 }
+
+#[test]
+fn visit_checkout_replays_a_durable_command_from_another_appointment() {
+    use crate::billing::visit_payment::{
+        SavedVisitPayment, VisitPaymentError, VisitPaymentGroup, VisitSource, VisitTender,
+    };
+    use crate::store::Store;
+    use serde_json::{Value, json};
+    use uuid::Uuid;
+
+    let group = VisitPaymentGroup {
+        group_id: Uuid::now_v7(),
+        source: VisitSource::Itinerary,
+    };
+    let first = Uuid::now_v7();
+    let second = Uuid::now_v7();
+    let a = Uuid::now_v7();
+    let b = Uuid::now_v7();
+    let receipt = |id, appointment, cents| {
+        json!({
+            "id": id, "appointmentId": appointment, "currency": "EUR", "status": "open",
+            "totalCents": cents, "discountCents": 0, "paidCents": 0, "balanceCents": cents, "payments": [],
+        })
+    };
+    let part = |appointment, receipt| {
+        json!({
+            "appointmentId": appointment, "status": "booked", "startsAt": "2026-03-09T12:00:00Z",
+            "staffName": "Test staff", "serviceNames": ["Test"], "settledExternally": false, "receipt": receipt,
+        })
+    };
+    let review = json!({
+        "groupId": group.group_id, "source": "itinerary",
+        "paymentReview": { "token": "a".repeat(64), "totalCents": 3100, "allocations": [
+            {"receiptId": a, "amountCents": 1200}, {"receiptId": b, "amountCents": 1900}
+        ] },
+        "appointments": [part(first, receipt(a, first, 1200)), part(second, receipt(b, second, 1900))],
+    });
+    let recorded = json!({
+        "id": Uuid::now_v7(), "method": "external_card", "totalCents": 3100,
+        "allocations": [
+            {"paymentId": Uuid::now_v7(), "receiptId": a, "amountCents": 1200},
+            {"paymentId": Uuid::now_v7(), "receiptId": b, "amountCents": 1900},
+        ],
+    });
+    let mut invalid = recorded.clone();
+    invalid["allocations"][0]["amountCents"] = json!(1900);
+    invalid["allocations"][1]["amountCents"] = json!(1200);
+    let (base, seen) = serve(vec![
+        http("200 OK", &[], &review.to_string()),
+        http("502 Bad Gateway", &[], ""),
+        http("201 Created", &[], &recorded.to_string()),
+        http("201 Created", &[], &invalid.to_string()),
+        http(
+            "409 Conflict",
+            &[],
+            r#"{"error":{"code":"version_conflict","message":"Balance changed"}}"#,
+        ),
+    ]);
+
+    let transport = signed_in(&base);
+    let preview = transport
+        .prepare_visit_checkout(&first.to_string(), group)
+        .unwrap();
+    let payment = preview
+        .payment("u".into(), VisitTender::ExternalCard)
+        .unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("visit.sqlite");
+    let store = Store::open(&path).unwrap();
+    assert!(store.reserve_visit_payment(&payment).unwrap());
+    let different = SavedVisitPayment {
+        command: crate::billing::visit_payment::VisitPaymentCommand {
+            idempotency_key: Uuid::now_v7(),
+            ..payment.command.clone()
+        },
+        ..payment.clone()
+    };
+    assert!(!store.reserve_visit_payment(&different).unwrap());
+    assert!(matches!(
+        transport.record_visit_payment(&first.to_string(), &payment),
+        Err(VisitPaymentError::Unknown(_))
+    ));
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert!(
+        store
+            .pending_visit_payment(group, "another")
+            .unwrap()
+            .is_none()
+    );
+    let saved = store.pending_visit_payment(group, "u").unwrap().unwrap();
+    assert_eq!(saved, payment);
+    let result = transport
+        .record_visit_payment(&second.to_string(), &saved)
+        .unwrap();
+    assert_eq!(result.total_cents, 3100);
+    assert!(matches!(
+        transport.record_visit_payment(&second.to_string(), &saved),
+        Err(VisitPaymentError::Unknown(_))
+    ));
+    assert!(matches!(
+        transport.record_visit_payment(&second.to_string(), &saved),
+        Err(VisitPaymentError::Rejected)
+    ));
+    store.clear_visit_payment(&different).unwrap();
+    assert_eq!(
+        store.pending_visit_payment(group, "u").unwrap(),
+        Some(saved.clone())
+    );
+    store.clear_visit_payment(&saved).unwrap();
+    assert!(store.pending_visit_payment(group, "u").unwrap().is_none());
+
+    let requests = seen.lock().unwrap();
+    let body = |index: usize| -> Value {
+        serde_json::from_str(requests[index].split_once("\r\n\r\n").unwrap().1).unwrap()
+    };
+    assert_eq!(body(1), body(2));
+    assert!(requests[2].starts_with(&format!("POST /admin/commerce/visits/{second}/payments ")));
+}

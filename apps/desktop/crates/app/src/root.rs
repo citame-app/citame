@@ -44,6 +44,7 @@ mod commissions;
 mod resource_calendar;
 mod visit_booking;
 mod visit_group;
+mod visit_payment;
 use calendar_overview::CalendarMode;
 mod cash;
 mod checkout;
@@ -286,6 +287,7 @@ struct Details {
     settlement_review: Option<settlement::SettlementReview>,
     checkout: Option<checkout::CheckoutReview>,
     checkout_access: Option<DetailsCheckoutAccess>,
+    visit_payment: Option<visit_payment::Panel>,
     annotations: Option<annotations::Annotations>,
     deposit_outcome_block: Option<AttendanceProtectionBlock>,
     annotations_requested_version: Option<i64>,
@@ -855,6 +857,7 @@ impl Root {
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
+        let previous_cursor = self.status.cursor;
         self.calendar_layout.take();
         self.calendar_resources.take();
         // Capture the version before reading the view. A sync commit during the reads must
@@ -1009,7 +1012,12 @@ impl Root {
             details.checkout = None;
             details.checkout_access = None;
         }
-        self.refresh_open_annotations(previous_time_off_scope != self.time_off_scope, cx);
+        let visit_access_may_have_changed = previous_cursor != self.status.cursor
+            && matches!(&self.overlay, Overlay::Details(details) if details.visit_payment.is_some());
+        self.refresh_open_annotations(
+            previous_time_off_scope != self.time_off_scope || visit_access_may_have_changed,
+            cx,
+        );
         self.refresh_resource_calendar(self.status.connectivity, false, cx);
         cx.notify();
     }
@@ -1449,6 +1457,7 @@ impl Root {
             settlement_review: None,
             checkout: None,
             checkout_access: None,
+            visit_payment: None,
             annotations: None,
             deposit_outcome_block: None,
             annotations_requested_version: None,
@@ -2916,6 +2925,19 @@ impl Root {
                 }
                 details.checkout = None;
                 details.checkout_access = None;
+                if let Some(visit) = &mut details.visit_payment {
+                    visit.receipt_closed();
+                }
+            }
+            Overlay::Details(details) if details.visit_payment.is_some() => {
+                if details
+                    .visit_payment
+                    .as_ref()
+                    .is_some_and(visit_payment::Panel::sending)
+                {
+                    return;
+                }
+                details.visit_payment = None;
             }
             Overlay::Details(_) => self.close_appointment_details(false),
             _ => self.overlay = Overlay::None,
@@ -3605,8 +3627,15 @@ impl Root {
         if let Some(review) = &d.settlement_review {
             return self.render_settlement_review(review, cx);
         }
-        if let Some(checkout) = &d.checkout {
+        if let Some(checkout) = &d.checkout
+            && d.visit_payment
+                .as_ref()
+                .is_none_or(|panel| panel.visible(self, d))
+        {
             return self.render_checkout(checkout, cx);
+        }
+        if let Some(visit) = &d.visit_payment {
+            return self.render_visit_payment(d, visit, viewport_height, cx);
         }
         let current = calendar::effective_appointment(&self.svc.store, &d.id)
             .ok()
@@ -3835,6 +3864,7 @@ impl Root {
                 })
                 .child(self.render_annotations(appointment, d.annotations.as_ref(), cx))
                 .children(self.render_related_visit(appointment, d, cx))
+                .children(self.visit_payment_button(appointment, d, cx))
             })
             .when(
                 !pending

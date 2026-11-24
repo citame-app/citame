@@ -1,6 +1,6 @@
 use super::*;
 
-fn can_switch(details: &Details) -> bool {
+pub(super) fn can_switch(details: &Details) -> bool {
     details.start == details.reviewed.starts_at
         && details.staff_id == details.reviewed.staff_id
         && !matches!(details.return_to, Some(AppointmentReturn::Conflict(_)))

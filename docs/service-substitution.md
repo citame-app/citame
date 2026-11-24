@@ -32,7 +32,42 @@ Customers can select one common professional or qualified professionals per trea
 
 `POST /appointments/visits` creates 2–8 ordered treatment parts, up to 24 distinct service/extra IDs, in a single transaction. A conflict in a later part rolls back the entire reservation. Calendar locks are ordered, ownership is checked, and the identifier binds the actor and original reviewed request. A lost response and later authentication failure retain the same packet for safe retry. The authenticated confirmation URL survives reloads.
 
-Each part has its own appointment, receipt, deposit and subsequent cancellation/rescheduling lifecycle. This is disclosed before confirmation and on the result page. There is no aggregate single payment or atomic post-booking cancellation/rescheduling of the entire visit.
+Each part has its own appointment, receipt, deposit and subsequent cancellation/rescheduling lifecycle. This is disclosed before confirmation and on the result page. Post-booking cancellation and rescheduling remain per appointment.
+
+The staff commerce API can prepare the receipts for a complete visit through
+`POST /admin/commerce/visits/:appointmentId/checkouts`. It accepts an appointment from a native
+itinerary or a group preserved during import. The operation reuses existing receipts, keeps the
+professional and service amounts for each part, and prepares new receipts in one transaction.
+Cancelled parts and externally settled parts remain visible with their existing receipt if one
+exists. An unresolved imported charge requires review before the visit can be prepared. Accounts
+need access to every calendar and receipt in the group.
+As in individual checkout, preparing a zero-total receipt with final prices settles it for zero.
+
+The prepared visit includes a payment review if it has an amount payable now and every open
+receipt can be reviewed. Complete outstanding price reviews and reconcile pending bank payments
+before recording the visit payment. Staff can submit
+its token and an idempotency key to `POST /admin/commerce/visits/:appointmentId/payments` to record
+cash or a card payment already taken on an external terminal. The command validates the current
+visit and receipts, creates one allocation per payable receipt, and commits the group in one
+transaction. A lost response can replay the same command from any appointment in the visit.
+Existing refunds continue to apply to the individual payments. In the Web calendar, open a
+grouped appointment and choose **Review visit payment**. The details show each professional,
+service and amount, with access to open receipts. An uncertain request can be retried from
+another appointment in the same group on the same browser tab and account. Desktop offers the
+same review in the appointment details. An uncertain Desktop payment can be retried after
+restart or from another part of the visit under the same account and server profile.
+An aggregate hosted card or Bizum payment remains pending.
+
+Web saves the retry details before sending a new payment. If the browser blocks site storage,
+no payment is submitted. A local browser run with synthetic records verified a committed
+payment followed by a lost response, a retry from the other appointment, and access to its
+two receipts from the confirmation on mobile.
+
+Desktop saves the original command in SQLite before its first submission and requires an
+explicit retry. It checks the acknowledgement against the receipt IDs and amounts returned by
+the server review. A synthetic API run verified the client recovered a committed payment after
+a lost response by reopening SQLite and retrying from another appointment. The live review and
+receipt display require connectivity.
 
 ## Verification — 2026-11-17
 
@@ -61,7 +96,7 @@ Migrations 0041–0044 add catalogue presentation fields, visit grouping, price 
 
 ## Remaining parity and design limits
 
-Advanced per-service controls still outside this delivery include leading padding before a treatment, service-card photograph/calendar-colour editing and home visits with manual approval/travel rules. Multi-business discovery and multisite remain outside the owner's current single-salon scope. Complete-visit payment and later management are per appointment as described above. Broader product work is tracked in [the expansion checklist](FEATURE-EXPANSION.md).
+Advanced per-service controls still outside this delivery include leading padding before a treatment, service-card photograph/calendar-colour editing and home visits with manual approval/travel rules. Multi-business discovery and multisite remain outside the owner's current single-salon scope. Grouped payment availability and later management are described above. Broader product work is tracked in [the expansion checklist](FEATURE-EXPANSION.md).
 
 The design skill's marketing-page gate has open composition findings on the application form (hero photograph/CTA, screen-sized sections, decorative moment, catalogue-column alignment and transparent native-input focus detection). These must not be represented as a design PASS. Actual browser checks verify visible focus via the associated labels, meaningful application layout, contrast and reachable controls. The previous home-page gate and JavaScript performance-budget finding remain documented in [the redesign report](ui-redesign/verification.md). Gate output for this route will be recorded after final checking.
 

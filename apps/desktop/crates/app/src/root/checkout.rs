@@ -217,6 +217,19 @@ impl Root {
         }
     }
 
+    pub(super) fn open_visit_receipt(
+        &mut self,
+        appointment: Uuid,
+        receipt: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        self.load_details_checkout(
+            appointment.to_string(),
+            DetailCheckoutSource::Existing(receipt),
+            cx,
+        );
+    }
+
     fn load_details_checkout(
         &mut self,
         id: String,

@@ -23,6 +23,7 @@ mod calendar_notices;
 pub mod gift_cache;
 mod gift_purchase;
 mod staff_portrait_draft;
+mod visit_payment;
 mod waitlist_cache;
 pub use staff_portrait_draft::StaffPortraitDraft;
 pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheScope};

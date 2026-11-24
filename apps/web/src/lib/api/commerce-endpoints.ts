@@ -20,6 +20,9 @@ import {
   type StartPaymentInput,
   startedPaymentSchema,
   unpaidAppointmentsSchema,
+  type VisitPaymentInput,
+  visitCheckoutSchema,
+  visitPaymentSchema,
 } from "@sob/contracts";
 import { z } from "zod";
 import type { ApiClient } from "./client";
@@ -69,6 +72,10 @@ export function commerceEndpoints(client: ApiClient) {
       client.get("/admin/commerce/checkouts", checkoutListSchema, { query, signal }),
     create: (input: CreateCheckoutInput, mode: CommerceMode = "admin") =>
       client.post(`${base(mode)}/checkouts`, input, checkoutSchema),
+    prepareVisit: (appointmentId: string) =>
+      client.post(`/admin/commerce/visits/${appointmentId}/checkouts`, {}, visitCheckoutSchema),
+    payVisit: (appointmentId: string, input: VisitPaymentInput) =>
+      client.post(`/admin/commerce/visits/${appointmentId}/payments`, input, visitPaymentSchema),
     finalizePrices: (id: string, input: CheckoutPrices) =>
       client.put(`/admin/commerce/checkouts/${id}/prices`, input, checkoutSchema),
     get: (id: string, mode: CommerceMode, signal?: AbortSignal) =>

@@ -76,7 +76,15 @@ export async function heldProducts(tx: Tx, checkoutId: string) {
     .where(
       and(eq(stockReservation.checkoutId, checkoutId), eq(stockReservation.status, "reserved")),
     );
-  const ids = [...new Set(holds.map((hold) => hold.productId))].sort();
+  await lockHeldProducts(
+    tx,
+    holds.map((hold) => hold.productId),
+  );
+  return holds;
+}
+
+async function lockHeldProducts(tx: Tx, productIds: string[]) {
+  const ids = [...new Set(productIds)].sort();
   if (ids.length)
     await tx
       .select({ id: retailProduct.id })
@@ -84,7 +92,23 @@ export async function heldProducts(tx: Tx, checkoutId: string) {
       .where(inArray(retailProduct.id, ids))
       .orderBy(asc(retailProduct.id))
       .for("update");
-  return holds;
+}
+
+export async function lockVisitCheckoutProducts(tx: Tx, receiptIds: string[]) {
+  if (receiptIds.length === 0) return;
+  const rows = await tx
+    .selectDistinct({ productId: stockReservation.productId })
+    .from(stockReservation)
+    .where(
+      and(
+        inArray(stockReservation.checkoutId, receiptIds),
+        eq(stockReservation.status, "reserved"),
+      ),
+    );
+  await lockHeldProducts(
+    tx,
+    rows.map(({ productId }) => productId),
+  );
 }
 export async function consumeReservedInventory(tx: Tx, checkoutId: string) {
   const holds = await heldProducts(tx, checkoutId);

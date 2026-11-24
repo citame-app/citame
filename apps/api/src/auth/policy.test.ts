@@ -333,6 +333,7 @@ describe("authorizeCalendarQuery", () => {
     expect(authorizeCalendarQuery(owner, { ...range, staffIds: [id(0xa), id(0xb)] })).toEqual({
       staffIds: [id(0xa), id(0xb)],
       includeBilling: true,
+      visitCheckoutScope: { staffId: null, actorId: owner.userId },
     });
   });
 
@@ -340,10 +341,12 @@ describe("authorizeCalendarQuery", () => {
     expect(authorizeCalendarQuery(staffA, range)).toEqual({
       staffIds: [id(0xa)],
       includeBilling: true,
+      visitCheckoutScope: { staffId: id(0xa), actorId: staffA.userId },
     });
     expect(authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xa)] })).toEqual({
       staffIds: [id(0xa)],
       includeBilling: true,
+      visitCheckoutScope: { staffId: id(0xa), actorId: staffA.userId },
     });
     forbidden(() => authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xa), id(0xb)] }));
     forbidden(() => authorizeCalendarQuery(staffA, { ...range, staffIds: [id(0xb)] }));
