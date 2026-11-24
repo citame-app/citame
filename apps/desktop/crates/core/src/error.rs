@@ -40,6 +40,10 @@ pub enum CoreError {
     AppointmentChanged,
     #[error("synchronize the earlier appointment changes before editing")]
     AppointmentEditsAwaitingSync,
+    #[error("sync the saved appointment before reviewing this conflict")]
+    AppointmentConflictRefreshRequired,
+    #[error("this action does not match the reviewed appointment conflict")]
+    AppointmentConflictActionMismatch,
     #[error("synchronize the latest saved note before reviewing this draft")]
     AppointmentNoteRefreshRequired,
     #[error("the appointment assignment is outside the account calendar")]

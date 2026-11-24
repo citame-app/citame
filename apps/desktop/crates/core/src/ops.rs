@@ -749,6 +749,75 @@ pub enum AppointmentEdit<'a> {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppointmentConflictAction {
+    Move,
+    Cancel,
+    Outcome(AppointmentStatus),
+}
+
+impl AppointmentConflictAction {
+    pub fn requested(conflict: &crate::model::Conflict) -> Option<Self> {
+        if conflict.requires_restored_review() {
+            return None;
+        }
+        match conflict.kind.as_str() {
+            "appointment.reschedule" => Some(Self::Move),
+            "appointment.cancel" => Some(Self::Cancel),
+            "appointment.set_status" => match conflict.payload["status"].as_str() {
+                Some("completed") => Some(Self::Outcome(AppointmentStatus::Completed)),
+                Some("no_show") => Some(Self::Outcome(AppointmentStatus::NoShow)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn of_edit(edit: &AppointmentEdit<'_>) -> Self {
+        match edit {
+            AppointmentEdit::Move { .. } => Self::Move,
+            AppointmentEdit::Cancel => Self::Cancel,
+            AppointmentEdit::Outcome { status, .. } => Self::Outcome(*status),
+        }
+    }
+}
+
+pub struct AppointmentConflictReview {
+    pub appointment: Appointment,
+    pub conflict: crate::model::Conflict,
+    pub action: AppointmentConflictAction,
+}
+
+pub fn review_appointment_conflict(
+    store: &Store,
+    mutation_id: &str,
+) -> Result<AppointmentConflictReview> {
+    store.read_snapshot(|store| {
+        let conflict = store
+            .conflict(mutation_id)?
+            .ok_or_else(|| CoreError::NotFound(format!("open conflict {mutation_id}")))?;
+        let action = AppointmentConflictAction::requested(&conflict)
+            .ok_or(CoreError::AppointmentConflictActionMismatch)?;
+        require_appointment_review_checkpoint(store, &conflict)?;
+        let appointment = writable_appointment(store, &conflict.entity_id)?;
+        Ok(AppointmentConflictReview {
+            appointment,
+            conflict,
+            action,
+        })
+    })
+}
+
+fn require_appointment_review_checkpoint(
+    store: &Store,
+    conflict: &crate::model::Conflict,
+) -> Result<()> {
+    if !store.appointment_conflict_review_ready(&conflict.mutation_id, &conflict.entity_id)? {
+        return Err(CoreError::AppointmentConflictRefreshRequired);
+    }
+    Ok(())
+}
+
 pub struct ReviewedAppointment {
     version: i64,
     pub starts_at: DateTime<Utc>,
@@ -788,24 +857,37 @@ pub fn queue_reviewed_appointment_edit(
     conflict_to_resolve: Option<&str>,
 ) -> Result<()> {
     store.write_transaction(|store| {
+        let conflict = conflict_to_resolve
+            .map(|mutation_id| {
+                store
+                    .conflict(mutation_id)?
+                    .filter(|conflict| conflict.entity_id == id)
+                    .ok_or_else(|| CoreError::NotFound(format!("open conflict {mutation_id}")))
+            })
+            .transpose()?;
+        if let Some(conflict) = &conflict {
+            if AppointmentConflictAction::requested(conflict)
+                != Some(AppointmentConflictAction::of_edit(&edit))
+            {
+                return Err(CoreError::AppointmentConflictActionMismatch);
+            }
+            require_appointment_review_checkpoint(store, conflict)?;
+        }
         if effective_appointment(store, id)?.is_none_or(|a| !reviewed.matches(&a)) {
             return Err(CoreError::AppointmentChanged);
-        }
-        if let Some(mutation_id) = conflict_to_resolve
-            && store
-                .conflict(mutation_id)?
-                .is_none_or(|conflict| conflict.entity_id != id)
-        {
-            return Err(CoreError::NotFound(format!("open conflict {mutation_id}")));
         }
         match edit {
             AppointmentEdit::Move {
                 starts_at,
                 staff_id,
-            } => queue_reschedule(store, id, starts_at, staff_id),
+            } => {
+                let notes = conflict.as_ref().and_then(|c| c.payload["notes"].as_str());
+                queue_reschedule(store, id, starts_at, staff_id, notes)
+            }
             AppointmentEdit::Cancel => cancel_appointment(store, id),
             AppointmentEdit::Outcome { status, now } => {
-                set_appointment_status(store, id, status, now)
+                let notes = conflict.as_ref().and_then(|c| c.payload["notes"].as_str());
+                queue_appointment_status(store, id, status, now, notes)
             }
         }?;
         if let Some(mutation_id) = conflict_to_resolve {
@@ -821,7 +903,7 @@ pub fn reschedule_appointment(
     starts_at: Option<DateTime<Utc>>,
     staff_id: Option<&str>,
 ) -> Result<()> {
-    store.write_transaction(|store| queue_reschedule(store, id, starts_at, staff_id))
+    store.write_transaction(|store| queue_reschedule(store, id, starts_at, staff_id, None))
 }
 
 fn queue_reschedule(
@@ -829,6 +911,7 @@ fn queue_reschedule(
     id: &str,
     starts_at: Option<DateTime<Utc>>,
     staff_id: Option<&str>,
+    notes: Option<&str>,
 ) -> Result<()> {
     if starts_at.is_none() && staff_id.is_none() {
         return Err(CoreError::Invalid(
@@ -886,6 +969,9 @@ fn queue_reschedule(
     if let Some(s) = staff_id {
         p.insert("staffId".into(), json!(s));
     }
+    if let Some(notes) = notes {
+        p.insert("notes".into(), json!(notes));
+    }
     store.enqueue("appointment.reschedule", id, Value::Object(p))?;
     Ok(())
 }
@@ -923,7 +1009,7 @@ pub fn queue_appointment_notes(
             )));
         }
         if let Some(mutation_id) = conflict_to_resolve
-            && !store.appointment_note_review_ready(mutation_id, id)?
+            && !store.appointment_conflict_review_ready(mutation_id, id)?
         {
             return Err(CoreError::AppointmentNoteRefreshRequired);
         }
@@ -980,6 +1066,16 @@ pub fn set_appointment_status(
     status: AppointmentStatus,
     now: DateTime<Utc>,
 ) -> Result<()> {
+    queue_appointment_status(store, id, status, now, None)
+}
+
+fn queue_appointment_status(
+    store: &mut Store,
+    id: &str,
+    status: AppointmentStatus,
+    now: DateTime<Utc>,
+    notes: Option<&str>,
+) -> Result<()> {
     if !matches!(
         status,
         AppointmentStatus::Completed | AppointmentStatus::NoShow
@@ -1009,11 +1105,11 @@ pub fn set_appointment_status(
             _ => CoreError::Invalid(format!("appointment is {}", current.status.as_str())),
         });
     }
-    store.enqueue(
-        "appointment.set_status",
-        id,
-        json!({ "id": id, "version": current.version, "status": status.as_str() }),
-    )?;
+    let mut payload = json!({ "id": id, "version": current.version, "status": status.as_str() });
+    if let Some(notes) = notes {
+        payload["notes"] = json!(notes);
+    }
+    store.enqueue("appointment.set_status", id, payload)?;
     Ok(())
 }
 
@@ -1232,20 +1328,7 @@ fn resolve_conflict_in_transaction(
         Resolution::Dismiss => store.resolve_conflict(mutation_id, "dismissed"),
         Resolution::Cancel => {
             if c.kind != "appointment.create" {
-                // The appointment exists on the server (or did): cancel it if it is still live.
-                match editable(store, &c.entity_id) {
-                    Ok(a) => {
-                        store.enqueue(
-                            "appointment.cancel",
-                            &c.entity_id,
-                            json!({"id": c.entity_id, "version": a.version}),
-                        )?;
-                    }
-                    Err(CoreError::AppointmentScopeDenied) => {
-                        return Err(CoreError::AppointmentScopeDenied);
-                    }
-                    Err(_) => {}
-                }
+                return Err(CoreError::AppointmentConflictActionMismatch);
             }
             store.resolve_conflict(mutation_id, "cancelled")
         }
@@ -1313,7 +1396,7 @@ fn resolve_conflict_in_transaction(
                     store.enqueue("appointment.create", &c.entity_id, p)?;
                 }
                 "appointment.reschedule" => {
-                    queue_reschedule(store, &c.entity_id, Some(starts_at), staff_id.as_deref())?;
+                    return Err(CoreError::AppointmentConflictActionMismatch);
                 }
                 other => {
                     return Err(CoreError::Invalid(format!("{other} cannot be rescheduled")));

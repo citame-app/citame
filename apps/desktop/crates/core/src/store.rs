@@ -2095,21 +2095,29 @@ impl Store {
             [],
         )?;
         tx.execute(
-            "DELETE FROM meta WHERE key GLOB 'note_review_head:*' AND CAST(value AS INTEGER) <= ?1",
+            "DELETE FROM meta WHERE (key GLOB 'note_review_head:*' OR key GLOB 'appointment_review_head:*')
+             AND CAST(value AS INTEGER) <= ?1",
             [cursor],
         )?;
         Ok(())
     }
 
-    /// A rejected note is reviewable once the replica has seen the server head from its rejection.
-    pub fn appointment_note_review_ready(
+    /// A rejected appointment edit is reviewable after pulling through its rejection checkpoint.
+    pub fn appointment_conflict_review_ready(
         &self,
         mutation_id: &str,
         appointment_id: &str,
     ) -> Result<bool> {
-        let required = self
-            .get_meta(&format!("note_review_head:{mutation_id}"))?
-            .and_then(|value| value.parse::<i64>().ok())
+        let current = self.get_meta(&format!("appointment_review_head:{mutation_id}"))?;
+        let legacy_note = self.get_meta(&format!("note_review_head:{mutation_id}"))?;
+        let required = current
+            .or(legacy_note)
+            .map(|value| {
+                value.parse::<i64>().map_err(|_| {
+                    CoreError::Protocol("Invalid appointment conflict checkpoint".into())
+                })
+            })
+            .transpose()?
             .unwrap_or_default();
         Ok(self.cursor()? >= required
             && self.appointment_edit_sync(appointment_id)? != AppointmentEditSync::Pending)
@@ -2441,8 +2449,10 @@ impl Store {
                         if let Some(head) = response_head {
                             tx.execute(
                                 "INSERT INTO meta (key, value)
-                                 SELECT 'note_review_head:' || mutation_id, ?1 FROM conflict
-                                 WHERE entity_id = ?2 AND kind = ?3 AND resolved_at IS NULL
+                                 SELECT (CASE WHEN kind = ?3 THEN 'note_review_head:'
+                                              ELSE 'appointment_review_head:' END) || mutation_id, ?1
+                                 FROM conflict WHERE entity_id = ?2 AND kind GLOB 'appointment.*'
+                                 AND kind <> 'appointment.create' AND resolved_at IS NULL
                                  ON CONFLICT(key) DO UPDATE SET value = MAX(CAST(value AS INTEGER), ?1)",
                                 params![head, s.entity_id, crate::ops::APPOINTMENT_NOTES_KIND],
                             )?;

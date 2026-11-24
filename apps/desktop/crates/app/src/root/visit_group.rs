@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn can_switch(details: &Details) -> bool {
     details.start == details.reviewed.starts_at
         && details.staff_id == details.reviewed.staff_id
-        && !matches!(details.return_to, Some(AppointmentReturn::Conflict(_)))
+        && !matches!(details.return_to, Some(AppointmentReturn::Conflict { .. }))
         && !details.confirm_cancel
         && details.price_review.is_none()
         && details.settlement_review.is_none()
@@ -174,7 +174,10 @@ mod tests {
             };
             assert_eq!(details.id, current.id);
             details.start = details.reviewed.starts_at;
-            details.return_to = Some(AppointmentReturn::Conflict("conflict".into()));
+            details.return_to = Some(AppointmentReturn::Conflict {
+                mutation_id: "conflict".into(),
+                schedule: None,
+            });
             root.open_related_visit(&other.id, cx);
             let Overlay::Details(details) = &mut root.overlay else {
                 panic!("details");

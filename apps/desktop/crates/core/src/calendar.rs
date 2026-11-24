@@ -339,6 +339,9 @@ fn overlay_calendar_outbox(
                 if let Some(a) = map.get_mut(&e.entity_id) {
                     a.status = match (e.kind.as_str(), str_of(p, "status").as_deref()) {
                         ("appointment.set_status", Some(s)) => {
+                            if let Some(note) = str_of(p, "notes") {
+                                a.notes = Some(note);
+                            }
                             AppointmentStatus::parse(s).unwrap_or(a.status)
                         }
                         _ => AppointmentStatus::Cancelled,

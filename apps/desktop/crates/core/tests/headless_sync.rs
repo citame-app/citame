@@ -6260,6 +6260,37 @@ fn a_cloud_move_stays_visible_before_a_stale_cancel_is_reconciled() {
         a.store.appointment(&id).unwrap().unwrap().status,
         AppointmentStatus::Booked
     );
+    let conflict = a.store.conflicts().unwrap().remove(0);
+    let review = ops::review_appointment_conflict(&a.store, &conflict.mutation_id).unwrap();
+    let expected = ops::ReviewedAppointment::from(&review.appointment);
+    assert_eq!(review.action, ops::AppointmentConflictAction::Cancel);
+    assert!(matches!(
+        ops::queue_reviewed_appointment_edit(
+            &mut a.store,
+            &id,
+            &expected,
+            ops::AppointmentEdit::Move {
+                starts_at: Some(start),
+                staff_id: None
+            },
+            Some(&conflict.mutation_id),
+        ),
+        Err(sob_core::error::CoreError::AppointmentConflictActionMismatch)
+    ));
+    assert!(a.store.conflict(&conflict.mutation_id).unwrap().is_some());
+    ops::queue_reviewed_appointment_edit(
+        &mut a.store,
+        &id,
+        &expected,
+        ops::AppointmentEdit::Cancel,
+        Some(&conflict.mutation_id),
+    )
+    .unwrap();
+    assert_eq!(a.sync().push.applied, 1);
+    assert_eq!(
+        a.store.appointment(&id).unwrap().unwrap().status,
+        AppointmentStatus::Cancelled
+    );
 }
 
 #[test]

@@ -153,7 +153,7 @@ impl Root {
         if !self
             .svc
             .store
-            .appointment_note_review_ready(&conflict.mutation_id, &conflict.entity_id)
+            .appointment_conflict_review_ready(&conflict.mutation_id, &conflict.entity_id)
             .unwrap_or(false)
         {
             self.explain_note_review_wait(cx);
@@ -177,7 +177,10 @@ impl Root {
             );
             self.show_appointment_details(
                 current,
-                Some(AppointmentReturn::Conflict(conflict.mutation_id.clone())),
+                Some(AppointmentReturn::Conflict {
+                    mutation_id: conflict.mutation_id.clone(),
+                    schedule: None,
+                }),
                 cx,
             );
             if let Overlay::Details(details) = &mut self.overlay {

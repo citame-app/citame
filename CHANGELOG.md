@@ -120,6 +120,7 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 ### Fixed
 
 - Desktop keeps the confirmed appointment visible if a pending offline edit targets an older version. Dependent edits remain available for conflict review.
+- Desktop waits for the saved appointment before reviewing a rejected scheduling change. Each review preserves the original move, cancellation or attendance action.
 
 - Desktop shows starting and pending prices, surcharges, and service instructions when reviewing a waitlist offer.
 
