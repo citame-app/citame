@@ -2,6 +2,7 @@ import type { CalendarQuery, CalendarResponse } from "@sob/contracts";
 import {
   appointment,
   appointmentService,
+  appointmentVisitPart,
   clientProfile,
   type Database,
   service,
@@ -10,6 +11,7 @@ import {
   workingHours,
 } from "@sob/db";
 import { and, asc, eq, getTableColumns, gt, inArray, isNull, lt } from "drizzle-orm";
+import type { VisitCheckoutScope } from "../../auth/policy";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
 import { workingWindows } from "../availability/windows";
@@ -20,11 +22,13 @@ import { asDatedHours, loadShiftRows } from "../staff/date-hours";
 import { calendarBadges } from "./context";
 import { loadBookingPrices } from "./pricing";
 import { loadSeriesReferences } from "./series-references";
+import { groupedCheckout } from "./visit-checkout-access";
 
 type CalendarScope = {
   staffIds?: string[];
   includeBilling: boolean;
   includeInactiveStaff?: boolean;
+  visitCheckoutScope?: VisitCheckoutScope;
 };
 
 export async function getCalendarWithResourceOccupancy(
@@ -98,9 +102,15 @@ export async function getCalendar(
 
   const [rows, offs, hours, dated] = await Promise.all([
     db
-      .select({ row: appointment, clientName: clientProfile.name })
+      .select({
+        row: appointment,
+        clientName: clientProfile.name,
+        itineraryId: appointmentVisitPart.visitId,
+        hasVisitCheckout: groupedCheckout(db, scope.visitCheckoutScope),
+      })
       .from(appointment)
       .innerJoin(clientProfile, eq(clientProfile.id, appointment.clientId))
+      .leftJoin(appointmentVisitPart, eq(appointmentVisitPart.appointmentId, appointment.id))
       .where(
         and(
           inArray(appointment.staffId, staffIds),
@@ -177,7 +187,7 @@ export async function getCalendar(
     from: query.from,
     to: query.to,
     staff: columns,
-    appointments: rows.map(({ row, clientName }) => {
+    appointments: rows.map(({ row, clientName, itineraryId, hasVisitCheckout }) => {
       const own = (serviceSnapshots.get(row.id) ?? []).sort((a, b) => a.position - b.position);
       const context = badges.get(row.id);
       const unresolved = own.filter((s) => s.sourceUnpriced && s.reviewedPriceCents === null);
@@ -185,6 +195,8 @@ export async function getCalendar(
         ...(prices.has(row.id) ? { bookingPrice: prices.get(row.id) } : {}),
         ...(series.has(row.id) ? { series: series.get(row.id) } : {}),
         ...(row.visitGroupId ? { visitGroupId: row.visitGroupId } : {}),
+        ...(itineraryId ? { itineraryId } : {}),
+        ...(hasVisitCheckout ? { hasVisitCheckout: true as const } : {}),
         ...(row.combinationId ? { combinationId: row.combinationId } : {}),
         id: row.id,
         staffId: row.staffId,

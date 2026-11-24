@@ -84,6 +84,12 @@ Using it: Day view shows one column per staff member; Week view shows Monday to 
 
 The calendar replica keeps the last synced deposit state and deadlines, so appointment details can show them offline. Desktop also loads the current deposit state from Cloud alongside the private appointment context. The panel shows applicable payment and free cancellation deadlines. Accounts with commerce access also see the deposit, fee retained and refund due, and can open the existing receipt from the same panel. Open details can refresh the panel, and an already loaded state can remain visible if the connection drops. Reopening an appointment offline does not fetch its payment context.
 
+For a grouped visit, **Review visit payment** shows the appointments and payable receipts in
+one panel. Choose cash received or a card payment already taken on an external terminal, then
+confirm the exact total. If Cloud does not confirm the result, reopen either appointment after
+connecting and choose **Retry the same payment**. The saved command survives restarting Desktop
+and stays with its original account and server profile.
+
 Open **Keyboard shortcuts** from the calendar header or press `?`. Use `T` for today, the left and right arrows for the previous and next period, `D`, `W`, `M` and `L` to switch views, `N` to open a new appointment, and `R` to sync. In the day or individual week timeline, use Tab to focus an appointment. Use Alt+Up or Alt+Down to move it by one slot. In Day view, use Alt+Left or Alt+Right to change to the adjacent visible professional. Use Page Up and Page Down to scroll the timeline, or hold Shift to scroll across columns. Shortcuts are paused while a dialog is open or while selecting a time range.
 
 Drag across free time in a calendar column to show the selected hours next to the pointer. Release to choose a new appointment or a block with the selected professional and time. The service and cleanup must fit in the selected booking range. Appointment cards use the first service color from the catalogue when available.

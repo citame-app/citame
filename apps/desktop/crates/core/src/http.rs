@@ -9,6 +9,9 @@ use std::time::Duration;
 
 use crate::auth::{AuthError, AuthProvider, BrowserWorkspace, SessionHandle, TokenStore};
 use crate::backoff::Backoff;
+use crate::billing::visit_payment::{
+    RecordedVisitPayment, SavedVisitPayment, VisitCheckout, VisitPaymentError, VisitPaymentGroup,
+};
 use crate::billing::{
     AppointmentCheckout, BankPaymentReconciliation, BankPaymentResolution, BankRefundAction,
     CashCommand, CashSession, CheckoutFinalPrice, CheckoutHistoryFilters, CheckoutPage,
@@ -384,6 +387,57 @@ impl HttpTransport {
         }
         let receipt = self.post_json("/admin/commerce/checkouts", &input)?;
         validate_checkout(receipt, Some(id), balance)
+    }
+
+    pub fn prepare_visit_checkout(
+        &self,
+        appointment_id: &str,
+        group: VisitPaymentGroup,
+    ) -> Result<VisitCheckout, TransportError> {
+        let anchor = parse_id(appointment_id)?;
+        let path = format!("/admin/commerce/visits/{anchor}/checkouts");
+        let visit: VisitCheckout = self.post_json(&path, &serde_json::json!({}))?;
+        if !visit.matches(group, anchor) {
+            return Err(TransportError::Server("Unexpected visit checkout".into()));
+        }
+        Ok(visit)
+    }
+
+    pub fn record_visit_payment(
+        &self,
+        appointment_id: &str,
+        saved: &SavedVisitPayment,
+    ) -> Result<RecordedVisitPayment, VisitPaymentError> {
+        if !self
+            .session
+            .read()
+            .expect("session lock")
+            .as_ref()
+            .is_some_and(|session| session.user_id == saved.actor_user_id)
+        {
+            return Err(TransportError::Forbidden(
+                "Visit payment belongs to another account".into(),
+            )
+            .into());
+        }
+        let anchor = parse_id(appointment_id)?;
+        let path = format!("/admin/commerce/visits/{anchor}/payments");
+        let result: RecordedVisitPayment = read_response_with(
+            self.send_json(&path, &saved.command)?,
+            |status, retry_after, body| {
+                if (400..500).contains(&status) && !matches!(status, 401 | 403 | 404 | 408 | 429) {
+                    VisitPaymentError::Rejected
+                } else {
+                    review_transport_error(status, retry_after, body).into()
+                }
+            },
+        )?;
+        if !result.matches(saved) {
+            return Err(
+                TransportError::Server("Unexpected visit payment acknowledgement".into()).into(),
+            );
+        }
+        Ok(result)
     }
 
     pub fn browser_workspaces(&self) -> Result<Vec<BrowserWorkspace>, TransportError> {

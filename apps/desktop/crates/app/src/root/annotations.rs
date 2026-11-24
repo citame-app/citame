@@ -30,6 +30,7 @@ impl Annotations {
         };
         if let Some(context) = context {
             context.protection = None;
+            context.has_visit_checkout = false;
         }
     }
 }
@@ -110,6 +111,14 @@ impl Root {
             annotations.forget_protection();
         }
         if self.status.connectivity != Connectivity::Online {
+            return;
+        }
+        if force_refresh
+            && matches!(&self.overlay, Overlay::Details(details)
+                if details.visit_payment.is_some()
+                && matches!(details.annotations, Some(Annotations::Loading { .. })))
+        {
+            self.open_annotations(cx);
             return;
         }
         let Overlay::Details(details) = &self.overlay else {
@@ -752,6 +761,7 @@ mod tests {
                 let notes = || AppointmentAnnotations {
                     appointment_version: Some(3),
                     can_edit: None,
+                    has_visit_checkout: false,
                     default_requested: None,
                     protection: None,
                     customer_comment: None,
@@ -832,6 +842,7 @@ mod tests {
             details.annotations = Some(Annotations::Ready(AppointmentAnnotations {
                 appointment_version: Some(3),
                 can_edit: Some(true),
+                has_visit_checkout: false,
                 default_requested: Some(true),
                 protection: None,
                 customer_comment: Some("Customer message".into()),
@@ -918,6 +929,7 @@ mod tests {
                 details.annotations = Some(Annotations::Ready(AppointmentAnnotations {
                     appointment_version: Some(3),
                     can_edit: Some(true),
+                    has_visit_checkout: false,
                     default_requested: Some(false),
                     protection: None,
                     customer_comment: None,

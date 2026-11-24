@@ -22,6 +22,7 @@ import { AppointmentCheckout } from "../commerce/appointment-checkout";
 import { BillingReviewReasons } from "../commerce/billing-review-reasons";
 import { ImportedPriceReview } from "../commerce/imported-price-review";
 import { ImportedSettlementForm } from "../commerce/imported-settlement";
+import { VisitCheckout } from "../commerce/visit-checkout";
 import { describeProblem, type Problem } from "../problems";
 import { AppointmentActions } from "./appointment-actions";
 import { AppointmentContext } from "./appointment-context";
@@ -37,6 +38,7 @@ export function AppointmentDrawer({
   onClose,
   role,
   billingRole = role,
+  paymentActorId,
   ownStaffId,
   now,
   onReload,
@@ -47,6 +49,7 @@ export function AppointmentDrawer({
   onClose: () => void;
   role: UserRole;
   billingRole?: UserRole;
+  paymentActorId?: string;
   ownStaffId: string | null;
   now: Date;
   /** Refetch the calendar so the drawer shows the latest version after a conflict. */
@@ -68,6 +71,7 @@ export function AppointmentDrawer({
           staffName={staffName}
           role={role}
           billingRole={billingRole}
+          paymentActorId={paymentActorId}
           ownStaffId={ownStaffId}
           now={now}
           onClose={onClose}
@@ -84,6 +88,7 @@ function DrawerBody({
   staffName,
   role,
   billingRole,
+  paymentActorId,
   ownStaffId,
   now,
   onClose,
@@ -94,6 +99,7 @@ function DrawerBody({
   staffName: string;
   role: UserRole;
   billingRole: UserRole;
+  paymentActorId?: string;
   ownStaffId: string | null;
   now: Date;
   onClose: () => void;
@@ -461,6 +467,15 @@ function DrawerBody({
         appointment.services.every(
           (service) => service.currency === "EUR" && !service.sourceUnpriced,
         ) && <AppointmentCheckout appointmentId={appointment.id} mode="admin" role={billingRole} />}
+      {!readOnly && paymentActorId && appointment.hasVisitCheckout && (
+        <VisitCheckout
+          appointmentId={appointment.id}
+          groupId={appointment.itineraryId ?? appointment.visitGroupId ?? appointment.id}
+          source={appointment.itineraryId ? "itinerary" : "import"}
+          actorId={paymentActorId}
+          role={billingRole}
+        />
+      )}
       <AppointmentActions
         readOnly={readOnly}
         appointment={appointment}

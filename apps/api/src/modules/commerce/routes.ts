@@ -16,6 +16,7 @@ import {
   reconcileRefundSchema,
   refundRequestSchema,
   startPaymentSchema,
+  visitPaymentInputSchema,
 } from "@sob/contracts";
 import { checkoutPayment } from "@sob/db";
 import { eq } from "drizzle-orm";
@@ -61,6 +62,7 @@ import {
   voidCheckout,
 } from "./service";
 import { unpaidAppointments } from "./unpaid";
+import { collectVisitPayment, prepareVisitCheckouts } from "./visit-checkouts";
 
 const operator = createMiddleware<AppEnv>(async (c, next) => {
   requireOperator(c.get("principal"));
@@ -226,6 +228,39 @@ export function commerceAdminRoutes(deps: AppDeps) {
           parseOrThrow(checkoutListQuerySchema, c.req.query()),
         ),
         200,
+        { "Cache-Control": "private, no-store" },
+      ),
+    )
+    .post("/visits/:appointmentId/checkouts", async (c) => {
+      const principal = c.get("principal");
+      const visit = await prepareVisitCheckouts(
+        deps.db,
+        checkoutId(c.req.param("appointmentId")),
+        principal,
+        { now: deps.now ?? (() => new Date()), generation: deps.config.syncReplicaGeneration },
+      );
+      return c.json(
+        {
+          ...visit,
+          appointments: visit.appointments.map((item) => ({
+            ...item,
+            receipt: item.receipt && withActions(item.receipt, principal),
+          })),
+        },
+        200,
+        { "Cache-Control": "private, no-store" },
+      );
+    })
+    .post("/visits/:appointmentId/payments", async (c) =>
+      c.json(
+        await collectVisitPayment(
+          deps.db,
+          checkoutId(c.req.param("appointmentId")),
+          parseOrThrow(visitPaymentInputSchema, await readJson(c)),
+          c.get("principal"),
+          { now: deps.now ?? (() => new Date()), generation: deps.config.syncReplicaGeneration },
+        ),
+        201,
         { "Cache-Control": "private, no-store" },
       ),
     )

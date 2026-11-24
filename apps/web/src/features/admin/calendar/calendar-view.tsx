@@ -859,6 +859,7 @@ export function CalendarView({
         }}
         role={role}
         billingRole={bookingRole}
+        paymentActorId={userId}
         readOnly={readOnly}
         ownStaffId={ownStaffId}
         now={now}

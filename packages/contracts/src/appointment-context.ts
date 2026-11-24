@@ -30,6 +30,7 @@ export const appointmentContextRowSchema = appointmentContextInputSchema.extend(
 export const appointmentContextSchema = z.object({
   appointmentVersion: z.number().int().positive().optional(),
   canEdit: z.boolean().optional(),
+  hasVisitCheckout: z.literal(true).optional(),
   defaultRequested: z.boolean().optional(),
   protection: appointmentProtectionContextSchema.optional(),
   businessMessage: z.string().nullable().optional(),

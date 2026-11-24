@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appointmentStatusSchema } from "./appointments";
 import { bookingProtectionSchema } from "./booking-protection";
 import { idSchema, instantSchema, pageInfoSchema, syncGenerationSchema } from "./common";
 import { giftCardCodeSchema } from "./gift-card-code";
@@ -341,6 +342,52 @@ export const checkoutSchema = z.object({
   refunds: z.array(z.lazy(() => checkoutRefundSchema)).default([]),
   createdAt: instantSchema,
 });
+export const visitCheckoutSchema = z.object({
+  groupId: idSchema,
+  source: z.enum(["itinerary", "import"]),
+  paymentReview: z
+    .object({
+      token: z.string().regex(/^[a-f0-9]{64}$/),
+      totalCents: z.number().int().positive(),
+      allocations: z
+        .array(z.object({ receiptId: idSchema, amountCents: moneyCentsSchema.positive() }))
+        .min(1),
+    })
+    .nullable(),
+  appointments: z.array(
+    z.object({
+      appointmentId: idSchema,
+      staffId: idSchema,
+      staffName: z.string(),
+      serviceNames: z.array(z.string()),
+      startsAt: instantSchema,
+      status: appointmentStatusSchema,
+      settledExternally: z.boolean(),
+      receipt: checkoutSchema.nullable(),
+    }),
+  ),
+});
+export type VisitCheckout = z.infer<typeof visitCheckoutSchema>;
+const visitPaymentMethodSchema = z.enum(["cash", "external_card"]);
+export const visitPaymentInputSchema = z.strictObject({
+  method: visitPaymentMethodSchema,
+  reviewToken: z.string().regex(/^[a-f0-9]{64}$/),
+  idempotencyKey: idempotencyKeySchema,
+});
+export type VisitPaymentInput = z.infer<typeof visitPaymentInputSchema>;
+export const visitPaymentSchema = z.object({
+  id: idSchema,
+  method: visitPaymentMethodSchema,
+  totalCents: z.number().int().positive(),
+  allocations: z.array(
+    z.object({
+      paymentId: idSchema,
+      receiptId: idSchema,
+      amountCents: moneyCentsSchema,
+    }),
+  ),
+});
+export type VisitPayment = z.infer<typeof visitPaymentSchema>;
 const checkoutGroupTotalSchema = z.object({
   period: z.iso.date(),
   receipts: z.number().int().nonnegative(),
