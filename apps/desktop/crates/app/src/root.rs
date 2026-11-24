@@ -6530,6 +6530,9 @@ mod tests {
                     matches!(&root.overlay, Overlay::Details(details) if details.checkout.is_none())
                 );
             }
+            root.status.connectivity = Connectivity::Offline;
+            assert!(root.ready_deposit_receipt().is_none());
+            cx.notify();
         });
         cx.run_until_parked();
         assert!(cx.debug_bounds("open-deposit-receipt").is_none());
