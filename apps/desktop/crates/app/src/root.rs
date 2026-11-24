@@ -144,6 +144,17 @@ fn step_appointment_time(tz: Tz, start: DateTime<Utc>, minutes: i64) -> Option<D
     }
 }
 
+fn requested_attendance(conflict: &Conflict) -> Option<Key> {
+    if conflict.kind != "appointment.set_status" {
+        return None;
+    }
+    match conflict.payload["status"].as_str() {
+        Some("completed") => Some(Key::MarkCompleted),
+        Some("no_show") => Some(Key::MarkNoShow),
+        _ => None,
+    }
+}
+
 fn conflict_requested_start(conflict: &Conflict) -> Option<DateTime<Utc>> {
     conflict.payload.get("startsAt")?.as_str()?.parse().ok()
 }
@@ -1600,6 +1611,15 @@ impl Root {
                 Some(AppointmentReturn::Conflict(c.mutation_id.clone())),
                 cx,
             );
+            if let Some(requested) = requested_attendance(c) {
+                let message = i18n::fill(
+                    self.t(Key::ConflictAttendanceReview),
+                    &[("action", self.t(requested))],
+                );
+                if let Overlay::Details(details) = &mut self.overlay {
+                    details.error = Some(message);
+                }
+            }
             if c.kind == "appointment.reschedule"
                 && let Overlay::Details(d) = &mut self.overlay
             {
@@ -3567,8 +3587,16 @@ impl Root {
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
             });
-        let can_set_outcome =
-            editable && current.as_ref().is_some_and(|a| a.starts_at <= Utc::now());
+        let outcomes = current
+            .as_ref()
+            .filter(|a| !stale && self.can_edit_staff_calendar(&a.staff_id))
+            .map_or(&[][..], |a| {
+                ops::appointment_outcome_options(
+                    a,
+                    Utc::now(),
+                    self.calendar_scope.as_deref() == Some("all"),
+                )
+            });
         let changed =
             editable && (d.start != d.reviewed.starts_at || d.staff_id != d.reviewed.staff_id);
         let content = div()
@@ -3819,27 +3847,27 @@ impl Root {
                 }),
                 |x, key| x.child(self.badge(self.t(key), theme::text(), theme::line_soft())),
             )
-            .when(can_set_outcome, |x| {
-                x.child(
+            .when(!outcomes.is_empty(), |panel| {
+                panel.child(
                     div()
                         .flex()
                         .gap_2()
-                        .child(self.button(
-                            "mark-completed",
-                            self.t(Key::MarkCompleted),
-                            Kind::Primary,
-                            cx.listener(|this, _, _, cx| {
-                                this.set_outcome(AppointmentStatus::Completed, Utc::now(), cx)
-                            }),
-                        ))
-                        .child(self.button(
-                            "mark-no-show",
-                            self.t(Key::MarkNoShow),
-                            Kind::Ghost,
-                            cx.listener(|this, _, _, cx| {
-                                this.set_outcome(AppointmentStatus::NoShow, Utc::now(), cx)
-                            }),
-                        )),
+                        .children(outcomes.iter().map(|&status| {
+                            let (id, label, kind) = if status == AppointmentStatus::Completed {
+                                ("mark-completed", Key::MarkCompleted, Kind::Primary)
+                            } else {
+                                ("mark-no-show", Key::MarkNoShow, Kind::Ghost)
+                            };
+                            self.button(
+                                id,
+                                self.t(label),
+                                kind,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.set_outcome(status, Utc::now(), cx)
+                                }),
+                            )
+                            .debug_selector(move || id.to_owned())
+                        })),
                 )
             })
             .when(stale, |x| {
@@ -3927,10 +3955,12 @@ impl Root {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let cards = self.conflicts.iter().enumerate().map(|(i, c)| {
+            let requested_outcome = requested_attendance(c);
             let kind = self.t(match c.kind.as_str() {
                 "appointment.create" => Key::ConflictCreate,
                 "appointment.reschedule" => Key::ConflictReschedule,
                 "appointment.cancel" => Key::ConflictCancel,
+                "appointment.set_status" => requested_outcome.unwrap_or(Key::ConflictOther),
                 "time_off.create" | "time_off.update" | "time_off.delete" => Key::TimeOff,
                 "settings.update" => Key::SalonConfiguration,
                 "service.staff_replace" => Key::ServiceAssignments,
@@ -3966,7 +3996,26 @@ impl Root {
                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| self.date_time_label(d.with_timezone(&Utc)))
                 .unwrap_or_default();
-            let description = if c.kind == sob_core::warehouses::ADJUST
+            let attendance_appointment = requested_outcome.and_then(|_| {
+                self.svc
+                    .store
+                    .appointment(&c.entity_id)
+                    .ok()
+                    .flatten()
+                    .filter(|appointment| {
+                        ops::calendar_scope_permits_edit(
+                            self.calendar_scope.as_deref(),
+                            Some(&appointment.staff_id),
+                        )
+                    })
+            });
+            let description = if let Some(appointment) = &attendance_appointment {
+                format!(
+                    "{} · {}",
+                    self.date_time_label(appointment.starts_at),
+                    self.appointment_client_name(appointment)
+                )
+            } else if c.kind == sob_core::warehouses::ADJUST
                 && self.svc.store.can_read_cached_orders()
             {
                 serde_json::from_value(c.payload.clone())
@@ -3987,10 +4036,10 @@ impl Root {
             } else {
                 when
             };
-            let staff = c
-                .payload
-                .get("staffId")
-                .and_then(|v| v.as_str())
+            let staff = attendance_appointment
+                .as_ref()
+                .map(|appointment| appointment.staff_id.as_str())
+                .or_else(|| c.payload["staffId"].as_str())
                 .map(|s| self.staff_name(s))
                 .unwrap_or_default();
             let mid = c.mutation_id.clone();
@@ -6151,11 +6200,11 @@ mod tests {
     }
 
     #[gpui::test]
-    async fn recording_an_outcome_queues_it_offline_and_prevents_further_edits(
-        cx: &mut TestAppContext,
-    ) {
+    async fn a_personal_calendar_can_record_but_cannot_correct_attendance(cx: &mut TestAppContext) {
         let (_d, win) = open(cx);
         win.update(cx, |root, _, cx| {
+            root.svc.store.set_meta("calendar_scope", ANA).unwrap();
+            root.reload(cx);
             root.open_details(EXISTING, cx);
             root.set_outcome(
                 AppointmentStatus::Completed,
@@ -6182,6 +6231,68 @@ mod tests {
             assert_eq!(outbox_kinds(root).len(), 1);
         })
         .unwrap();
+    }
+
+    #[gpui::test]
+    async fn an_all_calendar_editor_can_correct_a_closed_appointment_from_details(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1280.), px(1000.)));
+        root.update(cx, |root, cx| {
+            root.svc.store.set_meta("calendar_scope", "all").unwrap();
+            root.reload(cx);
+            root.open_details(EXISTING, cx);
+            root.set_outcome(
+                AppointmentStatus::NoShow,
+                "2026-03-10T12:00:00Z".parse().unwrap(),
+                cx,
+            );
+            root.open_details(EXISTING, cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mark-no-show").is_none());
+        let correction = cx.debug_bounds("mark-completed").unwrap().center();
+        cx.simulate_click(correction, gpui::Modifiers::none());
+        root.update(cx, |root, _| {
+            assert!(matches!(root.overlay, Overlay::None));
+            let jobs = root.svc.store.outbox(5).unwrap();
+            assert_eq!(jobs.len(), 2);
+            assert_eq!(jobs[1].payload["version"], json!(4));
+            assert_eq!(jobs[1].payload["status"], json!("completed"));
+        });
+    }
+
+    #[gpui::test]
+    async fn attendance_conflict_review_shows_the_rejected_outcome_without_resending_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, win) = open(cx);
+        win.update(cx, |root, _, cx| {
+            ops::set_appointment_status(
+                &mut root.svc.store,
+                EXISTING,
+                AppointmentStatus::NoShow,
+                "2026-03-10T12:00:00Z".parse().unwrap(),
+            )
+            .unwrap();
+            let sent = root.svc.store.outbox(1).unwrap();
+            root.svc.store.apply_push_results(&sent, &[MutationResult::Rejected {
+                mutation_id: sent[0].mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "Cloud appointment changed".into(),
+                replayed: false,
+            }]).unwrap();
+            let conflict = root.svc.store.conflicts().unwrap().remove(0);
+            let expected = i18n::fill(
+                root.t(Key::ConflictAttendanceReview),
+                &[("action", root.t(Key::MarkNoShow))],
+            );
+            root.start_conflict_edit(&conflict, cx);
+            assert!(matches!(&root.overlay, Overlay::Details(details) if details.error.as_deref() == Some(expected.as_str())));
+            assert!(outbox_kinds(root).is_empty());
+        }).unwrap();
     }
 
     #[gpui::test]

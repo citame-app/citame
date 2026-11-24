@@ -2304,6 +2304,7 @@ keys! {
     ConflictCreate => ("Booking", "Reserva"),
     ConflictReschedule => ("Move", "Cambio de horario"),
     ConflictCancel => ("Cancellation", "Cancelación"),
+    ConflictAttendanceReview => ("Attendance change not saved. Requested action: {action}.", "No se guardó el cambio de asistencia. Acción solicitada: {action}."),
     ConflictOther => ("Change", "Cambio"),
     UnknownClient => ("Unknown client", "Cliente desconocido"),
     ErrPickService => ("Pick at least one service.", "Elige al menos un servicio."),

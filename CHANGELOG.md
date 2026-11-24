@@ -10,6 +10,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
+
 - Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
 
 - Business profiles retain multiline descriptions up to 2,000 characters in Web and Desktop.

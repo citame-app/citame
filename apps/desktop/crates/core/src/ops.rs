@@ -582,10 +582,15 @@ pub fn create_appointment_for_new_client_reviewed(
     })
 }
 
-fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
+fn writable_appointment(store: &Store, id: &str) -> Result<crate::model::Appointment> {
     let a = effective_appointment(store, id)?
         .ok_or_else(|| CoreError::NotFound(format!("appointment {id}")))?;
     require_calendar_write(store, &a.staff_id)?;
+    Ok(a)
+}
+
+fn editable(store: &Store, id: &str) -> Result<crate::model::Appointment> {
+    let a = writable_appointment(store, id)?;
     if a.status != AppointmentStatus::Booked {
         return Err(CoreError::Invalid(format!(
             "appointment is {}",
@@ -758,6 +763,22 @@ pub fn cancel_appointment(store: &mut Store, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Attendance transitions available after the appointment's calendar has been authorized.
+pub fn appointment_outcome_options(
+    appointment: &crate::model::Appointment,
+    now: DateTime<Utc>,
+    can_correct: bool,
+) -> &'static [AppointmentStatus] {
+    match appointment.status {
+        AppointmentStatus::Booked if appointment.starts_at <= now => {
+            &[AppointmentStatus::Completed, AppointmentStatus::NoShow]
+        }
+        AppointmentStatus::Completed if can_correct => &[AppointmentStatus::NoShow],
+        AppointmentStatus::NoShow if can_correct => &[AppointmentStatus::Completed],
+        _ => &[],
+    }
+}
+
 /// Records an outcome offline; the API rechecks the time, role and version at synchronization.
 pub fn set_appointment_status(
     store: &mut Store,
@@ -771,11 +792,22 @@ pub fn set_appointment_status(
     ) {
         return Err(CoreError::Invalid("choose completed or no_show".into()));
     }
-    let current = editable(store, id)?;
-    if current.starts_at > now {
-        return Err(CoreError::Invalid(
-            "an outcome can only be recorded once the appointment starts".into(),
-        ));
+    let current = writable_appointment(store, id)?;
+    let scope = store.get_meta("calendar_scope")?;
+    if !appointment_outcome_options(&current, now, scope.as_deref() == Some("all"))
+        .contains(&status)
+    {
+        return Err(match current.status {
+            AppointmentStatus::Booked => CoreError::Invalid(
+                "an outcome can only be recorded once the appointment starts".into(),
+            ),
+            AppointmentStatus::Completed | AppointmentStatus::NoShow
+                if current.status != status =>
+            {
+                CoreError::AppointmentScopeDenied
+            }
+            _ => CoreError::Invalid(format!("appointment is {}", current.status.as_str())),
+        });
     }
     store.enqueue(
         "appointment.set_status",
