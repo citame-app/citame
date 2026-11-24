@@ -166,7 +166,7 @@ if (import.meta.main) {
     // Database and parser errors can include original notes, references or connection information.
     console.error(
       error instanceof MigrationLedgerError
-        ? "The isolated copy has a different migration ledger. Reconcile an upgraded, separate restoration."
+        ? "The isolated copy has a different migration ledger. Check its history against the candidate release before restoring or upgrading a separate copy."
         : "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.",
     );
     process.exitCode = 1;
