@@ -125,15 +125,15 @@ export const BUSINESS_DESCRIPTION_MAX_LENGTH = 2_000;
 const BUSINESS_DESCRIPTION_MAX_LINES = 64;
 const businessDescription = z
   .string()
-  .transform((value) => value.replace(/\r\n?/g, "\n").trim())
+  .transform((value) => value.replace(/\r\n?/g, "\n"))
   .pipe(
     z
       .string()
-      .min(1)
       .max(BUSINESS_DESCRIPTION_MAX_LENGTH)
       .refine((value) => value.split("\n").length <= BUSINESS_DESCRIPTION_MAX_LINES)
-      .refine((value) => !/[\p{Cc}\u2028\u2029]/u.test(value.replaceAll("\n", ""))),
+      .refine((value) => !/[\p{Cc}\p{Cs}\u2028\u2029]/u.test(value.replaceAll("\n", ""))),
   )
+  .transform((value) => value.trim() || null)
   .nullable();
 
 export const businessProfileContentSchema = z.strictObject({

@@ -52,6 +52,8 @@ export const settingsEn = {
   "settings.media.keepNew": "Keep as new image",
   "settings.media.review": "Keep draft and review the latest version",
   "settings.profile.description": "Description",
+  "settings.profile.descriptionLimit": "Up to 2,000 characters and 64 lines.",
+  "settings.profile.descriptionInvalid": "Use plain text with up to 2,000 characters and 64 lines.",
   "settings.opening.title": "Opening hours",
   "settings.opening.today": "Today",
   "settings.opening.regular": "Regular hours",
@@ -169,6 +171,9 @@ export const settingsEsAR: Record<keyof typeof settingsEn, string> = {
   "settings.media.keepNew": "Conservar como imagen nueva",
   "settings.media.review": "Conservar el borrador y revisar la versión actual",
   "settings.profile.description": "Descripción",
+  "settings.profile.descriptionLimit": "Hasta 2.000 caracteres y 64 líneas.",
+  "settings.profile.descriptionInvalid":
+    "Usa texto sin formato con hasta 2.000 caracteres y 64 líneas.",
   "settings.opening.title": "Horario de apertura",
   "settings.opening.today": "Hoy",
   "settings.opening.regular": "Horario habitual",

@@ -80,6 +80,12 @@ const AMENITIES: [(BusinessAmenity, Key); 6] = [
 const DESCRIPTION_LIMIT: usize = 2_000;
 const DESCRIPTION_LINES: usize = 64;
 
+fn valid_description_text(value: &str) -> bool {
+    !value
+        .chars()
+        .any(|ch| ch != '\n' && (ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')))
+}
+
 struct DescriptionLine {
     input: Entity<TextField>,
     _events: Subscription,
@@ -113,15 +119,13 @@ impl DescriptionEditor {
             .map(|line| line.input.read(cx).text())
             .collect::<Vec<_>>()
             .join("\n");
-        let value = value.trim();
         if self.lines.len() > DESCRIPTION_LINES
             || value.encode_utf16().count() > DESCRIPTION_LIMIT
-            || value
-                .chars()
-                .any(|ch| ch != '\n' && (ch.is_control() || matches!(ch, '\u{2028}' | '\u{2029}')))
+            || !valid_description_text(&value)
         {
             return Err(Key::BusinessDescription);
         }
+        let value = value.trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
         Ok((!value.is_empty()).then(|| value.to_owned()))
     }
 
@@ -150,8 +154,9 @@ fn description_line(
     cx: &mut Context<Root>,
 ) -> DescriptionLine {
     let input = cx.new(|cx| {
-        let mut input =
-            TextField::new("", false, cx).with_bounded_line_paste(DESCRIPTION_LIMIT, remaining);
+        let mut input = TextField::new("", false, cx)
+            .with_bounded_line_paste(DESCRIPTION_LIMIT, remaining)
+            .with_paste_validation(valid_description_text);
         input.set_text(value, cx);
         input
     });
@@ -176,7 +181,9 @@ fn description_line(
                     );
                     description.paste_rejected = false;
                 }
-                FieldEvent::PasteTooLong => description.paste_rejected = true,
+                FieldEvent::PasteTooLong | FieldEvent::InvalidPaste => {
+                    description.paste_rejected = true
+                }
                 FieldEvent::Changed => description.paste_rejected = false,
                 FieldEvent::Submit => {}
             }
@@ -484,24 +491,56 @@ mod tests {
         cx: &mut TestAppContext,
     ) {
         let (_directory, window) = super::super::super::tests::open(cx);
+        window
+            .update(cx, |root, native_window, cx| {
+                let saved: ReviewedSalonConfiguration = serde_json::from_value(serde_json::json!({
+                    "name": "Studio", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
+                    "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
+                    "reminderFirstLeadMinutes": null, "reminderSecondLeadMinutes": null,
+                    "businessProfile": BusinessProfile::default(),
+                    "revision": "2026-11-21T00:00:00Z", "generation": "initial",
+                }))
+                .unwrap();
+                root.svc.store.cache_salon_configuration(&saved).unwrap();
+                root.status.connectivity = Connectivity::Offline;
+                root.open_salon_configuration(cx);
+                let Overlay::SalonConfiguration(desk) = &mut root.overlay else {
+                    panic!("Missing editor")
+                };
+                assert!(desk.editable());
+                let editor = desk.editor.as_mut().unwrap();
+                editor.show_profile = true;
+                let profile = editor.profile.as_mut().unwrap();
+                profile.description.lines[0]
+                    .input
+                    .read(cx)
+                    .focus(native_window);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string("A\0B\nC".into()));
+        cx.simulate_keystrokes(window.into(), "ctrl-v");
+        cx.run_until_parked();
+        window
+            .update(cx, |root, _, cx| {
+                let Overlay::SalonConfiguration(desk) = &mut root.overlay else {
+                    panic!("Missing editor")
+                };
+                let profile = desk.editor.as_mut().unwrap().profile.as_mut().unwrap();
+                assert!(profile.description.paste_rejected);
+                assert!(profile.description.draft(cx).unwrap().is_none());
+            })
+            .unwrap();
+        let description = format!("{}\n\n{}", "a".repeat(720), "b".repeat(720));
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+            description.replace('\n', "\r\n"),
+        ));
+        cx.simulate_keystrokes(window.into(), "ctrl-v");
+        cx.run_until_parked();
         window.update(cx, |root, _, cx| {
-            let saved: ReviewedSalonConfiguration = serde_json::from_value(serde_json::json!({
-                "name": "Studio", "timezone": "Europe/Madrid", "slotGranularityMinutes": 15,
-                "minNoticeMinutes": 30, "maxDaysAhead": 60, "onlineBookingEnabled": true,
-                "reminderFirstLeadMinutes": null, "reminderSecondLeadMinutes": null,
-                "businessProfile": BusinessProfile::default(),
-                "revision": "2026-11-21T00:00:00Z", "generation": "initial",
-            })).unwrap();
-            root.svc.store.cache_salon_configuration(&saved).unwrap();
-            root.status.connectivity = Connectivity::Offline;
-            root.open_salon_configuration(cx);
             let Overlay::SalonConfiguration(desk) = &mut root.overlay else { panic!("Missing editor") };
-            assert!(desk.editable());
-            let editor = desk.editor.as_mut().unwrap();
-            editor.show_profile = true;
-            let profile = editor.profile.as_mut().unwrap();
-            let description = format!("{}\n\n{}", "a".repeat(720), "b".repeat(720));
-            profile.description = DescriptionEditor::new(&description, cx);
+            let profile = desk.editor.as_mut().unwrap().profile.as_mut().unwrap();
+            assert!(!profile.description.paste_rejected);
             assert_eq!(profile.description.lines.len(), 3);
             let input = |label| profile.inputs[FIELDS.iter().position(|spec| spec.label == label).unwrap()].clone();
             input(Key::BusinessEmail).update(cx, |field, cx| field.set_text("a..b@example.com", cx));

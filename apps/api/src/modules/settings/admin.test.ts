@@ -255,7 +255,12 @@ test("keeps the public profile draft private and publishes only reviewed owner c
   }
   const firstLine = "Synthetic salon profile";
   const description = [firstLine, "Treatment and opening details. ".repeat(39).trim()].join("\n\n");
-  for (const invalid of ["x".repeat(2001), "x\u0000y", "x\n".repeat(64) + "last line"]) {
+  for (const invalid of [
+    "x".repeat(2001),
+    "x\u0000y",
+    "x\uD800y",
+    "x\n".repeat(64) + "last line",
+  ]) {
     expect((await write(owner, { ...fence, changes: { description: invalid } })).status).toBe(400);
   }
   const draft = await write(owner, {

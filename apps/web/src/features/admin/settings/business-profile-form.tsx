@@ -139,7 +139,7 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
         const normalized = Object.fromEntries(
           Object.entries(draft.changes).map(([key, value]) => [
             key,
-            typeof value === "string" ? value.trim() || null : value,
+            typeof value === "string" && key !== "description" ? value.trim() || null : value,
           ]),
         );
         const parsed = businessProfileSchema.partial().safeParse(normalized);
@@ -173,7 +173,8 @@ function ProfileEditor({ latest }: { latest: Snapshot }) {
           value={form.description ?? ""}
           rows={6}
           maxLength={BUSINESS_DESCRIPTION_MAX_LENGTH}
-          error={errors.has("description") ? t("settings.profile.invalid") : undefined}
+          hint={t("settings.profile.descriptionLimit")}
+          error={errors.has("description") ? t("settings.profile.descriptionInvalid") : undefined}
           onChange={(event) => edit("description", event.currentTarget.value || null)}
         />
         {fields.map((field) => (
