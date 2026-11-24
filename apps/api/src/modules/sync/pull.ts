@@ -147,11 +147,7 @@ async function loadVisible(
             : {}),
           ...(billing?.reasons.length
             ? {
-                billingReviewReasons: compatibleBillingReasons(
-                  billing.reasons,
-                  projection.booksyPaymentReview === "1",
-                  projection.booksyBalanceReview === "1",
-                ),
+                billingReviewReasons: compatibleBillingReasons(billing.reasons, projection),
               }
             : {}),
           ...(billing?.externallySettled ? { externallySettled: true as const } : {}),

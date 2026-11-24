@@ -22,7 +22,7 @@ import {
   booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPayments,
-  invalidateLegacyPartialPayments,
+  reopenImportedPartialPayments,
 } from "../commerce/appointment-billing";
 import { repackResourceUnits } from "../resources/plan";
 import { IMPORTED_RESOURCE_UNIT_START } from "../resources/reservations";
@@ -798,7 +798,7 @@ export async function restoreLegacyBooksyPaymentEvidence(db: Database, snapshotH
         .returning({ id: appointmentContext.appointmentId });
       const changed = [...new Set(updated.map(({ id }) => id))];
       if (changed.length) {
-        await invalidateLegacyPartialPayments(tx, changed, null);
+        await reopenImportedPartialPayments(tx, changed, null, { legacyOnly: true });
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('sob.sync_change', 0))`);
         await tx.execute(sql`
           insert into sync_change (entity, row_id, op)

@@ -59,6 +59,7 @@ export const booksyContextImportSchema = z
           appointmentVersion: z.number().int().positive(),
           contextVersion: z.number().int().nonnegative(),
           sourceRef: z.string().trim().min(1).max(160),
+          paymentEvidenceChanged: z.literal(true).optional(),
         }),
       )
       .min(1)
@@ -81,6 +82,7 @@ export const booksyContextReviewSchema = z.object({
   requested: z.number().int(),
   invoiced: z.number().int(),
   paid: z.number().int(),
+  paymentReviewsReopened: z.number().int().positive().optional(),
   items: z.array(
     z.object({
       appointmentId: idSchema,

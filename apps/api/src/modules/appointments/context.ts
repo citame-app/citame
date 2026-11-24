@@ -26,7 +26,7 @@ import {
   booksyPaymentReviews,
   externallySettledAppointments,
   importedPartialPaymentReviews,
-  invalidateLegacyPartialPayments,
+  reopenImportedPartialPayments,
 } from "../commerce/appointment-billing";
 import { saleRow } from "../commerce/service";
 import { hasGroupedCheckout } from "./visit-checkout-access";
@@ -345,6 +345,14 @@ async function prepareImport(
   );
   const positions = new Set(snapshots.map((s) => `${s.appointmentId}:${s.position}`));
   const staffIds = new Set(staff.map((s) => s.id));
+  const marked = input.rows.flatMap((row) =>
+    row.paymentEvidenceChanged ? [row.appointmentId] : [],
+  );
+  const reopen = new Set(
+    [...(await importedPartialPaymentReviews(db, marked))].flatMap(([id, review]) =>
+      review.current ? [id] : [],
+    ),
+  );
   for (const r of input.rows) {
     const key = `${r.appointmentId}:${r.servicePosition}`;
     const visit = byId.get(r.appointmentId);
@@ -365,13 +373,15 @@ async function prepareImport(
         "invalid_state",
         "This Booksy service is already mapped to another appointment",
       );
-    if (sameContext(current, r)) continue;
+    if (sameContext(current, r) && !(r.paymentEvidenceChanged && reopen.has(r.appointmentId)))
+      continue;
     if (visit.version !== r.appointmentVersion || (current?.version ?? 0) !== r.contextVersion)
       throw conflict();
   }
   return {
     visits,
     byPosition,
+    reopen,
     review: {
       items: input.rows.map((r) => ({
         appointmentId: r.appointmentId,
@@ -382,11 +392,13 @@ async function prepareImport(
             (s) => s.appointmentId === r.appointmentId && s.position === r.servicePosition,
           )?.name ?? "",
         startsAt: byId.get(r.appointmentId)!.startsAt.toISOString(),
-        action: sameContext(byPosition.get(`${r.appointmentId}:${r.servicePosition}`), r)
-          ? ("unchanged" as const)
-          : byPosition.has(`${r.appointmentId}:${r.servicePosition}`)
-            ? ("update" as const)
-            : ("add" as const),
+        action:
+          sameContext(byPosition.get(`${r.appointmentId}:${r.servicePosition}`), r) &&
+          !(r.paymentEvidenceChanged && reopen.has(r.appointmentId))
+            ? ("unchanged" as const)
+            : byPosition.has(`${r.appointmentId}:${r.servicePosition}`)
+              ? ("update" as const)
+              : ("add" as const),
       })),
       reviewHash: digest(input),
       appointments: ids.length,
@@ -396,6 +408,7 @@ async function prepareImport(
       requested: input.rows.filter((r) => r.requestedStaffId).length,
       invoiced: input.rows.filter((r) => r.invoiced).length,
       paid: input.rows.filter((r) => r.paid).length,
+      ...(reopen.size ? { paymentReviewsReopened: reopen.size } : {}),
     },
   };
 }
@@ -420,33 +433,35 @@ export async function importBooksyContext(
   return db.transaction(async (tx) => {
     await lockScheduling(tx);
     const prepared = await prepareImport(tx, input, principal, now);
-    const changed = new Set<string>();
+    const changed = new Set(prepared.reopen);
     const financialChanges = new Set<string>();
     for (const r of input.rows) {
       const current = prepared.byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
       if (sameContext(current, r)) continue;
-      if (
-        current?.source !== "booksy" ||
-        current.sourceRef !== r.sourceRef ||
-        current.paid !== r.paid ||
-        current.invoiced !== r.invoiced
-      )
-        financialChanges.add(r.appointmentId);
       const {
         appointmentVersion: _appointmentVersion,
         contextVersion: _contextVersion,
+        paymentEvidenceChanged: _paymentEvidenceChanged,
         ...values
       } = r;
-      if (current)
-        await tx
+      if (current) {
+        const [updated] = await tx
           .update(appointmentContext)
           .set({ ...values, source: "booksy", version: current.version + 1, updatedAt: now })
-          .where(eq(appointmentContext.id, current.id));
-      else
+          .where(eq(appointmentContext.id, current.id))
+          .returning({ billingVersion: appointmentContext.billingVersion });
+        if (!updated || updated.billingVersion !== current.billingVersion)
+          financialChanges.add(r.appointmentId);
+      } else {
         await tx.insert(appointmentContext).values({ ...values, source: "booksy", updatedAt: now });
+        financialChanges.add(r.appointmentId);
+      }
       changed.add(r.appointmentId);
     }
-    await invalidateLegacyPartialPayments(tx, [...financialChanges], principal.userId);
+    await reopenImportedPartialPayments(tx, [...financialChanges], principal.userId, {
+      legacyOnly: true,
+    });
+    await reopenImportedPartialPayments(tx, [...prepared.reopen], principal.userId);
     for (const visit of prepared.visits.filter((v) => changed.has(v.id))) {
       const updated = await tx
         .update(appointment)

@@ -1,5 +1,6 @@
 import {
   type BillingReviewReason,
+  type BooksyBillingCapabilities,
   type ExternalBalance,
   externalBalanceSchema,
   type ImportedPriceReview,
@@ -38,14 +39,13 @@ const sourceBilling = and(
 /** Older clients accept only the original hold reasons and must still disable collection. */
 export function compatibleBillingReasons(
   reasons: BillingReviewReason[],
-  supportsUnknownPayment: boolean,
-  supportsBalanceChange: boolean,
+  capabilities: BooksyBillingCapabilities,
 ): BillingReviewReason[] {
   return [
     ...new Set(
       reasons.map((reason) =>
-        (reason === "unknown_booksy_payment" && !supportsUnknownPayment) ||
-        (reason === "booksy_balance_changed" && !supportsBalanceChange)
+        (reason === "unknown_booksy_payment" && capabilities.booksyPaymentReview !== "1") ||
+        (reason === "booksy_balance_changed" && capabilities.booksyBalanceReview !== "1")
           ? "unknown_amount"
           : reason,
       ),
@@ -169,25 +169,25 @@ export async function importedPartialPaymentReviews(db: Pick<Database, "select">
       throw new Error("Duplicate imported partial payment revision");
     if (!previous || previous.revision < revision) latest.set(id, { metadata, revision });
   }
-  const legacyIds = [...latest]
-    .filter(([, row]) => row.metadata.snapshot === undefined)
+  const idsWithEvidence = [...latest]
+    .filter(([, row]) => row.metadata.snapshot !== undefined)
     .map(([id]) => id);
-  const [evidence, legacyChanges] = await Promise.all([
-    booksyPaymentEvidence(db, [...latest.keys()]),
-    legacyIds.length
-      ? db
-          .select({ id: auditLog.entityId })
-          .from(auditLog)
-          .where(
-            and(
-              eq(auditLog.entity, "appointment"),
-              inArray(auditLog.entityId, legacyIds),
-              eq(auditLog.action, importedPartialEvidenceChangedAudit),
-            ),
-          )
-      : [],
+  const [evidence, evidenceChanges] = await Promise.all([
+    booksyPaymentEvidence(db, idsWithEvidence),
+    db
+      .select({ id: auditLog.entityId, metadata: auditLog.metadata })
+      .from(auditLog)
+      .where(
+        and(
+          eq(auditLog.entity, "appointment"),
+          inArray(auditLog.entityId, [...latest.keys()]),
+          eq(auditLog.action, importedPartialEvidenceChangedAudit),
+        ),
+      ),
   ]);
-  const changed = new Set(legacyChanges.map(({ id }) => id));
+  const changed = new Set(
+    evidenceChanges.map(({ id, metadata }) => `${id}:${metadata.revision ?? 0}`),
+  );
   for (const [id, { metadata, revision }] of latest) {
     const legacy = metadata.snapshot === undefined;
     result.set(id, {
@@ -195,9 +195,9 @@ export async function importedPartialPaymentReviews(db: Pick<Database, "select">
       reference: metadata.reference,
       revision,
       legacy,
-      current: legacy
-        ? !changed.has(id)
-        : metadata.snapshot === JSON.stringify(evidence.get(id) ?? []),
+      current:
+        !changed.has(`${id}:${revision}`) &&
+        (legacy || metadata.snapshot === JSON.stringify(evidence.get(id) ?? [])),
     });
   }
   return result;
@@ -210,19 +210,41 @@ export async function importedPartialPayments(db: Pick<Database, "select">, ids:
   );
 }
 
-/** Old partial-payment records have no frozen evidence. Fence them on the next financial import. */
-export async function invalidateLegacyPartialPayments(
+/** The receipt keeps the Booksy contribution paired with its original balance line. */
+export async function historicalImportedBalance(
+  db: Pick<Database, "select">,
+  id: string,
+  dueInCitameCents: number,
+) {
+  const records = await db
+    .select({ metadata: auditLog.metadata })
+    .from(auditLog)
+    .where(
+      and(
+        eq(auditLog.entity, "appointment"),
+        eq(auditLog.entityId, id),
+        eq(auditLog.action, importedPartialAudit),
+      ),
+    );
+  const record = records.find(({ metadata }) => metadata.dueInCitameCents === dueInCitameCents);
+  return record ? externalBalanceSchema.parse(record.metadata) : undefined;
+}
+
+/** A financial import can also explicitly refresh evidence while retaining the same flags. */
+export async function reopenImportedPartialPayments(
   tx: Tx,
   ids: string[],
   actorUserId: string | null,
+  { legacyOnly = false } = {},
 ) {
   for (const [id, review] of await importedPartialPaymentReviews(tx, ids)) {
-    if (!review.legacy || !review.current) continue;
+    if (!review.current || (legacyOnly && !review.legacy)) continue;
     await recordAudit(tx, {
       actorUserId,
       action: importedPartialEvidenceChangedAudit,
       entity: "appointment",
       entityId: id,
+      metadata: { revision: review.revision },
     });
   }
 }

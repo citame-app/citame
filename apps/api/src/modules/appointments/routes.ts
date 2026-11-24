@@ -7,6 +7,7 @@ import {
   bookingPromotionQuoteRequestSchema,
   booksyContextApplySchema,
   booksyContextImportSchema,
+  booksyBillingCapabilitiesSchema,
   calendarQuerySchema,
   createAppointmentBaseSchema,
   createAppointmentRequestSchema,
@@ -312,8 +313,7 @@ export function appointmentsRoutes({
           if (entry.billingReviewReasons)
             entry.billingReviewReasons = compatibleBillingReasons(
               entry.billingReviewReasons,
-              query.booksyPaymentReview === "1",
-              query.booksyBalanceReview === "1",
+              query,
             );
         }
         return c.json(
@@ -322,15 +322,15 @@ export function appointmentsRoutes({
       })
       .get("/:id/calendar-entry", async (c) => {
         const id = parseOrThrow(idSchema, c.req.param("id"));
+        const capabilities = parseOrThrow(booksyBillingCapabilitiesSchema, c.req.query());
         const scope = authorizeCalendarQuery(c.get("principal"), {});
         if (booksyNativePreview) throw new DomainError("not_found", "Appointment not found");
         const entry = await getCalendarAppointment(db, id, scope);
         if (entry.billingReviewReasons)
-          entry.billingReviewReasons = compatibleBillingReasons(
-            entry.billingReviewReasons,
-            true,
-            c.req.query("booksyBalanceReview") === "1",
-          );
+          entry.billingReviewReasons = compatibleBillingReasons(entry.billingReviewReasons, {
+            ...capabilities,
+            booksyPaymentReview: "1",
+          });
         return c.json(entry);
       })
       .post("/", create(false))

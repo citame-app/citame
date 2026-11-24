@@ -585,7 +585,14 @@ test.each(["current", "legacy"] as const)(
     const sale = await checkout();
     expect(sale.totalCents).toBe(2000);
     const correction = {
-      rows: [{ ...input.rows[0], appointmentVersion: 4, contextVersion: 2, paid: null }],
+      rows: [
+        {
+          ...input.rows[0],
+          appointmentVersion: 4,
+          contextVersion: 2,
+          paymentEvidenceChanged: true,
+        },
+      ],
     };
     const nextPreview = await call(
       owner,
@@ -594,7 +601,11 @@ test.each(["current", "legacy"] as const)(
       correction,
     );
     expect(nextPreview.status, await nextPreview.clone().text()).toBe(200);
-    const next = (await nextPreview.json()) as { reviewHash: string };
+    const next = (await nextPreview.json()) as {
+      reviewHash: string;
+      paymentReviewsReopened?: number;
+    };
+    expect(next.paymentReviewsReopened).toBe(1);
     expect(
       (
         await call(owner, "/appointments/booksy-context/import", "POST", {
@@ -603,11 +614,42 @@ test.each(["current", "legacy"] as const)(
         })
       ).status,
     ).toBe(200);
+    const repeated = await call(owner, "/appointments/booksy-context/import", "POST", {
+      input: correction,
+      reviewHash: next.reviewHash,
+    });
+    expect(repeated.status).toBe(200);
+    expect((await repeated.json()).paymentReviewsReopened).toBeUndefined();
     expect((await pay(sale.id, "external_card", 2000)).status).toBe(409);
+    const readReceipt = async () =>
+      checkoutSchema.parse(
+        await (await call(owner, `/admin/commerce/checkouts/${sale.id}`)).json(),
+      );
+    expect((await readReceipt()).externalBalance).toEqual({
+      paidInBooksyCents: 8000,
+      dueInCitameCents: 2000,
+    });
     expect((await call(owner, path, "PUT", { ...corrected, appointmentVersion: 5 })).status).toBe(
       409,
     );
     expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+    expect((await call(owner, `/admin/commerce/checkouts/${sale.id}/void`, "POST")).status).toBe(
+      200,
+    );
+    expect(
+      (
+        await call(owner, path, "PUT", {
+          appointmentVersion: 5,
+          amountCents: 9000,
+          reference: "Verified revised source receipt",
+        })
+      ).status,
+    ).toBe(200);
+    expect((await checkout()).totalCents).toBe(1000);
+    expect(await readReceipt()).toMatchObject({
+      status: "void",
+      externalBalance: { paidInBooksyCents: 8000, dueInCitameCents: 2000 },
+    });
   },
 );
 

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { appointmentSchema, createAppointmentBaseSchema } from "./appointments";
 import { appointmentDepositStatusSchema } from "./booking-protection";
-import { calendarAppointmentSchema } from "./calendar";
+import { booksyBillingCapabilitiesSchema, calendarAppointmentSchema } from "./calendar";
 import { clientEmailChangeSchema } from "./clients";
 import { idSchema, instantSchema, LIMITS, localDateSchema, syncGenerationSchema } from "./common";
 import { dateShiftRangesSchema } from "./date-shifts";
@@ -555,8 +555,7 @@ export const syncPullQuerySchema = z.object({
   peakPrices: z.enum(["full", "delta"]).optional(),
   peakPriceViews: z.literal("1").optional(),
   inventoryAccess: z.literal("1").optional(),
-  booksyPaymentReview: z.literal("1").optional(),
-  booksyBalanceReview: z.literal("1").optional(),
+  ...booksyBillingCapabilitiesSchema.shape,
   clientGroups: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;

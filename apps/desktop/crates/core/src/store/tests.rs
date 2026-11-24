@@ -488,6 +488,36 @@ fn a_changed_imported_balance_replaces_the_previous_collectible_balance() {
 }
 
 #[test]
+fn upgrading_a_legacy_booksy_balance_hold_replays_without_dropping_edits() {
+    let mut conn = Connection::open_in_memory().unwrap();
+    let previous = MIGRATIONS.len() - 1;
+    for sql in &MIGRATIONS[..previous] {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.pragma_update(None, "user_version", i32::try_from(previous).unwrap())
+        .unwrap();
+    let mut legacy = appt_change(9, A1, 2);
+    let data = legacy.data.as_mut().unwrap();
+    data["importedFromBooksy"] = json!(true);
+    data["billingReviewReasons"] = json!(["unknown_amount"]);
+    let tx = conn.transaction().unwrap();
+    apply_change(&tx, &legacy, false).unwrap();
+    tx.execute("INSERT INTO meta (key,value) VALUES ('cursor','9')", [])
+        .unwrap();
+    tx.execute(
+        "INSERT INTO outbox (mutation_id, created_at, kind, entity_id, payload)
+         VALUES ('queued','2026-11-25T09:00:00Z','appointment.move',?1,'{}')",
+        [A1],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+    let store = Store::init(conn).unwrap();
+    assert_eq!(store.cursor().unwrap(), 0);
+    assert!(store.appointment(A1).unwrap().is_some());
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, "queued");
+}
+
+#[test]
 fn upgrading_booked_resources_preserves_the_live_cursor_notices_and_unsent_work() {
     let mut conn = Connection::open_in_memory().unwrap();
     for sql in &MIGRATIONS[..9] {

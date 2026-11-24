@@ -2,6 +2,7 @@ export const drawerEn = {
   "badge.save": "Save service details",
   "badge.importAdd": "Add details",
   "badge.importUpdate": "Replace existing details",
+  "badge.importPaymentReviews": "Balances to review again",
   "badge.importUnchanged": "Already imported, no changes",
   "badge.import": "Import Booksy details",
   "badge.importDescription":
@@ -76,6 +77,7 @@ export const drawerEsAR: Record<keyof typeof drawerEn, string> = {
   "badge.save": "Guardar detalles del servicio",
   "badge.importAdd": "Añadir detalles",
   "badge.importUpdate": "Sustituir los detalles existentes",
+  "badge.importPaymentReviews": "Saldos que volverán a revisión",
   "badge.importUnchanged": "Ya importado, sin cambios",
   "badge.import": "Importar detalles de Booksy",
   "badge.importDescription":

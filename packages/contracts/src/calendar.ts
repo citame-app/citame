@@ -32,12 +32,17 @@ const MS_PER_DAY = 86_400_000;
  * `GET /appointments/calendar`. `staffIds` is a comma-separated list; leave it out for every
  * active staff member the caller may see.
  */
+export const booksyBillingCapabilitiesSchema = z.object({
+  booksyPaymentReview: z.literal("1").optional(),
+  booksyBalanceReview: z.literal("1").optional(),
+});
+export type BooksyBillingCapabilities = z.infer<typeof booksyBillingCapabilitiesSchema>;
+
 export const calendarQuerySchema = z
   .object({
     from: instantSchema,
     to: instantSchema,
-    booksyPaymentReview: z.literal("1").optional(),
-    booksyBalanceReview: z.literal("1").optional(),
+    ...booksyBillingCapabilitiesSchema.shape,
     resourceOccupancy: z.literal("1").optional(),
     staffIds: z
       .string()

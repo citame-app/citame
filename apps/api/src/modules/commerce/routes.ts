@@ -122,11 +122,7 @@ export function commerceAdminRoutes(deps: AppDeps) {
       const query = parseOrThrow(calendarQuerySchema, c.req.query());
       const result = await unpaidAppointments(deps.db, query, c.get("principal"));
       for (const entry of result.billingReview ?? [])
-        entry.reasons = compatibleBillingReasons(
-          entry.reasons,
-          query.booksyPaymentReview === "1",
-          query.booksyBalanceReview === "1",
-        );
+        entry.reasons = compatibleBillingReasons(entry.reasons, query);
       return c.json(result, 200, { "Cache-Control": "private, no-store" });
     })
     .get("/appointments/:id/imported-price", async (c) =>

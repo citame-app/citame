@@ -99,6 +99,15 @@ pub enum SalonConfigurationWork {
 const STAFF_DIRECTORY_TOPIC: &str = "staff_directory";
 const SERVICE_CATALOG_TOPIC: &str = "service_catalog";
 
+const REPLAY_LEGACY_BOOKSY_HOLDS: &str = r#"
+    UPDATE meta SET value = '0' WHERE key = 'cursor'
+      AND EXISTS (
+        SELECT 1 FROM appointment, json_each(appointment.json, '$.billingReviewReasons') AS reason
+        WHERE json_extract(appointment.json, '$.importedFromBooksy') = 1
+          AND reason.value = 'unknown_amount'
+      );
+"#;
+
 const MIGRATIONS: &[&str] = &[
     // 1: initial schema
     r#"
@@ -165,14 +174,7 @@ const MIGRATIONS: &[&str] = &[
     // 5: submitted combination payloads stay immutable across retries and restarts.
     "ALTER TABLE outbox ADD COLUMN submitted INTEGER NOT NULL DEFAULT 0;",
     // 6: refresh legacy billing holds from the current projection without clearing the mirror.
-    r#"
-    UPDATE meta SET value = '0' WHERE key = 'cursor'
-      AND EXISTS (
-        SELECT 1 FROM appointment, json_each(appointment.json, '$.billingReviewReasons') AS reason
-        WHERE json_extract(appointment.json, '$.importedFromBooksy') = 1
-          AND reason.value = 'unknown_amount'
-      );
-    "#,
+    REPLAY_LEGACY_BOOKSY_HOLDS,
     // 7: detect older client projections without scanning the directory on every sync.
     r#"
     CREATE INDEX client_missing_group_names ON client(id)
@@ -221,6 +223,8 @@ const MIGRATIONS: &[&str] = &[
     SELECT 'appointment_deposit_cursor','0' WHERE EXISTS (SELECT 1 FROM appointment)
     ON CONFLICT(key) DO NOTHING;
     "#,
+    // Reproject a balance hold that an older server response encoded as unknown_amount.
+    REPLAY_LEGACY_BOOKSY_HOLDS,
 ];
 
 const MIRROR_TABLES: &[&str] = &[

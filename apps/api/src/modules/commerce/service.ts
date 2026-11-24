@@ -74,7 +74,11 @@ import {
   syncStampsAfterSpecialRefund,
 } from "../rewards/value";
 import { getSalonSettings } from "../settings/service";
-import { assertAppointmentBillable, importedPartialPayments } from "./appointment-billing";
+import {
+  assertAppointmentBillable,
+  historicalImportedBalance,
+  importedPartialPayments,
+} from "./appointment-billing";
 import { checkoutServices, reviewedCatalogPrice } from "./catalog";
 import { checkoutGroupTotals } from "./history-totals";
 import { allocateDiscount, completedRefundStatus, recordedPaymentStatuses } from "./money";
@@ -203,9 +207,10 @@ async function snapshot(
     .reduce((a, b) => a + b.amountCents, 0);
   const balanceCents = row.status === "void" ? 0 : Math.max(0, row.totalCents - paidCents);
   const protection = row.appointmentId ? await protectionView(db, row.appointmentId) : null;
+  const balanceLine = lines.find((line) => line.kind === "external_balance");
   const externalBalance =
-    row.appointmentId && lines.some((line) => line.kind === "external_balance")
-      ? (await importedPartialPayments(db, [row.appointmentId])).get(row.appointmentId)
+    row.appointmentId && balanceLine
+      ? await historicalImportedBalance(db, row.appointmentId, balanceLine.unitAmountCents)
       : undefined;
   const reward = await checkoutRewardView(db, row.id);
   return {

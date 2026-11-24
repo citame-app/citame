@@ -95,6 +95,12 @@ export function BooksyContextImport() {
               <dd>{preview.data.invoiced}</dd>
               <dt>{t("badge.paidBooksy")}</dt>
               <dd>{preview.data.paid}</dd>
+              {preview.data.paymentReviewsReopened !== undefined && (
+                <>
+                  <dt>{t("badge.importPaymentReviews")}</dt>
+                  <dd>{preview.data.paymentReviewsReopened}</dd>
+                </>
+              )}
             </dl>
           )}
           {preview.data && (

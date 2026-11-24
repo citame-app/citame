@@ -41,6 +41,10 @@ Clients that understand the `unknown_booksy_payment` appointment billing hold re
 changes the appointment version and republishes the row. Evidence references stay in the
 server audit trail.
 
+Clients that understand `booksy_balance_changed` also request `booksyBalanceReview=1`.
+Older clients receive `unknown_amount` for this hold. Desktop replays affected appointment
+projections after upgrading and preserves its queued edits.
+
 The response includes the current `clientDirectory` permission and `calendarScope` even when the cursor is already at the log head. `calendarScope` is `all`, `none`, or a staff ID. When either scope changes, the native client clears its previous mirror and cached views before pulling a new snapshot from zero. It keeps its outbox and conflict records. Older servers can omit these fields.
 
 `viewerEditCalendar` carries the current calendar edit permission, including on empty pulls. Desktop saves this decision and uses it separately from `calendarScope`, which controls visible appointments. Desktop checks permission and calendar scope when preparing or confirming an online booking and when queuing creation, rescheduling, cancellation, or an attendance outcome. Older servers can omit the permission. Desktop keeps the last explicit value when available and otherwise recognizes restricted personal calendars through `timeOffScope: "none"`. Cloud rechecks authorization during replay.
@@ -300,6 +304,7 @@ Rules:
 - The preference indicator survives a staff reassignment. Checkout status changes can re-announce an appointment with the same version so the replica receives the current billing indicator.
 - A visible appointment upsert can include `resources` with the confirmed allocation names, optional stable `resourceId` identifiers, and the largest quantity reserved for each resource across its sequential services. An omitted field represents an empty allocation in that snapshot. Resource edits re-announce the appointment without changing its version. On upgrade, Desktop fills missing allocations and stable IDs on existing appointments with a separate replay cursor once the server advertises `bookedResourceIds`. The main cursor, notices and queued changes are retained.
 - When an operator verifies a partial Booksy payment, both calendar feeds show the reconciled split and clear the historical Booksy payment and invoice review reasons. An invoiced service can still show its invoice indicator while the remaining amount is due. The paid indicator returns when a Citame receipt settles the balance.
+- If the imported payment evidence changes, the appointment projection removes `externalBalance` and returns the balance review hold. Existing receipts retain the original contribution and balance that they were issued with.
 - The general appointment note is part of the authenticated appointment replica and can be edited offline. Rejected drafts stay available for review after the mirror reaches the server head recorded on rejection.
 - Desktop opens per-service annotations and source comments on demand over `GET /appointments/:id/context`. The ordinary calendar access rules apply, the response disables HTTP caching and this annotation text stays out of the SQLite replica.
 - Internal notes and the service's professional preference save online through `PATCH /appointments/:id/context`. The editor submits the appointment version and the service annotation version from the same read. It sends a preference update only for an explicit change, so other edits preserve an originally requested professional after reassignment. The server rejects stale versions, and desktop keeps the rejected draft in memory for manual review.
