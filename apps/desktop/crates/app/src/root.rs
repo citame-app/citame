@@ -3666,12 +3666,18 @@ impl Root {
         }
         let projection = calendar::appointment_view(&self.svc.store, &d.id).unwrap_or_default();
         let current = projection.appointment;
-        let pending = projection.pending || projection.stale_edits;
+        let pending =
+            self.svc.store.appointment_edit_sync(&d.id).ok() == Some(AppointmentEditSync::Pending);
         let client = current
             .as_ref()
             .map(|a| self.appointment_client_name(a))
             .unwrap_or_default();
         let stale = current.as_ref().is_none_or(|a| !d.reviewed.matches(a));
+        let (shown_start, shown_staff) = current
+            .as_ref()
+            .map_or((d.reviewed.starts_at, d.reviewed.staff_id.as_str()), |a| {
+                (a.starts_at, a.staff_id.as_str())
+            });
         let editing_note = d.note_draft.is_some() && current.is_some();
         let editing_service_note =
             matches!(d.annotations, Some(annotations::Annotations::Editing(_)));
@@ -3745,11 +3751,13 @@ impl Root {
                 div()
                     .text_sm()
                     .text_color(theme::muted())
-                    .child(SharedString::from(self.staff_name(&d.reviewed.staff_id))),
+                    .child(SharedString::from(self.staff_name(shown_staff))),
             )
-            .child(div().text_sm().child(SharedString::from(
-                self.date_time_label(d.reviewed.starts_at),
-            )))
+            .child(
+                div()
+                    .text_sm()
+                    .child(SharedString::from(self.date_time_label(shown_start))),
+            )
             .when_some(deposit.as_ref(), |details, deposit| {
                 details.child(
                     self.render_appointment_protection(
@@ -3891,7 +3899,7 @@ impl Root {
                             })),
                     )
                 })
-                .child(self.render_annotations(appointment, d, cx))
+                .child(self.render_annotations(appointment, d, !projection.stale_edits, cx))
                 .when(!editing_note, |panel| {
                     panel
                         .children(self.render_related_visit(appointment, d, cx))
@@ -4040,6 +4048,7 @@ impl Root {
             .when(projection.stale_edits, |x| {
                 x.child(
                     div()
+                        .debug_selector(|| "appointment-queue-review".into())
                         .text_sm()
                         .text_color(theme::conflict_fg())
                         .child(self.t(Key::AppointmentEditsAwaitingSync)),
@@ -5161,6 +5170,27 @@ mod tests {
                 assert_eq!(query["staff"], root.week_staff_id);
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    async fn an_older_queued_cancellation_keeps_current_details_readable(cx: &mut TestAppContext) {
+        let (_dir, config) = desk();
+        let (entity, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        entity.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            let store = &mut root.svc.store;
+            let mut saved = store.appointment(EXISTING).unwrap().unwrap();
+            ops::cancel_appointment(store, EXISTING).unwrap();
+            saved.starts_at += chrono::Duration::hours(2);
+            saved.ends_at += chrono::Duration::hours(2);
+            saved.version += 1;
+            store.apply_page(&[up(11, "appointment", EXISTING, json!(saved))], 11).unwrap();
+            root.open_details(EXISTING, cx);
+            assert!(matches!(&root.overlay, Overlay::Details(details) if details.reviewed.matches(&saved)));
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("appointment-queue-review").is_some());
+        assert!(cx.debug_bounds("edit-appointment-note").is_none());
     }
 
     #[gpui::test]

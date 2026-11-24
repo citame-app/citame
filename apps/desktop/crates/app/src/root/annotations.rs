@@ -588,6 +588,7 @@ impl Root {
         &self,
         appointment: &Appointment,
         details: &Details,
+        allow_note_changes: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let state = details.annotations.as_ref();
@@ -610,7 +611,7 @@ impl Root {
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(self.t(Key::AppointmentAnnotations)),
             )
-            .child(self.render_appointment_note(appointment, details, cx));
+            .child(self.render_appointment_note(appointment, details, allow_note_changes, cx));
         match state {
             Some(Annotations::Editing(draft)) => {
                 let name = appointment

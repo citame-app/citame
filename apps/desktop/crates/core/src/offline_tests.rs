@@ -1345,7 +1345,7 @@ fn a_pulled_move_keeps_the_saved_appointment_visible_during_an_offline_edit_chai
         .unwrap();
     let projected = appointment_view(&store, EXISTING).unwrap();
     assert_eq!(projected.appointment, Some(saved.clone()));
-    assert!(projected.stale_edits && !projected.pending);
+    assert!(projected.stale_edits);
     assert!(
         effective_appointments_between(&store, saved.starts_at, saved.ends_at)
             .unwrap()
@@ -1792,7 +1792,7 @@ fn editing_an_unknown_appointment_is_refused() {
 }
 
 #[test]
-fn a_pull_for_a_row_with_a_pending_edit_keeps_showing_the_local_version() {
+fn a_pull_for_a_newer_appointment_preserves_a_stale_edit_without_projecting_it() {
     let mut s = seeded();
     reschedule_appointment(&mut s, EXISTING, Some(at("2026-03-09T17:00:00Z")), None).unwrap();
     // Somebody else changed the notes meanwhile; the server version moves to 4.
@@ -1800,9 +1800,13 @@ fn a_pull_for_a_row_with_a_pending_edit_keeps_showing_the_local_version() {
         "startsAt": "2026-03-09T15:00:00.000Z", "endsAt": "2026-03-09T16:00:00.000Z", "status": "booked",
         "notes": "vip", "version": 4, "services": [], "createdAt": T0, "updatedAt": T0}))], 9).unwrap();
     let a = effective_appointment(&s, EXISTING).unwrap().unwrap();
-    assert_eq!(a.starts_at, at("2026-03-09T17:00:00Z"));
-    assert_eq!(a.version, 5);
+    assert_eq!(a.starts_at, at("2026-03-09T15:00:00Z"));
+    assert_eq!(a.version, 4);
     assert_eq!(a.notes.as_deref(), Some("vip"));
+    assert_eq!(
+        s.outbox(10).unwrap()[0].payload["startsAt"],
+        "2026-03-09T17:00:00.000Z"
+    );
 }
 
 #[test]

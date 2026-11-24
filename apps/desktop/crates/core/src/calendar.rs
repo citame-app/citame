@@ -563,7 +563,6 @@ pub fn effective_appointment(store: &Store, id: &str) -> Result<Option<Appointme
 #[derive(Default)]
 pub struct AppointmentView {
     pub appointment: Option<Appointment>,
-    pub pending: bool,
     pub stale_edits: bool,
 }
 
@@ -575,7 +574,6 @@ pub fn appointment_view(store: &Store, id: &str) -> Result<AppointmentView> {
     let projection = overlay(store, &mut map, &mut HashMap::new())?;
     Ok(AppointmentView {
         appointment: map.remove(id),
-        pending: projection.pending.contains(id),
         stale_edits: projection.stale.contains(id),
     })
 }
