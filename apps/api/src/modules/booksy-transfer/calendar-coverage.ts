@@ -1,8 +1,10 @@
 import { z } from "zod";
 import { collectBookingAbsences } from "./absence-evidence";
 import { type CalendarSeen, latestByReference, sourceCalendarDate } from "./calendar-intervals";
-import { stableJson } from "./plan";
+import { sourceUuid, stableJson } from "./plan";
 import { type BooksySourceReadModel, sourceInstant } from "./source-read-model";
+
+const bookingResources = z.array(z.object({ id: z.number().int() }));
 
 export const calendarAuditInput = z.object({
   from: z.iso.date(),
@@ -22,13 +24,31 @@ export function auditCalendarCoverage(
   const fromInSnapshot = from > model.fromDate ? from : model.fromDate;
   const toInSnapshot = to < model.throughDate ? to : model.throughDate;
   type Interval = { date: string; startsAt: string; endsAt: string };
-  type RawBooking = { id: number; booked_from?: string; booked_till?: string };
-  const snapshot = new Map<string, Interval>();
-  for (const { sourceCopy, startsAt, endsAt } of model.appointments) {
+  type RawBooking = {
+    id: number;
+    booked_from?: string;
+    booked_till?: string;
+    resources?: unknown;
+  };
+  type ObservedBooking = Interval & { staffRefs: string[] };
+  const staffRefsById = new Map(
+    model.base.staff.map(({ sourceId }) => [
+      sourceUuid(model.businessId, "staff", sourceId),
+      sourceId,
+    ]),
+  );
+  const knownStaff = new Set(staffRefsById.values());
+  const snapshot = new Map<string, Interval & { staffRef?: string }>();
+  for (const { sourceCopy, startsAt, endsAt, staffId } of model.appointments) {
     if (!sourceCopy) continue;
     const ref = sourceCopy.itemRef;
     if (snapshot.has(ref)) throw new Error("Snapshot has duplicate booking references");
-    snapshot.set(ref, { date: sourceCalendarDate(startsAt, timezone), startsAt, endsAt });
+    snapshot.set(ref, {
+      date: sourceCalendarDate(startsAt, timezone),
+      startsAt,
+      endsAt,
+      staffRef: staffRefsById.get(staffId),
+    });
   }
 
   const latest = new Map<string, { at: string; captures: Record<string, RawBooking>[] }>();
@@ -47,8 +67,8 @@ export function auditCalendarCoverage(
   );
   const localTime = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?$/;
   function readBookings(date: string, bookings: Record<string, RawBooking>) {
-    const rows = new Map<string, Interval>();
-    for (const { id, booked_from, booked_till } of Object.values(bookings)) {
+    const rows = new Map<string, ObservedBooking>();
+    for (const { id, booked_from, booked_till, resources } of Object.values(bookings)) {
       if (
         !booked_from ||
         !localTime.test(booked_from) ||
@@ -64,7 +84,11 @@ export function auditCalendarCoverage(
       const endsAt = sourceInstant(booked_till);
       if (rows.has(ref) || Temporal.Instant.compare(startsAt, endsAt) >= 0)
         throw new Error("Calendar has a duplicate booking reference or a nonpositive interval");
-      rows.set(ref, { date, startsAt, endsAt });
+      const staffRefs = (bookingResources.safeParse(resources).data ?? [])
+        .map(({ id }) => String(id))
+        .filter((ref) => knownStaff.has(ref))
+        .sort();
+      rows.set(ref, { date, startsAt, endsAt, staffRefs });
     }
     return rows;
   }
@@ -72,11 +96,23 @@ export function auditCalendarCoverage(
   function reconcile() {
     const comparisons = new Map<
       string,
-      { absent: string[]; unexpected: string[]; changedHours: string[] }
+      {
+        absent: string[];
+        unexpected: string[];
+        changedHours: string[];
+        changedStaff: string[];
+        unverifiedStaff: string[];
+      }
     >();
-    const observations: CalendarSeen<Interval>[] = [];
+    const observations: CalendarSeen<ObservedBooking>[] = [];
     for (const [date, { at, captures }] of latest) {
-      comparisons.set(date, { absent: [], unexpected: [], changedHours: [] });
+      comparisons.set(date, {
+        absent: [],
+        unexpected: [],
+        changedHours: [],
+        changedStaff: [],
+        unverifiedStaff: [],
+      });
       const [first, ...rest] = captures;
       if (!first) continue;
       const rows = readBookings(date, first);
@@ -93,18 +129,21 @@ export function auditCalendarCoverage(
     for (const [ref, { row }] of observed) {
       const saved = snapshot.get(ref);
       const comparison = comparisons.get(row.date);
-      if (!saved) comparison?.unexpected.push(ref);
-      else if (
+      if (!comparison) continue;
+      if (!saved) {
+        comparison.unexpected.push(ref);
+        continue;
+      }
+      if (
         Temporal.Instant.compare(saved.startsAt, row.startsAt) ||
         Temporal.Instant.compare(saved.endsAt, row.endsAt)
       )
-        comparison?.changedHours.push(ref);
+        comparison.changedHours.push(ref);
+      if (!saved.staffRef || row.staffRefs.length !== 1) comparison.unverifiedStaff.push(ref);
+      else if (saved.staffRef !== row.staffRefs[0]) comparison.changedStaff.push(ref);
     }
-    for (const { absent, unexpected, changedHours } of comparisons.values()) {
-      absent.sort();
-      unexpected.sort();
-      changedHours.sort();
-    }
+    for (const comparison of comparisons.values())
+      for (const refs of Object.values(comparison)) refs.sort();
     return comparisons;
   }
   const cutoff = Temporal.Instant.from(atOrAfter);
@@ -137,13 +176,14 @@ export function auditCalendarCoverage(
         );
         return {
           daysCompared: reviewed.length,
-          daysWithDifferences: reviewed.filter(
-            ({ absent, unexpected, changedHours }) =>
-              absent.length || unexpected.length || changedHours.length,
+          daysWithDifferences: reviewed.filter((day) =>
+            Object.values(day).some((refs) => refs.length > 0),
           ).length,
           absent: reviewed.reduce((total, day) => total + day.absent.length, 0),
           unexpected: reviewed.reduce((total, day) => total + day.unexpected.length, 0),
           changedHours: reviewed.reduce((total, day) => total + day.changedHours.length, 0),
+          changedStaff: reviewed.reduce((total, day) => total + day.changedStaff.length, 0),
+          unverifiedStaff: reviewed.reduce((total, day) => total + day.unverifiedStaff.length, 0),
         };
       };
       return {

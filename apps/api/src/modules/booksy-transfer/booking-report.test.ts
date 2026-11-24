@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { bookingReportEvidence, reconcileBooksyBookingReport } from "./booking-report";
 import { auditCalendarCoverage } from "./calendar-coverage";
 import { transferFixture } from "./fixtures";
-import { fingerprint } from "./plan";
+import { fingerprint, sourceUuid } from "./plan";
 import type { BooksySourceReadModel } from "./source-read-model";
 
 const base = transferFixture();
@@ -247,6 +247,73 @@ test("calendar evidence reconciles the newest full capture by Madrid date and ex
     reversed: { id: 1, booked_from: `${day}T08:30`, booked_till: `${day}T08:10` },
   });
   expect(() => audit.result()).toThrow("nonpositive interval");
+});
+
+test("calendar reconciliation reports changed and unverified professionals at the same hours", () => {
+  const day = "2026-11-24";
+  const startsAt = "2026-11-24T08:00:00Z";
+  const endsAt = "2026-11-24T08:20:00Z";
+  const [staffFixture] = base.staff;
+  if (!staffFixture) throw new Error("Expected a professional in the transfer fixture");
+  const staff = ["10", "11"].map((sourceId) => ({ ...staffFixture, sourceId }));
+  const audit = auditCalendarCoverage(
+    {
+      ...model,
+      base: { ...base, staff },
+      appointments: ["1", "2", "3", "4", "5", "6"].map((ref) => ({
+        ...booking(ref, startsAt),
+        endsAt,
+        staffId: sourceUuid(model.businessId, "staff", "10"),
+      })),
+    },
+    { from: day, to: day, atOrAfter: "2026-11-18T13:00:00Z" },
+  );
+  function observe(assignments: (number[] | null | undefined)[]) {
+    const payload = {
+      start_date: day,
+      end_date: day,
+      resources_count: 2,
+      resources: [{ id: 10 }, { id: 11 }],
+      bookings: Object.fromEntries(
+        assignments.map((resourceIds, index) => [
+          index + 1,
+          {
+            id: index + 1,
+            booked_from: `${day}T09:00`,
+            booked_till: `${day}T09:20`,
+            ...(resourceIds === undefined
+              ? {}
+              : { resources: resourceIds?.map((id) => ({ id })) ?? null }),
+          },
+        ]),
+      ),
+    };
+    audit.inspect(
+      {
+        kind: "booksy-api-response",
+        businessId: model.businessId,
+        source: `https://es.booksy.com/core/v2/business_api/me/businesses/${model.businessId}/calendar?start_date=${day}&end_date=${day}&include_unconfirmed=true`,
+        capturedAt: "2026-11-18T13:00:00Z",
+        data: { body: JSON.stringify(payload), data: payload },
+      },
+      fingerprint(payload),
+    );
+  }
+  observe([[11], undefined, [10, 11], [10], [], null]);
+  expect(audit.result()).toMatchObject({
+    bookingReconciliation: {
+      daysWithDifferences: 1,
+      changedHours: 0,
+      changedStaff: 1,
+      unverifiedStaff: 4,
+      current: { changedStaff: 1, unverifiedStaff: 4 },
+      stale: { changedStaff: 0, unverifiedStaff: 0 },
+    },
+    days: [{ reconciliation: { changedStaff: ["1"], unverifiedStaff: ["2", "3", "5", "6"] } }],
+    canCutOver: false,
+  });
+  observe([[10], undefined, [10, 11], [10], [], null]);
+  expect(() => audit.result()).toThrow("Simultaneous full calendars");
 });
 
 function booking(itemRef: string, startsAt: string): BooksySourceReadModel["appointments"][number] {

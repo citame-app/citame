@@ -15,6 +15,7 @@ const calendar = z.object({
       id: z.number().int(),
       booked_from: z.string().optional(),
       booked_till: z.string().optional(),
+      resources: z.unknown().optional(),
     }),
   ),
 });
