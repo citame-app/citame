@@ -114,7 +114,16 @@ fn main() {
         }
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
-                cx.quit();
+                // The X11 close callback still holds the platform client borrow.
+                // Quit on the next foreground turn after the callback releases it.
+                cx.spawn(async |cx| {
+                    let _ = cx.update(|cx| {
+                        if cx.windows().is_empty() {
+                            cx.quit();
+                        }
+                    });
+                })
+                .detach();
             }
         })
         .detach();
