@@ -52,7 +52,10 @@ function sourcePackageContent(capacity: unknown, unit: unknown) {
 async function auditedPackageRepairs(db: ReadSourceDb) {
   const metadata = JSON.stringify({ source: "booksy archive", fields: ["packageContent"] });
   const rows = await db
-    .select({ id: auditLog.entityId })
+    .select({
+      id: auditLog.entityId,
+      at: sql<Date>`min(${auditLog.createdAt})`.mapWith(auditLog.createdAt),
+    })
     .from(auditLog)
     .where(
       and(
@@ -61,11 +64,13 @@ async function auditedPackageRepairs(db: ReadSourceDb) {
         eq(auditLog.entity, "retail_product"),
         sql`${auditLog.metadata} = ${metadata}::jsonb`,
       ),
-    );
-  return new Set(rows.map(({ id }) => id));
+    )
+    .groupBy(auditLog.entityId)
+    .having(sql`count(*) = 1`);
+  return new Map(rows.map(({ id, at }) => [id, at]));
 }
 
-function originalPackageFields<
+function reconstructPreRepairProduct<
   T extends {
     packageContentQuantity: string | null;
     packageContentUnit: string | null;
@@ -73,10 +78,12 @@ function originalPackageFields<
     createdAt: Date;
     updatedAt: Date;
   },
->(stored: T, raw: Record<string, unknown>) {
+>(stored: T, raw: Record<string, unknown>, auditAt: Date) {
   const source = sourcePackageContent(raw.total_pack_capacity, raw.volume_unit);
   if (
     stored.version !== 2 ||
+    auditAt < stored.createdAt ||
+    stored.updatedAt < auditAt ||
     !source ||
     stored.packageContentQuantity !== source.quantity ||
     stored.packageContentUnit !== source.unit
@@ -357,6 +364,7 @@ export async function verifyBooksySourceModel(
         const [product] = await db
           .select({
             ...legacyProductColumns,
+            stockAllocated: sql<string | null>`to_jsonb(${retailProduct})->>'stock_allocated'`,
             packageContentQuantity: sql<
               string | null
             >`to_jsonb(${retailProduct})->>'package_content_quantity'`,
@@ -372,11 +380,15 @@ export async function verifyBooksySourceModel(
           .from(retailProduct)
           .where(eq(retailProduct.id, r.target_id));
         if (product) {
-          const { categoryLabel, brandLabel, ...stored } = product;
+          const { categoryLabel, brandLabel, stockAllocated, ...stored } = product;
+          if (options.exclusiveExtensions && stockAllocated !== null && stockAllocated !== "0")
+            throw new Error("Native product/resource fields changed");
           if (matchesExtensionFingerprint(stored, r.target_hash)) continue;
-          // A reviewed legacy repair must still reproduce the entire original product fingerprint.
-          const baseline = packageRepairs?.has(r.target_id)
-            ? originalPackageFields(stored, archived)
+          // Match the business fields to the original hash and check the repair's version
+          // and timestamp separately. Legacy rows start at version 1 with equal timestamps.
+          const repairAt = packageRepairs?.get(r.target_id);
+          const baseline = repairAt
+            ? reconstructPreRepairProduct(stored, archived, repairAt)
             : stored;
           if (baseline !== stored && matchesExtensionFingerprint(baseline, r.target_hash)) continue;
           const { categoryId, subcategoryId, brandId, ...legacy } = baseline;
