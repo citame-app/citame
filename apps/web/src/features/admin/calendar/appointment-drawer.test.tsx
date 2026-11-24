@@ -49,8 +49,18 @@ beforeEach(() => {
   patchReply = { status: 200, body: { ...appointment, version: 4 } };
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === `/api/appointments/${appointment.id}/context`)
-      return json({ rows: [], customerComment: null });
+    if (url.pathname === `/api/appointments/${appointment.id}/context`) {
+      if (init?.method === "PATCH") {
+        const input = JSON.parse(String(init.body));
+        patches.push(input);
+        return json({
+          rows: [],
+          customerComment: null,
+          appointmentVersion: input.appointmentVersion + 1,
+        });
+      }
+      return json({ rows: [], customerComment: null, appointmentVersion: appointment.version });
+    }
     if (url.pathname === `/api/admin/clients/${CLIENT}`) {
       return json({
         client: {
@@ -222,6 +232,25 @@ describe("AppointmentDrawer", () => {
     } finally {
       resolve();
     }
+  });
+
+  test("an unchanged service draft can use the newer appointment revision", async () => {
+    renderApp(<LiveUpdateHarness />);
+    const note = await screen.findByLabelText("Internal notes");
+    fireEvent.change(note, { target: { value: "Confirm preferred styling" } });
+    fireEvent.click(screen.getByText("Receive remote calendar update"));
+    expect(note).toHaveValue("Confirm preferred styling");
+    fireEvent.click(screen.getByRole("button", { name: "Save service details" }));
+    await waitFor(() =>
+      expect(patches).toEqual([
+        {
+          appointmentVersion: 4,
+          servicePosition: 0,
+          version: 0,
+          internalNote: "Confirm preferred styling",
+        },
+      ]),
+    );
   });
 
   test("a version conflict explains itself and offers to reload", async () => {

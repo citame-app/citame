@@ -33,7 +33,7 @@ import {
   startCalendarWrite,
   usePendingCalendarWrites,
 } from "./appointment-writes";
-import { invalidateCalendarData, mergeAppointment } from "./cache";
+import { invalidateCalendarData, mergeAppointment, mergeCalendarAppointment } from "./cache";
 import { availableActions } from "./logic";
 import { StatusBadge } from "./status-badge";
 
@@ -144,8 +144,7 @@ function DrawerBody({
     );
     queryClient.setQueriesData<CalendarAppointment>(
       { queryKey: calendarEntryQueryKey(saved.id) },
-      (current) =>
-        current && current.version <= saved.version ? { ...current, ...saved } : current,
+      (current) => current && mergeCalendarAppointment(current, saved),
     );
     void invalidateCalendarData(queryClient);
   };
@@ -157,7 +156,6 @@ function DrawerBody({
       api().appointments.update(appointment.id, { version: appointment.version, notes }),
     onSuccess: (saved) => {
       setNotesDraft(null);
-      setProblem(null);
       toast.success(t("calendar.toast.notesSaved"));
       afterSave(saved);
     },

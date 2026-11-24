@@ -259,30 +259,53 @@ test("an external reschedule keeps the open note draft across dates", async ({
   const notes = dialog.getByLabel("Appointment notes", { exact: true });
   await notes.fill("My Web draft");
   const endpoint = `/api/appointments/${appointment.id}`;
-  const remote = await page.request.patch(endpoint, {
-    headers,
-    data: {
-      version: appointment.version,
-      startsAt: `${nextDay}T${hour}:30:00Z`,
-      notes: "New note from another session",
-      override: true,
-    },
+  const { promise: firstRead, resolve: sawFirstRead } = Promise.withResolvers<void>();
+  const { promise: heldResponse, resolve: releaseFirstRead } = Promise.withResolvers<void>();
+  let entryReads = 0;
+  await page.route("**/calendar-entry", async (route) => {
+    if (++entryReads !== 1) return route.continue();
+    const beforeEdit = await route.fetch();
+    sawFirstRead();
+    await heldResponse;
+    // The client cancels this first request when the second change arrives.
+    await route.fulfill({ response: beforeEdit }).catch(() => {});
   });
-  expect(remote.ok(), await remote.text()).toBe(true);
-  await expect(dialog.getByText("New note from another session")).toBeVisible();
-  await expect(notes).toHaveValue("My Web draft");
-  const save = dialog.getByRole("button", { name: "Save notes", exact: true });
-  await expect(save).toBeDisabled();
-  await dialog.getByRole("button", { name: "Keep my draft" }).click();
-  await save.click();
-  await expect(page.getByText("Notes saved", { exact: true })).toBeVisible();
-  const latest = await page.request.get(`${endpoint}/calendar-entry`);
-  expect(latest.ok(), await latest.text()).toBe(true);
-  expect(await latest.json()).toMatchObject({
-    notes: "My Web draft",
-    startsAt: `${nextDay}T${hour}:30:00.000Z`,
-    version: appointment.version + 2,
-  });
+  try {
+    const remote = await page.request.patch(endpoint, {
+      headers,
+      data: {
+        version: appointment.version,
+        startsAt: `${nextDay}T${hour}:30:00Z`,
+        notes: "First external note",
+        override: true,
+      },
+    });
+    expect(remote.ok(), await remote.text()).toBe(true);
+    await firstRead;
+    await expect(notes).toHaveValue("My Web draft");
+    const newer = await page.request.patch(endpoint, {
+      headers,
+      data: { version: appointment.version + 1, notes: "New note from another session" },
+    });
+    expect(newer.ok(), await newer.text()).toBe(true);
+    await expect(dialog.getByText("New note from another session")).toBeVisible();
+    await expect(notes).toHaveValue("My Web draft");
+    expect(entryReads).toBeGreaterThanOrEqual(2);
+    const save = dialog.getByRole("button", { name: "Save notes", exact: true });
+    await expect(save).toBeDisabled();
+    await dialog.getByRole("button", { name: "Keep my draft" }).click();
+    await save.click();
+    await expect(page.getByText("Notes saved", { exact: true })).toBeVisible();
+    const latest = await page.request.get(`${endpoint}/calendar-entry`);
+    expect(latest.ok(), await latest.text()).toBe(true);
+    expect(await latest.json()).toMatchObject({
+      notes: "My Web draft",
+      startsAt: `${nextDay}T${hour}:30:00.000Z`,
+      version: appointment.version + 3,
+    });
+  } finally {
+    releaseFirstRead();
+  }
 });
 
 test("SSE announces a remote booking, opens its date and recovers after a disconnection", async ({

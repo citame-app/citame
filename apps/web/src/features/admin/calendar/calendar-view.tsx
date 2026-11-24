@@ -236,7 +236,7 @@ export function CalendarView({
       })),
     [staff, search.date, calendar?.workingWindows, timeZone, locale],
   );
-  const visibleAppointment = calendar?.appointments.find((a) => a.id === openId);
+  const visibleAppointment = query.data?.appointments.find((a) => a.id === openId);
   const [lastDrawerEntry, setLastDrawerEntry] = useState<{
     appointment: CalendarAppointment;
     accessScope?: string;
@@ -247,21 +247,28 @@ export function CalendarView({
     ...(live ? { refetchInterval: false } : {}),
     retry: (attempt, error) => attempt < 2 && !isUnavailableCalendarEntry(error),
   });
-  const confirmedEntry =
-    visibleAppointment ??
-    (consultation || isUnavailableCalendarEntry(entry.error) ? undefined : entry.data);
-  useEffect(() => {
-    if (confirmedEntry) setLastDrawerEntry({ appointment: confirmedEntry, accessScope });
-    else if (!openId || isUnavailableCalendarEntry(entry.error)) setLastDrawerEntry(null);
-  }, [confirmedEntry, openId, accessScope, entry.error]);
-  const openAppointment =
-    confirmedEntry ??
-    (!consultation &&
-    !isUnavailableCalendarEntry(entry.error) &&
+  const entryUnavailable = isUnavailableCalendarEntry(entry.error);
+  const directEntry = consultation || entryUnavailable ? undefined : entry.data;
+  const retainedEntry =
+    !consultation &&
+    !entryUnavailable &&
     lastDrawerEntry?.accessScope === accessScope &&
     lastDrawerEntry?.appointment.id === openId
       ? lastDrawerEntry.appointment
-      : null);
+      : undefined;
+  const confirmedEntry =
+    visibleAppointment && (!directEntry || visibleAppointment.version >= directEntry.version)
+      ? visibleAppointment
+      : directEntry;
+  const openAppointment =
+    retainedEntry && (!confirmedEntry || retainedEntry.version > confirmedEntry.version)
+      ? retainedEntry
+      : (confirmedEntry ?? null);
+  useEffect(() => {
+    if (openAppointment && openAppointment !== retainedEntry)
+      setLastDrawerEntry({ appointment: openAppointment, accessScope });
+    else if (!openId || entryUnavailable) setLastDrawerEntry(null);
+  }, [openAppointment, retainedEntry, openId, accessScope, entryUnavailable]);
   const onOpenAppointment = useCallback((appointment: CalendarAppointment) => {
     setOpenId(appointment.id);
   }, []);

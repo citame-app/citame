@@ -185,7 +185,9 @@ function ServiceContext({
               {
                 appointment: {
                   id: appointment.id,
-                  version: unchanged ? latest.appointmentVersion : baseline.appointmentVersion,
+                  version: unchanged
+                    ? Math.max(appointment.version, latest.appointmentVersion)
+                    : baseline.appointmentVersion,
                 },
                 context: {
                   servicePosition: position,
