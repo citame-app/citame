@@ -44,6 +44,25 @@ describe("liveness and readiness", () => {
     expect(res.headers.has("x-citame-api-instance")).toBe(false);
   });
 
+  test("startup fails safely when the database signing key needs the original auth secret", async () => {
+    const publicKeys = await get("/api/auth/jwks");
+    expect(publicKeys.status).toBe(200);
+    const expected = await publicKeys.json();
+    const wrongConfig = {
+      ...t.config,
+      auth: { ...t.config.auth, secret: "different-test-auth-secret-0123456789" },
+    };
+    const restarted = createApp({ db: t.db, valkey: t.valkey.client, config: wrongConfig });
+    try {
+      await expect(restarted.ready()).rejects.toThrow(
+        "Cannot use the OAuth signing key. Check BETTER_AUTH_SECRET and the selected database.",
+      );
+      expect(await (await get("/api/auth/jwks")).json()).toEqual(expected);
+    } finally {
+      await restarted.shutdown();
+    }
+  });
+
   test("an opt-in readiness probe identifies the responding API instance", async () => {
     const headers = { "x-citame-readiness-probe": "instance" };
     const second = createApp({ db: t.db, valkey: t.valkey.client, config: t.config });

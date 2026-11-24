@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+The API checks its OAuth signing key before serving traffic so a restored database paired with a different auth secret fails at startup.
+
 Prepared Booksy billing reports include owner-reviewed payment corrections when the audit trail connects the archived flags to the current appointment service.
 
 The import reconciliation command identifies an incompatible migration ledger without printing private database errors. It directs operators to check the migration history before restoring or upgrading a separate copy.

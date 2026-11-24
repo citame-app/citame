@@ -189,6 +189,17 @@ export function createApp(input: AppDeps): App {
   };
   app.ready = async () => {
     await ensureOAuthSeeds(deps.db, deps.config);
+    try {
+      // Use the same signing path as real sessions before accepting traffic. The probe
+      // has no user or permissions, has its own audience and never leaves this process.
+      await auth.api.signJWT({
+        body: { payload: { aud: "urn:citame:startup", exp: Math.floor(Date.now() / 1000) + 5 } },
+      });
+    } catch {
+      throw new Error(
+        "Cannot use the OAuth signing key. Check BETTER_AUTH_SECRET and the selected database.",
+      );
+    }
     auth.mailer.start();
   };
 
