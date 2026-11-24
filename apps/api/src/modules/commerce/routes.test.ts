@@ -736,16 +736,6 @@ test.each(["current", "legacy", "refunded"] as const)(
 );
 
 test("the owner can verify a full Booksy payment after the Citame receipt is fully refunded", async () => {
-  const previous = await checkout();
-  const attempted = await pay(previous.id, "redsys_card", 10000);
-  expect(attempted.status).toBe(201);
-  const { payment: bankPayment } = (await attempted.json()) as {
-    payment: { id: string; order: string };
-  };
-  expect((await notify(bankPayment.order, { Ds_Response: "0190" })).status).toBe(200);
-  expect((await call(owner, `/admin/commerce/checkouts/${previous.id}/void`, "POST")).status).toBe(
-    200,
-  );
   await t.db.insert(appointmentContext).values({
     appointmentId,
     servicePosition: 0,
@@ -763,6 +753,18 @@ test("the owner can verify a full Booksy payment after the Citame receipt is ful
       })
     ).status,
   ).toBe(200);
+  const previous = await checkout();
+  const attempted = await pay(previous.id, "redsys_card", 6500);
+  expect(attempted.status).toBe(201);
+  const { payment: bankPayment } = (await attempted.json()) as {
+    payment: { id: string; order: string };
+  };
+  expect((await notify(bankPayment.order, { Ds_Response: "0190", Ds_Amount: "6500" })).status).toBe(
+    200,
+  );
+  expect((await call(owner, `/admin/commerce/checkouts/${previous.id}/void`, "POST")).status).toBe(
+    200,
+  );
   const sale = await checkout();
   const paid = await pay(sale.id, "external_card", 6500);
   expect(paid.status).toBe(201);
@@ -818,14 +820,14 @@ test("the owner can verify a full Booksy payment after the Citame receipt is ful
   expect(before).toMatchObject({ status: "refunded", paidCents: 6500, refundedCents: 6500 });
   expect((await verify(staff)).status).toBe(403);
   expect((await verify()).status).toBe(409);
-  expect((await notify(bankPayment.order)).status).toBe(200);
+  expect((await notify(bankPayment.order, { Ds_Amount: "6500" })).status).toBe(200);
   expect((await verify()).status).toBe(409);
   const requested = await call(
     owner,
     `/admin/commerce/payments/${bankPayment.id}/refunds`,
     "POST",
     {
-      amountCents: 10000,
+      amountCents: 6500,
       reason: "Return the late capture on the void receipt",
       idempotencyKey: crypto.randomUUID(),
     },

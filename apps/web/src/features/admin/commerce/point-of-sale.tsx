@@ -810,8 +810,12 @@ function DueAppointments({
   });
   const requestKeys = useRef(new Map<string, string>());
   const create = useMutation({
-    mutationFn: ({ id, externalBalance }: Pick<CalendarAppointment, "id" | "externalBalance">) => {
-      const intent = externalBalance ? `${id}:verified-balance` : id;
+    mutationFn: ({
+      id,
+      version,
+      externalBalance,
+    }: Pick<CalendarAppointment, "id" | "version" | "externalBalance">) => {
+      const intent = externalBalance ? `${id}:verified-balance:${version}` : id;
       const key = requestKeys.current.get(intent) ?? crypto.randomUUID();
       requestKeys.current.set(intent, key);
       return api().commerce.create({

@@ -19,6 +19,7 @@ const maintenanceMigrations = new Map([
   [1795268629000, "Migration 0106 requires a maintenance upgrade with old API replicas drained."],
   [1795285620000, "Migration 0107 requires a maintenance upgrade with old API replicas drained."],
   [1795398000000, "Migration 0124 requires a maintenance upgrade with old API replicas drained."],
+  [1795547300000, "Migration 0129 requires a maintenance upgrade with old API replicas drained."],
 ]);
 
 /** Summarize the ordered ledger that a successful migration must leave behind. */

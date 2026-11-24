@@ -19,10 +19,12 @@ let dueReceipt:
     }
   | undefined;
 let externalBalance: { paidInBooksyCents: number; dueInCitameCents: number } | undefined;
+let appointmentVersion: number;
 beforeEach(() => {
   cash = null;
   externalBalance = undefined;
   dueReceipt = undefined;
+  appointmentVersion = 1;
   calls = [];
   globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
     const path = new URL(String(input), "http://localhost").pathname;
@@ -42,7 +44,7 @@ beforeEach(() => {
             updatedAt: startsAt,
             status: "completed",
             notes: null,
-            version: 1,
+            version: appointmentVersion,
             services: [],
             serviceNames: ["Catalog treatment"],
             clientName: "Test customer",
@@ -186,6 +188,29 @@ test.each([false, true])(
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith(id));
   },
 );
+
+test("the open till creates a new checkout for a corrected Booksy balance", async () => {
+  externalBalance = { paidInBooksyCents: 3500, dueInCitameCents: 6500 };
+  const onCreated = mock(() => {});
+  const { queryClient } = renderApp(
+    <PointOfSale role="owner" sales={[]} onCreated={onCreated} onBenefits={() => {}} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "To collect" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Collect €65" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole("button", { name: "Collect €65" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(2));
+  expect(calls[1]?.body.idempotencyKey).toBe(calls[0]?.body.idempotencyKey);
+
+  appointmentVersion = 2;
+  externalBalance = { paidInBooksyCents: 8000, dueInCitameCents: 2000 };
+  await queryClient.invalidateQueries({ queryKey: ["commerce", "unpaid"] });
+  fireEvent.click(await screen.findByRole("button", { name: "Collect €20" }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledTimes(3));
+  expect(calls[2]?.body.idempotencyKey).toEqual(expect.any(String));
+  expect(calls[2]?.body.idempotencyKey).not.toBe(calls[0]?.body.idempotencyKey);
+});
+
 test("the unpaid desk identifies the existing receipt and its confirmed balance without another create", async () => {
   dueReceipt = {
     id: receiptId,
