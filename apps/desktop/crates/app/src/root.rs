@@ -327,7 +327,7 @@ enum Overlay {
     Details(Box<Details>),
     Block(Box<blocks::BlockForm>),
     Blocks,
-    Inbox(inbox::Inbox),
+    Inbox(Box<inbox::Inbox>),
     Cash(cash::RegisterDesk),
     WalkIn(Box<walk_in::SaleDesk>),
     WalkInReceipt(checkout::CheckoutReview),
@@ -427,8 +427,10 @@ pub struct Root {
     notice_cursor: i64,
     notices: Vec<(CalendarNoticeKind, Appointment, Instant)>,
     inbox_generation: u64,
+    calendar_badge: inbox::CalendarBadge,
     reward_badge: inbox::RewardBadge,
     waitlist_generation: u64,
+    waitlist_count: sob_core::waitlist::WaitlistCount,
     review_generation: u64,
     _subs: Vec<Subscription>,
 }
@@ -522,8 +524,10 @@ impl Root {
             notice_cursor: 0,
             notices: vec![],
             inbox_generation: 0,
+            calendar_badge: inbox::CalendarBadge::default(),
             reward_badge: inbox::RewardBadge::default(),
             waitlist_generation: 0,
+            waitlist_count: Default::default(),
             review_generation: 0,
             _subs: subs,
         };
@@ -758,6 +762,8 @@ impl Root {
     }
 
     fn sign_out(&mut self, cx: &mut Context<Self>) {
+        self.waitlist_count = Default::default();
+        self.calendar_badge = inbox::CalendarBadge::default();
         self.reward_badge = inbox::RewardBadge::default();
         self.pending_loyalty = None;
         self.pending_stamp = None;
@@ -811,6 +817,7 @@ impl Root {
         }
         let resource_reconnected = reconnected || (status.stream_live && !self.status.stream_live);
         self.update_inbox_connectivity(&status, cx);
+        self.refresh_waitlist_count(&status, cx);
         self.refresh_open_report(&status, cx);
         self.refresh_commissions(&status, cx);
         if status.connectivity == Connectivity::Online {
@@ -893,6 +900,7 @@ impl Root {
                 self.overlay = Overlay::None;
             }
             self.notices.clear();
+            self.calendar_badge = inbox::CalendarBadge::default();
             self.reward_badge = inbox::RewardBadge::default();
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
@@ -2153,12 +2161,9 @@ impl Root {
                     cx.listener(|this, _, _, cx| this.open_directory(cx)),
                 ))
             })
-            .child(self.button(
-                "waitlist",
-                self.t(Key::Waitlist),
-                Kind::Ghost,
-                cx.listener(|this, _, _, cx| this.open_waitlist(true, 1, cx)),
-            ))
+            .when(self.can_view_waitlist(), |d| {
+                d.child(self.waitlist_button(cx))
+            })
             .child(self.button(
                 "cash-register",
                 self.t(Key::CashRegister),
@@ -4795,7 +4800,9 @@ impl Render for Root {
                         }
                         Overlay::Block(f) => Some(self.render_block_form(f, content_viewport, cx)),
                         Overlay::Blocks => Some(self.render_time_off_list(cx)),
-                        Overlay::Inbox(inbox) => Some(self.render_inbox(inbox, cx)),
+                        Overlay::Inbox(inbox) => {
+                            Some(self.render_inbox(inbox, content_viewport, cx))
+                        }
                         Overlay::Cash(desk) => Some(self.render_cash_register(desk, cx)),
                         Overlay::Loyalty(desk) => {
                             Some(self.render_loyalty(desk, content_viewport, cx))
@@ -4858,7 +4865,9 @@ impl Render for Root {
                         Overlay::ReviewModeration(desk) => {
                             Some(self.render_review_moderation(desk, content_viewport, cx))
                         }
-                        Overlay::Waitlist(desk) => Some(self.render_waitlist(desk, cx)),
+                        Overlay::Waitlist(desk) => {
+                            Some(self.render_waitlist(desk, content_viewport, cx))
+                        }
                         Overlay::Directory(directory) => {
                             Some(self.render_directory(directory, content_viewport, cx))
                         }
@@ -4934,6 +4943,7 @@ impl Render for Root {
                             | Overlay::New(_)
                             | Overlay::Marketing(_)
                             | Overlay::Loyalty(_)
+                            | Overlay::Waitlist(_)
                     ) || this.checkout_review_mut().is_some())
                 {
                     if event.keystroke.modifiers.shift {

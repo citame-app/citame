@@ -43,8 +43,11 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Web and Desktop show confirmed payments and the remaining receipt balance directly in To collect. Existing receipts reopen by ID and display unresolved payment or price review states.
 
 - Desktop can browse previously loaded active and history waitlist pages offline. Offer actions continue to use the current server state.
+- Desktop opens the waitlist for the dates visible in the calendar and shows the count of active requests for that period. The full active queue and request history remain available in the same panel.
+- Desktop lets staff expand one calendar waitlist request at a time and filter the full list by request status. Each opened status filter keeps its own saved pages for offline use.
 
 - Desktop shows live notices when an appointment is moved or cancelled from another client, alongside the existing new-booking notices.
+- Desktop counts active calendar notifications in the toolbar, groups them by day, and filters by appointment event. Archive a visible group in one action. The first page of each loaded filter can be consulted offline.
 
 - Cloud and Desktop group appointment outcomes by the promotion reviewed at booking, with the same filters and CSV export as the appointment report.
 

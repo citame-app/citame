@@ -51,7 +51,7 @@ impl OfferReview {
             && entry.id == self.entry.id
             && entry.version == self.entry.version
             && entry.offer.as_ref().is_some_and(|offer| {
-                offer.expires_at > Utc::now()
+                !offer.is_expired(Utc::now())
                     && self
                         .entry
                         .offer
@@ -112,7 +112,7 @@ impl Root {
         let Overlay::Waitlist(desk) = &mut self.overlay else {
             return;
         };
-        let Ok(scope) = self.svc.store.waitlist_cache_scope() else {
+        let Ok(scope) = self.svc.store.calendar_cache_scope() else {
             return;
         };
         if desk.cached {
@@ -154,7 +154,7 @@ impl Root {
                     return;
                 };
                 desk.busy = false;
-                if this.svc.store.waitlist_cache_scope().ok().as_ref() != Some(&scope) {
+                if this.svc.store.calendar_cache_scope().ok().as_ref() != Some(&scope) {
                     desk.reject_scope();
                     cx.notify();
                     return;
@@ -364,7 +364,7 @@ impl Root {
                         &[("date", &self.date_time_label(offer.expires_at))],
                     ))),
             )
-            .when(offer.expires_at <= Utc::now(), |d| {
+            .when(offer.is_expired(Utc::now()), |d| {
                 d.child(self.t(Key::WaitlistOfferExpired))
             });
         let awaiting_confirmation = review.request.is_some();
@@ -444,7 +444,7 @@ impl Root {
                     .when(
                         can_write && review.entry.can_manage && !awaiting_confirmation,
                         |d| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-requeue",
                                 self.t(if review.confirming_requeue {
                                     Key::WaitlistConfirmRequeue
@@ -568,7 +568,7 @@ impl Root {
     }
 
     fn review_back_button(&self, cx: &mut Context<Self>) -> Stateful<gpui::Div> {
-        self.button(
+        self.waitlist_action(
             "wl-back",
             self.t(Key::Back),
             Kind::Ghost,
@@ -610,15 +610,16 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
     let waiver = cx.new(|cx| TextField::new("", false, cx));
     let waiver_sub = cx.observe(&waiver, |_, _, cx| cx.notify());
     root.overlay = Overlay::Waitlist(Box::new(Desk {
-        active: true,
+        view: WaitlistView::Active,
         page: 1,
-        scope: root.svc.store.waitlist_cache_scope().ok(),
+        scope: root.svc.store.calendar_cache_scope().ok(),
         data: None,
         saved_pages: vec![],
         busy: false,
         cached: false,
         error: None,
         confirm: None,
+        expanded: None,
         form: None,
         policy_review: None,
         booked: None,

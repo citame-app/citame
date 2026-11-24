@@ -26,7 +26,7 @@ mod staff_portrait_draft;
 mod visit_payment;
 mod waitlist_cache;
 pub use staff_portrait_draft::StaffPortraitDraft;
-pub use waitlist_cache::{SavedWaitlistPages, WaitlistCacheScope};
+pub use waitlist_cache::SavedWaitlistPages;
 
 fn pending_bank_refund_key(checkout_id: uuid::Uuid, actor_user_id: &str) -> String {
     format!("bank_refund_pending:{checkout_id}:{actor_user_id}")
@@ -39,6 +39,44 @@ fn pending_commission_payout_key(staff_id: uuid::Uuid, actor: &str) -> String {
 pub(crate) const INITIAL_GENERATION: &str = "initial";
 const GENERATION_KEY: &str = "sync_generation";
 const REBUILD_KEY: &str = "sync_rebuilding";
+const CALENDAR_VISIBILITY_EPOCH: &str = "waitlist_visibility_epoch";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CalendarCacheScope {
+    generation: String,
+    calendar: Option<String>,
+    directory: Option<String>,
+    epoch: i64,
+}
+
+impl CalendarCacheScope {
+    fn read(db: &Connection) -> Result<Self> {
+        Ok(db.query_row(
+            "SELECT coalesce((SELECT value FROM meta WHERE key=?1),?2),
+                    (SELECT value FROM meta WHERE key='calendar_scope'),
+                    (SELECT value FROM meta WHERE key='client_directory'),
+                    coalesce((SELECT CAST(value AS INTEGER) FROM meta WHERE key=?3),0)",
+            params![
+                GENERATION_KEY,
+                INITIAL_GENERATION,
+                CALENDAR_VISIBILITY_EPOCH
+            ],
+            |row| {
+                Ok(Self {
+                    generation: row.get(0)?,
+                    calendar: row.get(1)?,
+                    directory: row.get(2)?,
+                    epoch: row.get(3)?,
+                })
+            },
+        )?)
+    }
+
+    pub fn permits_read(&self) -> bool {
+        self.calendar.as_deref() != Some("none") && self.directory.as_deref() != Some("denied")
+    }
+}
+
 const SALON_CONFIGURATION_CACHE: &str = "salon_configuration_cache";
 const SALON_CONFIGURATION_ACK: &str = "salon_configuration_ack";
 const SALON_CONFIGURATION_UNAVAILABLE: &str = "salon_configuration_unavailable";
@@ -432,11 +470,15 @@ fn outbox_from_row(r: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
 const OUTBOX_COLS: &str =
     "seq, mutation_id, created_at, kind, entity_id, payload, attempts, last_error";
 
-fn inbox_key(archived: bool) -> &'static str {
-    if archived {
+fn inbox_key(archived: bool, kind: Option<CalendarNoticeKind>) -> String {
+    let base = if archived {
         "calendar_inbox_archived"
     } else {
         "calendar_inbox_active"
+    };
+    match kind {
+        Some(kind) => format!("{base}:{}", kind.as_str()),
+        None => base.to_owned(),
     }
 }
 
@@ -1517,7 +1559,7 @@ impl Store {
             tx.execute(&format!("DELETE FROM {t}"), [])?;
         }
         tx.execute(
-            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','appointment_deposit_cursor','calendar_snapshot_complete','calendar_inbox_archived','calendar_inbox_active','resource_pool_catalogue','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
+            "DELETE FROM meta WHERE key IN ('cursor','client_groups_cursor','booked_resources_cursor','appointment_deposit_cursor','calendar_snapshot_complete','resource_pool_catalogue','peak_price_snapshot',?1,?2,?3,?4) OR key LIKE 'live_view:%' OR key LIKE 'reviewed_service_resources:%'",
             [CATALOG_COLORS_CACHED, SALON_CONFIGURATION_CACHE, SALON_CONFIGURATION_ACK, SALON_CONFIGURATION_UNAVAILABLE],
         )?;
         Self::forget_combinations_at(tx)?;
@@ -1525,7 +1567,7 @@ impl Store {
         Self::invalidate_resource_days(tx)?;
         tx.execute("DELETE FROM local_booking_confirmation", [])?;
         tx.execute("DELETE FROM local_calendar_ack", [])?;
-        waitlist_cache::invalidate_visibility(tx)?;
+        Self::invalidate_calendar_caches(tx)?;
         gift_cache::clear_at(tx)?;
         Self::apply_inventory_access_at(tx, false)?;
         Self::apply_inventory_read_access_at(tx, false)?;
@@ -1565,7 +1607,7 @@ impl Store {
         if restart {
             Self::clear_replica(&tx)?;
         } else {
-            waitlist_cache::invalidate_visibility(&tx)?;
+            Self::invalidate_calendar_caches(&tx)?;
             if changes.iter().any(|(key, _)| *key == "calendar_scope") {
                 Self::invalidate_resource_days(&tx)?;
                 Self::forget_booking_combinations_at(&tx)?;
@@ -1762,19 +1804,74 @@ impl Store {
             })?)
     }
 
-    pub fn calendar_inbox_cache(&self, archived: bool) -> Result<Option<CalendarInbox>> {
-        self.get_meta(inbox_key(archived))?
+    pub fn calendar_inbox_cache(
+        &self,
+        archived: bool,
+        kind: Option<CalendarNoticeKind>,
+    ) -> Result<Option<CalendarInbox>> {
+        self.get_meta(&inbox_key(archived, kind))?
             .map(|raw| serde_json::from_str(&raw).map_err(CoreError::from))
             .transpose()
     }
 
-    pub fn cache_calendar_inbox(&self, archived: bool, inbox: &CalendarInbox) -> Result<()> {
-        self.set_meta(inbox_key(archived), &serde_json::to_string(inbox)?)
+    pub fn calendar_cache_scope(&self) -> Result<CalendarCacheScope> {
+        CalendarCacheScope::read(&self.conn)
+    }
+
+    pub fn cache_calendar_inbox(
+        &mut self,
+        scope: &CalendarCacheScope,
+        archived: bool,
+        kind: Option<CalendarNoticeKind>,
+        inbox: &CalendarInbox,
+    ) -> Result<bool> {
+        self.write_transaction(|store| {
+            if &store.calendar_cache_scope()? != scope {
+                return Ok(false);
+            }
+            store.set_meta(&inbox_key(archived, kind), &serde_json::to_string(inbox)?)?;
+            Ok(true)
+        })
     }
 
     pub fn clear_calendar_inbox_cache(&self) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM meta WHERE key IN ('calendar_inbox_archived','calendar_inbox_active')",
+        Self::clear_calendar_inbox_cache_at(&self.conn)
+    }
+
+    pub fn invalidate_calendar_inbox_filters(
+        &mut self,
+        affected: &[CalendarNoticeKind],
+    ) -> Result<()> {
+        self.write_transaction(|store| {
+            for archived in [false, true] {
+                for kind in std::iter::once(None).chain(
+                    [
+                        CalendarNoticeKind::New,
+                        CalendarNoticeKind::Rescheduled,
+                        CalendarNoticeKind::Cancelled,
+                    ]
+                    .into_iter()
+                    .filter(|kind| affected.contains(kind))
+                    .map(Some),
+                ) {
+                    store.conn.execute(
+                        "DELETE FROM meta WHERE key = ?1",
+                        [inbox_key(archived, kind)],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+    }
+
+    fn invalidate_calendar_caches(db: &Connection) -> Result<()> {
+        waitlist_cache::invalidate_visibility(db)?;
+        Self::clear_calendar_inbox_cache_at(db)
+    }
+
+    fn clear_calendar_inbox_cache_at(db: &Connection) -> Result<()> {
+        db.execute(
+            "DELETE FROM meta WHERE key GLOB 'calendar_inbox_active*' OR key GLOB 'calendar_inbox_archived*'",
             [],
         )?;
         Ok(())

@@ -55,7 +55,7 @@ use crate::sse::{SseParser, nudge_seq};
 use crate::sync::{CatalogColors, CatalogueSnapshots, Transport, TransportError};
 use crate::waitlist::{
     AcceptOffer, AcceptOfferError, AcceptedOffer, BookedAppointment, WaitlistEntry, WaitlistPage,
-    WaitlistPolicy, WaitlistRequest,
+    WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistView,
 };
 
 pub struct HttpTransport {
@@ -1250,13 +1250,15 @@ impl HttpTransport {
     pub fn calendar_inbox(
         &self,
         archived: bool,
+        kind: Option<CalendarNoticeKind>,
         page: u32,
     ) -> Result<CalendarInbox, TransportError> {
-        let response = self.get(
-            &self.agent,
-            &format!("/admin/notifications/inbox?archived={archived}&page={page}"),
-            Some("application/json"),
-        )?;
+        let mut path = format!("/admin/notifications/inbox?archived={archived}&page={page}");
+        if let Some(kind) = kind {
+            path.push_str("&kind=");
+            path.push_str(kind.as_str());
+        }
+        let response = self.get(&self.agent, &path, Some("application/json"))?;
         read_response(response, false)
     }
 
@@ -2017,12 +2019,12 @@ impl HttpTransport {
         Ok(())
     }
 
-    pub fn set_calendar_notice_archived(
+    pub fn set_calendar_notices_archived(
         &self,
-        id: &str,
+        ids: &[String],
         archived: bool,
     ) -> Result<(), TransportError> {
-        let body = serde_json::json!({ "ids": [id], "archived": archived }).to_string();
+        let body = serde_json::json!({ "ids": ids, "archived": archived }).to_string();
         let mut request = self.agent.post(&format!(
             "{}/admin/notifications/inbox/archive",
             self.base_url
@@ -2042,12 +2044,35 @@ impl HttpTransport {
         }
         Ok(())
     }
-    pub fn waitlist(&self, page: u32, active: bool) -> Result<WaitlistPage, TransportError> {
-        let response = self.get(
-            &self.agent,
-            &format!("/admin/waitlist/desk?page={page}&pageSize=15&active={active}"),
-            None,
-        )?;
+    pub fn waitlist(&self, page: u32, view: WaitlistView) -> Result<WaitlistPage, TransportError> {
+        self.waitlist_page(page, 15, view)
+    }
+
+    pub fn waitlist_count(&self, range: WaitlistRange) -> Result<u32, TransportError> {
+        Ok(self
+            .waitlist_page(1, 1, WaitlistView::Calendar(range))?
+            .total)
+    }
+
+    fn waitlist_page(
+        &self,
+        page: u32,
+        size: u32,
+        view: WaitlistView,
+    ) -> Result<WaitlistPage, TransportError> {
+        let mut path = format!(
+            "/admin/waitlist/desk?page={page}&pageSize={size}&active={}",
+            view.active()
+        );
+        if let Some(range) = view.range() {
+            use std::fmt::Write;
+            let _ = write!(path, "&fromDate={}&toDate={}", range.from, range.to);
+        }
+        if let WaitlistView::State(state) = view {
+            path.push_str("&state=");
+            path.push_str(state.as_str());
+        }
+        let response = self.get(&self.agent, &path, None)?;
         read_response(response, false)
     }
 

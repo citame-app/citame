@@ -4,6 +4,36 @@ use crate::sync::TransportError;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
+mod count;
+pub use count::{WaitlistCount, WaitlistCountUpdate};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WaitlistRange {
+    pub from: NaiveDate,
+    pub to: NaiveDate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitlistView {
+    Calendar(WaitlistRange),
+    Active,
+    History,
+    State(WaitlistState),
+}
+
+impl WaitlistView {
+    pub fn active(self) -> bool {
+        matches!(self, Self::Calendar(_) | Self::Active)
+    }
+
+    pub fn range(self) -> Option<WaitlistRange> {
+        match self {
+            Self::Calendar(range) => Some(range),
+            Self::Active | Self::History | Self::State(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WaitlistPage {
@@ -35,7 +65,7 @@ pub struct ImportedRequest {
     pub flexible: bool,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitlistState {
     Waiting,
@@ -44,6 +74,28 @@ pub enum WaitlistState {
     Cancelled,
     Expired,
     Unavailable,
+}
+
+impl WaitlistState {
+    pub const ALL: [Self; 6] = [
+        Self::Waiting,
+        Self::Offered,
+        Self::Booked,
+        Self::Cancelled,
+        Self::Expired,
+        Self::Unavailable,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Offered => "offered",
+            Self::Booked => "booked",
+            Self::Cancelled => "cancelled",
+            Self::Expired => "expired",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -167,7 +219,7 @@ impl WaitlistEntry {
         let offer = self.offer.as_ref()?;
         (self.can_manage
             && self.state == WaitlistState::Offered
-            && offer.expires_at > now
+            && !offer.is_expired(now)
             && (!offer.policy.enabled
                 || (can_waive && (8..=300).contains(&reason.trim().encode_utf16().count()))))
         .then_some(offer)
@@ -192,6 +244,12 @@ impl WaitlistEntry {
             intake_responses: intake.inline,
             protection_waiver_reason: offer.policy.enabled.then(|| waiver.trim().to_owned()),
         })
+    }
+}
+
+impl WaitlistOffer {
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now
     }
 }
 
