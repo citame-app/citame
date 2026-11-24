@@ -335,11 +335,14 @@ done
 cjar="$SMOKE_DIR/client-cookies"
 curl -s -o /dev/null -c "$cjar" -X POST "$BASE/api/auth/sign-up/email" -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d '{"email":"smoke-client@example.com","name":"Smoke Client","password":"a smoke client passphrase"}'
+request_id="$(bun -e 'console.log(Bun.randomUUIDv7())')"
+booking_request="{\"id\":\"$request_id\",\"staffId\":\"$staff\",\"serviceIds\":[\"$service\"],\"startsAt\":\"$slot\"}"
 status="$(curl -s -o "$SMOKE_DIR/booking.json" -w '%{http_code}' -b "$cjar" -X POST "$BASE/api/appointments" \
   -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
-  -d "{\"staffId\":\"$staff\",\"serviceIds\":[\"$service\"],\"startsAt\":\"$slot\"}")"
+  -d "$booking_request")"
 [ "$status" = 201 ] || fail "booking returned $status: $(cat "$SMOKE_DIR/booking.json")"
 booking_id="$(json "d['id']" < "$SMOKE_DIR/booking.json")"
+[ "$booking_id" = "$request_id" ] || fail "the booking did not keep the request identifier"
 status="$(curl -s -o /dev/null -w '%{http_code}' -b "$cjar" -X POST "$BASE/api/appointments" \
   -H 'content-type: application/json' -H "origin: $PUBLIC_URL" \
   -d "{\"staffId\":\"$staff\",\"serviceIds\":[\"$service\"],\"startsAt\":\"$slot\"}")"
@@ -417,6 +420,16 @@ if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
   await_reminder_status reminder_2h sent: || fail "worker did not resume email"
   await_mail smoke-client@example.com 'Reminder: your appointment is ' 0 ||
     fail "SMTP reminder delivery"
+
+  step "replay the delivered booking without repeating its confirmation or reminders"
+  replay_status="$(curl -fsS --max-time 8 -b "$cjar" -D "$SMOKE_DIR/replayed-booking.headers" \
+    -o "$SMOKE_DIR/replayed-booking.json" -w '%{http_code}' -X POST "$BASE/api/appointments" \
+    -H 'content-type: application/json' -H "origin: $PUBLIC_URL" -d "$booking_request")" ||
+    fail "the original booking could not be replayed"
+  [ "$replay_status" = 201 ] &&
+    [ "$(json "d['id']" < "$SMOKE_DIR/replayed-booking.json")" = "$booking_id" ] &&
+    grep -qi '^x-idempotent-replay: true' "$SMOKE_DIR/replayed-booking.headers" ||
+    fail "repeating the request did not return the same booking as an idempotent replay"
 fi
 
 step "seed cancelled, missed and completed visits alongside the live booking"
@@ -506,7 +519,6 @@ SQL
     -H 'content-type: application/json' -H "origin: $PUBLIC_URL" -d '{}' |
     json "d['status']")" || fail "review email queue rejected the replay"
   [ "$replay_status" = sent ] || fail "replay replaced the sent review invitation"
-  review_replayed_at=$SECONDS
   review_deliveries="$("${COMPOSE[@]}" exec -T postgres psql -X -U sob -d sob -qAt -v ON_ERROR_STOP=1 \
     -v client_id="$review_client" <<'SQL'
 SELECT count(*)
@@ -1055,10 +1067,12 @@ for svc in api web worker; do
 done
 
 if [ "${SMOKE_EMAIL:-0}" = 1 ]; then
-  step "confirmations, reminders and review invitations remain single SMTP messages after replay"
-  # The default worker polling interval is five seconds. Other smoke steps usually cover it.
-  remaining=$((review_replayed_at + 6 - SECONDS))
-  if [ "$remaining" -gt 0 ]; then sleep "$remaining"; fi
+  step "confirmation, reminder and review stay single SMTP messages after replay and worker restart"
+  "${COMPOSE[@]}" restart --timeout 5 worker || fail "could not restart the delivery worker"
+  "${COMPOSE[@]}" up -d --no-deps --no-recreate --wait --wait-timeout 30 worker ||
+    fail "the delivery worker did not recover after restart"
+  # Allow a full polling interval for the worker to pick up any duplicate work.
+  sleep 6
   await_mail smoke-client@example.com 'Appointment confirmed:' 1 ||
     fail "replaying the queue changed the delivered confirmation count"
   await_mail smoke-client@example.com 'Reminder: your appointment is ' 0 ||
