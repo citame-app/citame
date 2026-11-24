@@ -260,7 +260,8 @@ test("calendar reconciliation reports changed and unverified professionals at th
     {
       ...model,
       base: { ...base, staff },
-      appointments: ["1", "2", "3", "4", "5", "6"].map((ref) => ({
+      resources: [{ id: 12 }],
+      appointments: ["1", "2", "3", "4", "5", "6", "7"].map((ref) => ({
         ...booking(ref, startsAt),
         endsAt,
         staffId: sourceUuid(model.businessId, "staff", "10"),
@@ -272,8 +273,8 @@ test("calendar reconciliation reports changed and unverified professionals at th
     const payload = {
       start_date: day,
       end_date: day,
-      resources_count: 2,
-      resources: [{ id: 10 }, { id: 11 }],
+      resources_count: 3,
+      resources: [{ id: 10 }, { id: 11 }, { id: 12 }],
       bookings: Object.fromEntries(
         assignments.map((resourceIds, index) => [
           index + 1,
@@ -299,20 +300,29 @@ test("calendar reconciliation reports changed and unverified professionals at th
       fingerprint(payload),
     );
   }
-  observe([[11], undefined, [10, 11], [10], [], null]);
+  observe([[11], undefined, [10, 11], [10, 12], [], null, [10, 99], []]);
   expect(audit.result()).toMatchObject({
     bookingReconciliation: {
       daysWithDifferences: 1,
       changedHours: 0,
       changedStaff: 1,
-      unverifiedStaff: 4,
-      current: { changedStaff: 1, unverifiedStaff: 4 },
+      unexpected: 1,
+      unverifiedStaff: 6,
+      current: { changedStaff: 1, unverifiedStaff: 6 },
       stale: { changedStaff: 0, unverifiedStaff: 0 },
     },
-    days: [{ reconciliation: { changedStaff: ["1"], unverifiedStaff: ["2", "3", "5", "6"] } }],
+    days: [
+      {
+        reconciliation: {
+          changedStaff: ["1"],
+          unexpected: ["8"],
+          unverifiedStaff: ["2", "3", "5", "6", "7", "8"],
+        },
+      },
+    ],
     canCutOver: false,
   });
-  observe([[10], undefined, [10, 11], [10], [], null]);
+  observe([[10], undefined, [10, 11], [10, 12], [], null, [10, 99], []]);
   expect(() => audit.result()).toThrow("Simultaneous full calendars");
 });
 

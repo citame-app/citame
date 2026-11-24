@@ -249,7 +249,7 @@ El 21/11 se repitió la proyección desde los 1.053 originales con la comprobaci
 
 `booksy-audit-calendar-window.ts` compara también las líneas de cada jornada de inicio en Europe/Madrid con la última observación sin filtros y con el conjunto completo de recursos. Un movimiento a otro día se cuenta una vez como cambio de hora. La auditoría falla si las últimas observaciones completas de una jornada se contradicen. El comprobante privado identifica referencias ausentes, inesperadas y con cambios de hora. La terminal muestra recuentos separados según el corte de frescura. El resultado mantiene las ausencias pendientes de contraste y conserva `canCutOver: false`. Una diferencia puede corresponder a una línea recuperada por otra evidencia, como un informe contrastado con el calendario visible.
 
-The audit also reports staff changes when the booking time is unchanged. If the capture or snapshot cannot identify a single professional for a matched booking, the private receipt records that assignment as unverified. The terminal prints counts for both categories.
+The audit also reports staff changes when the booking time is unchanged. The private receipt marks an assignment as unverified when the capture cannot identify one professional, includes an unknown resource, or matches a snapshot line whose professional cannot be identified. The terminal prints counts for both categories.
 
 ```sh
 bun --no-env-file apps/api/src/scripts/booksy-audit-calendar-window.ts \

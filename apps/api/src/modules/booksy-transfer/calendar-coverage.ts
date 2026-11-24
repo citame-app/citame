@@ -24,7 +24,7 @@ export function auditCalendarCoverage(
   const fromInSnapshot = from > model.fromDate ? from : model.fromDate;
   const toInSnapshot = to < model.throughDate ? to : model.throughDate;
   type Interval = { date: string; startsAt: string; endsAt: string };
-  type ObservedBooking = Interval & { staffRefs: string[] };
+  type ObservedBooking = Interval & { staffRefs: string[] | null };
   const staffRefsById = new Map(
     model.base.staff.map(({ sourceId }) => [
       sourceUuid(model.businessId, "staff", sourceId),
@@ -32,6 +32,7 @@ export function auditCalendarCoverage(
     ]),
   );
   const knownStaff = new Set(staffRefsById.values());
+  const knownEquipment = new Set(model.resources.map(({ id }) => String(id)));
   const snapshot = new Map<string, Interval & { staffRef?: string }>();
   for (const { sourceCopy, startsAt, endsAt, staffId } of model.appointments) {
     if (!sourceCopy) continue;
@@ -78,10 +79,11 @@ export function auditCalendarCoverage(
       const endsAt = sourceInstant(booked_till);
       if (rows.has(ref) || Temporal.Instant.compare(startsAt, endsAt) >= 0)
         throw new Error("Calendar has a duplicate booking reference or a nonpositive interval");
-      const staffRefs = (bookingResources.safeParse(resources).data ?? [])
-        .map(({ id }) => String(id))
-        .filter((ref) => knownStaff.has(ref))
-        .sort();
+      const resourceRefs = bookingResources.safeParse(resources).data?.map(({ id }) => String(id));
+      const staffRefs =
+        resourceRefs?.every((ref) => knownStaff.has(ref) || knownEquipment.has(ref))
+          ? resourceRefs.filter((ref) => knownStaff.has(ref)).sort()
+          : null;
       rows.set(ref, { date, startsAt, endsAt, staffRefs });
     }
     return rows;
@@ -124,6 +126,8 @@ export function auditCalendarCoverage(
       const saved = snapshot.get(ref);
       const comparison = comparisons.get(row.date);
       if (!comparison) continue;
+      const staffRef = row.staffRefs?.length === 1 ? row.staffRefs[0] : undefined;
+      if (!staffRef || (saved && !saved.staffRef)) comparison.unverifiedStaff.push(ref);
       if (!saved) {
         comparison.unexpected.push(ref);
         continue;
@@ -133,8 +137,8 @@ export function auditCalendarCoverage(
         Temporal.Instant.compare(saved.endsAt, row.endsAt)
       )
         comparison.changedHours.push(ref);
-      if (!saved.staffRef || row.staffRefs.length !== 1) comparison.unverifiedStaff.push(ref);
-      else if (saved.staffRef !== row.staffRefs[0]) comparison.changedStaff.push(ref);
+      if (staffRef && saved.staffRef && saved.staffRef !== staffRef)
+        comparison.changedStaff.push(ref);
     }
     for (const comparison of comparisons.values())
       for (const refs of Object.values(comparison)) refs.sort();
