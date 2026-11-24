@@ -117,6 +117,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Desktop keeps the confirmed appointment visible if a pending offline edit targets an older version. Dependent edits remain available for conflict review.
+
 - Desktop shows starting and pending prices, surcharges, and service instructions when reviewing a waitlist offer.
 
 - Reconciliation recognizes audited package content restored from the original inventory archive in a prepared local copy.

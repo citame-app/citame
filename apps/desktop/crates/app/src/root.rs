@@ -1606,6 +1606,9 @@ impl Root {
                         .t(deposit_context::attendance_block_label(block))
                         .to_owned(),
                     CoreError::AppointmentChanged => self.t(Key::AppointmentChanged).to_owned(),
+                    CoreError::AppointmentEditsAwaitingSync => {
+                        self.t(Key::AppointmentEditsAwaitingSync).to_owned()
+                    }
                     CoreError::AppointmentScopeDenied => self.t(Key::ConflictForbidden).to_owned(),
                     CoreError::IncompatibleServices => {
                         self.t(Key::AppointmentStaffIncompatible).to_owned()
@@ -3654,16 +3657,9 @@ impl Root {
         if let Some(visit) = &d.visit_payment {
             return self.render_visit_payment(d, visit, viewport_height, cx);
         }
-        let current = calendar::effective_appointment(&self.svc.store, &d.id)
-            .ok()
-            .flatten();
-        let pending = self.summary.pending > 0
-            && self
-                .svc
-                .store
-                .outbox(usize::MAX)
-                .map(|q| q.iter().any(|e| e.entity_id == d.id))
-                .unwrap_or(false);
+        let projection = calendar::appointment_view(&self.svc.store, &d.id).unwrap_or_default();
+        let current = projection.appointment;
+        let pending = projection.pending || projection.stale_edits;
         let client = current
             .as_ref()
             .map(|a| self.appointment_client_name(a))
@@ -3675,6 +3671,7 @@ impl Root {
         let editable = !editing_note
             && !editing_service_note
             && !stale
+            && !projection.stale_edits
             && current.as_ref().is_some_and(|a| {
                 a.status == AppointmentStatus::Booked && self.can_edit_staff_calendar(&a.staff_id)
             });
@@ -3692,6 +3689,7 @@ impl Root {
                 !editing_note
                     && !editing_service_note
                     && !stale
+                    && !projection.stale_edits
                     && !awaiting_deposit_sync
                     && self.can_edit_staff_calendar(&a.staff_id)
                     && deposit_block.is_none()
@@ -4031,6 +4029,14 @@ impl Root {
                         cx.listener(|this, _, _, cx| this.review_updated_appointment(cx)),
                     ))
                 })
+            })
+            .when(projection.stale_edits, |x| {
+                x.child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::AppointmentEditsAwaitingSync)),
+                )
             })
             .when_some(d.error.clone().filter(|_| !stale), |x, e| {
                 x.child(

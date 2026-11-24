@@ -36,6 +36,8 @@ pub enum CoreError {
     CalendarGenerationChanged,
     #[error("the reviewed appointment has changed")]
     AppointmentChanged,
+    #[error("synchronize the earlier appointment changes before editing")]
+    AppointmentEditsAwaitingSync,
     #[error("synchronize the latest saved note before reviewing this draft")]
     AppointmentNoteRefreshRequired,
     #[error("the appointment assignment is outside the account calendar")]

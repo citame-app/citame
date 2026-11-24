@@ -583,7 +583,12 @@ pub fn create_appointment_for_new_client_reviewed(
 }
 
 fn writable_appointment(store: &Store, id: &str) -> Result<crate::model::Appointment> {
-    let a = effective_appointment(store, id)?
+    let view = crate::calendar::appointment_view(store, id)?;
+    if view.stale_edits {
+        return Err(CoreError::AppointmentEditsAwaitingSync);
+    }
+    let a = view
+        .appointment
         .ok_or_else(|| CoreError::NotFound(format!("appointment {id}")))?;
     require_calendar_write(store, &a.staff_id)?;
     Ok(a)

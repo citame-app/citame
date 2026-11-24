@@ -1188,6 +1188,82 @@ fn an_early_authoritative_tombstone_retires_the_accepted_create() {
 }
 
 #[test]
+fn a_pulled_move_keeps_the_saved_appointment_visible_during_an_offline_edit_chain() {
+    use crate::error::CoreError;
+
+    let mut store = seeded();
+    let mut saved = store.appointment(EXISTING).unwrap().unwrap();
+    let proposed = at("2026-03-09T17:00:00Z");
+    reschedule_appointment(&mut store, EXISTING, Some(proposed), None).unwrap();
+    cancel_appointment(&mut store, EXISTING).unwrap();
+    let entries = store.outbox(10).unwrap();
+    assert_eq!(entries[0].payload["version"], saved.version);
+    assert_eq!(entries[1].payload["version"], saved.version + 1);
+    assert_eq!(
+        appointment_view(&store, EXISTING)
+            .unwrap()
+            .appointment
+            .unwrap()
+            .status,
+        AppointmentStatus::Cancelled
+    );
+
+    let duration = saved.ends_at - saved.starts_at;
+    saved.starts_at = at("2026-03-10T18:00:00Z");
+    saved.ends_at = saved.starts_at + duration;
+    saved.version += 1;
+    store
+        .apply_page(&[up(8, "appointment", EXISTING, json!(saved))], 8)
+        .unwrap();
+    let projected = appointment_view(&store, EXISTING).unwrap();
+    assert_eq!(projected.appointment, Some(saved.clone()));
+    assert!(projected.stale_edits && !projected.pending);
+    assert!(
+        effective_appointments_between(&store, saved.starts_at, saved.ends_at)
+            .unwrap()
+            .iter()
+            .any(|a| a.id == EXISTING)
+    );
+    assert!(matches!(
+        cancel_appointment(&mut store, EXISTING),
+        Err(CoreError::AppointmentEditsAwaitingSync)
+    ));
+    assert_eq!(store.outbox_len().unwrap(), 2);
+
+    let (_, sendable) = store.push_snapshot(100).unwrap();
+    assert_eq!(sendable.len(), 1);
+    store
+        .apply_push_results(
+            &sendable,
+            &[MutationResult::Rejected {
+                mutation_id: sendable[0].mutation_id.clone(),
+                reason: "conflict".into(),
+                message: "Cloud moved the appointment".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    assert_eq!(store.conflicts().unwrap().len(), 2);
+    assert!(!appointment_view(&store, EXISTING).unwrap().stale_edits);
+    assert_eq!(
+        effective_appointment(&store, EXISTING).unwrap(),
+        Some(saved.clone())
+    );
+    queue_appointment_notes(
+        &mut store,
+        EXISTING,
+        saved.notes.as_deref().unwrap_or(""),
+        "Reviewed after sync",
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        store.outbox(10).unwrap()[0].payload["version"],
+        saved.version
+    );
+}
+
+#[test]
 fn a_pulled_current_version_is_not_edited_twice_before_the_receipt_cursor() {
     let mut store = seeded();
     let moved_to = at("2026-03-09T17:00:00Z");

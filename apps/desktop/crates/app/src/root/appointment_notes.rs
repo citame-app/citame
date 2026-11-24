@@ -243,6 +243,9 @@ impl Root {
                             Key::AppointmentNoteReview
                         }
                         CoreError::AppointmentScopeDenied => Key::ConflictForbidden,
+                        CoreError::AppointmentEditsAwaitingSync => {
+                            Key::AppointmentEditsAwaitingSync
+                        }
                         CoreError::AppointmentNoteRefreshRequired => {
                             Key::AppointmentNoteRefreshRequired
                         }

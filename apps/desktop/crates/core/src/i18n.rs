@@ -2343,6 +2343,7 @@ keys! {
     MoveTo => ("Move to", "Mover a"),
     ApplyMove => ("Move appointment", "Mover turno"),
     AppointmentChanged => ("This appointment changed. Review it before saving.", "Esta cita cambió. Revísala antes de guardar."),
+    AppointmentEditsAwaitingSync => ("Cloud has a newer version. Sync the earlier edits before changing this appointment again.", "Cloud tiene una versión más reciente. Sincroniza los cambios anteriores antes de volver a editar esta cita."),
     ReviewCurrentAppointment => ("Review current appointment", "Revisar la cita actual"),
     CancelAppointment => ("Cancel appointment", "Cancelar turno"),
     MarkCompleted => ("Mark completed", "Marcar realizado"),

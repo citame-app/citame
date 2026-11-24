@@ -166,13 +166,18 @@ fn str_of(v: &Value, key: &str) -> Option<String> {
     v.get(key)?.as_str().map(str::to_owned)
 }
 
-/// Applies the outbox, in order, on top of `map` (mirror state). Returns the ids of the
-/// appointments with local edits that are waiting for the mirror to catch up.
+#[derive(Default)]
+struct AppointmentProjection {
+    pending: HashSet<String>,
+    stale: HashSet<String>,
+}
+
+/// Applies the outbox, in order, only to the appointment versions the edits target.
 fn overlay(
     store: &Store,
     map: &mut HashMap<String, Appointment>,
     client_names: &mut HashMap<String, String>,
-) -> Result<HashSet<String>> {
+) -> Result<AppointmentProjection> {
     overlay_calendar_outbox(store, map, client_names, store.calendar_outbox()?)
 }
 
@@ -181,10 +186,10 @@ fn overlay_calendar_outbox(
     map: &mut HashMap<String, Appointment>,
     client_names: &mut HashMap<String, String>,
     outbox: Vec<OutboxEntry>,
-) -> Result<HashSet<String>> {
-    let mut pending = HashSet::new();
+) -> Result<AppointmentProjection> {
+    let mut projection = AppointmentProjection::default();
     if outbox.is_empty() {
-        return Ok(pending);
+        return Ok(projection);
     }
     let services: HashMap<String, Service> = if outbox
         .iter()
@@ -206,12 +211,25 @@ fn overlay_calendar_outbox(
             map.insert(a.id.clone(), a);
         }
     }
-    let mut stale_note_chains = HashSet::new();
-    for e in &outbox {
-        if e.kind.starts_with("appointment.") && stale_note_chains.contains(&e.entity_id) {
-            continue;
-        }
+    for e in outbox {
         let p = &e.payload;
+        if e.kind.starts_with("appointment.") {
+            if projection.stale.contains(&e.entity_id) {
+                continue;
+            }
+            let current = map.get(&e.entity_id);
+            let matches_reviewed_version = if e.kind == "appointment.create" {
+                current.is_none()
+            } else {
+                current
+                    .is_some_and(|appointment| p["version"].as_i64() == Some(appointment.version))
+            };
+            if !matches_reviewed_version {
+                // A successor's predicted version can equal an unrelated Cloud revision.
+                projection.stale.insert(e.entity_id);
+                continue;
+            }
+        }
         let stamp = DateTime::parse_from_rfc3339(&e.created_at)
             .map(|d| d.with_timezone(&Utc))
             .unwrap_or_else(|_| Utc::now());
@@ -285,20 +303,17 @@ fn overlay_calendar_outbox(
                         updated_at: stamp,
                     },
                 );
-                pending.insert(e.entity_id.clone());
+                projection.pending.insert(e.entity_id);
             }
             crate::ops::APPOINTMENT_NOTES_KIND => {
                 if let Some(a) = map.get_mut(&e.entity_id) {
-                    if p["version"].as_i64() == Some(a.version)
-                        && let Some(notes) = str_of(p, "notes")
-                    {
+                    if let Some(notes) = str_of(p, "notes") {
                         a.notes = Some(notes);
                         a.version += 1;
                         a.updated_at = stamp;
-                        pending.insert(e.entity_id.clone());
+                        projection.pending.insert(e.entity_id);
                     } else {
-                        // Later note revisions may depend on this draft, not the newer mirror.
-                        stale_note_chains.insert(e.entity_id.clone());
+                        projection.stale.insert(e.entity_id);
                     }
                 }
             }
@@ -317,7 +332,7 @@ fn overlay_calendar_outbox(
                     }
                     a.version += 1;
                     a.updated_at = stamp;
-                    pending.insert(e.entity_id.clone());
+                    projection.pending.insert(e.entity_id);
                 }
             }
             "appointment.cancel" | "appointment.set_status" => {
@@ -330,7 +345,7 @@ fn overlay_calendar_outbox(
                     };
                     a.version += 1;
                     a.updated_at = stamp;
-                    pending.insert(e.entity_id.clone());
+                    projection.pending.insert(e.entity_id);
                 }
             }
             "client.create" => {
@@ -351,7 +366,7 @@ fn overlay_calendar_outbox(
     if let Some(scope) = store.get_meta("calendar_scope")?.filter(|s| s != "all") {
         map.retain(|_, appointment| appointment.staff_id == scope);
     }
-    Ok(pending)
+    Ok(projection)
 }
 
 fn client_names(store: &Store) -> Result<HashMap<String, String>> {
@@ -542,12 +557,27 @@ pub fn search_directory<'a>(
 
 /// An appointment as the user should see it now: mirror state with pending edits applied.
 pub fn effective_appointment(store: &Store, id: &str) -> Result<Option<Appointment>> {
+    Ok(appointment_view(store, id)?.appointment)
+}
+
+#[derive(Default)]
+pub struct AppointmentView {
+    pub appointment: Option<Appointment>,
+    pub pending: bool,
+    pub stale_edits: bool,
+}
+
+pub fn appointment_view(store: &Store, id: &str) -> Result<AppointmentView> {
     let mut map = HashMap::new();
     if let Some(a) = store.appointment(id)? {
         map.insert(a.id.clone(), a);
     }
-    overlay(store, &mut map, &mut HashMap::new())?;
-    Ok(map.remove(id))
+    let projection = overlay(store, &mut map, &mut HashMap::new())?;
+    Ok(AppointmentView {
+        appointment: map.remove(id),
+        pending: projection.pending.contains(id),
+        stale_edits: projection.stale.contains(id),
+    })
 }
 
 /// Other parts of the same visit from the current account's mirror, including local moves.
@@ -760,7 +790,7 @@ fn calendar_period(
         .map(|appointment| (appointment.id.clone(), appointment))
         .collect();
     let mut names = client_names(store)?;
-    let pending = overlay(store, &mut appointments, &mut names)?;
+    let projection = overlay(store, &mut appointments, &mut names)?;
     let conflicts = store.conflicted_appointment_ids()?;
     let mut appointments: Vec<_> = appointments
         .into_values()
@@ -809,7 +839,7 @@ fn calendar_period(
                 .cloned()
                 .or_else(|| appointment.client_name.clone())
                 .unwrap_or_else(|| "Unknown client".into()),
-            pending: pending.contains(&appointment.id),
+            pending: projection.pending.contains(&appointment.id),
             conflict: conflicts.contains(&appointment.id),
             appointment,
         };
