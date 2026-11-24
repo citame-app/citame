@@ -4,7 +4,8 @@ use sob_core::store::CalendarCacheScope;
 use sob_core::sync::TransportError;
 use sob_core::waitlist::{
     AcceptOffer, AcceptOfferError, BookedAppointment, ImportedRequest, WaitlistCountUpdate,
-    WaitlistPage, WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState, WaitlistView,
+    WaitlistEntry, WaitlistPage, WaitlistPolicy, WaitlistRange, WaitlistRequest, WaitlistState,
+    WaitlistView,
 };
 use std::sync::Arc;
 
@@ -21,7 +22,8 @@ pub(super) struct Desk {
     cached: bool,
     saved_pages: Vec<u32>,
     error: Option<Key>,
-    confirm: Option<String>,
+    confirm: Option<(String, u32)>,
+    expanded: Option<String>,
     form: Option<Draft>,
     offer_review: Option<review::OfferReview>,
     policy_review: Option<review::PolicyReview>,
@@ -45,6 +47,7 @@ impl Desk {
         self.offer_review = None;
         self.policy_review = None;
         self.confirm = None;
+        self.expanded = None;
         self.booked = None;
     }
 
@@ -128,6 +131,17 @@ enum ReloadNotice {
     ImportedRejected,
     IntakeChanged,
     OfferRejected(Key),
+}
+
+fn waitlist_state_label(state: WaitlistState) -> Key {
+    match state {
+        WaitlistState::Waiting => Key::WaitlistWaiting,
+        WaitlistState::Offered => Key::WaitlistOffered,
+        WaitlistState::Booked => Key::WaitlistBooked,
+        WaitlistState::Cancelled => Key::WaitlistCancelled,
+        WaitlistState::Expired => Key::WaitlistExpired,
+        WaitlistState::Unavailable => Key::WaitlistUnavailable,
+    }
 }
 
 impl Root {
@@ -277,6 +291,7 @@ impl Root {
             saved_pages: saved.pages,
             error: None,
             confirm: None,
+            expanded: None,
             form: None,
             offer_review: None,
             policy_review: None,
@@ -453,6 +468,9 @@ impl Root {
                             Err(_) => {}
                         }
                         d.page = data.page;
+                        if d.expanded.as_ref().is_some_and(|id| !data.entries.iter().any(|entry| entry.id == *id)) {
+                            d.expanded = None;
+                        }
                         if d.form.as_ref().and_then(|draft| draft.imported.as_ref()).is_some_and(
                             |row| !data.imported.iter().any(|item| item.id == row.id),
                         ) {
@@ -690,11 +708,7 @@ impl Root {
                         .child(self.button(
                             "wl-all",
                             self.t(Key::WaitlistAll),
-                            if view == WaitlistView::History {
-                                Kind::Primary
-                            } else {
-                                Kind::Ghost
-                            },
+                            if !active { Kind::Primary } else { Kind::Ghost },
                             cx.listener(|this, _, _, cx| {
                                 this.open_waitlist(WaitlistView::History, 1, cx)
                             }),
@@ -724,6 +738,44 @@ impl Root {
                             },
                         ),
                 )
+                .when(!active, |d| {
+                    d.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(self.t(Key::WaitlistFilterState)),
+                            )
+                            .child(div().flex().flex_wrap().gap_2().children(
+                                [None].into_iter().chain(WaitlistState::ALL.map(Some)).map(
+                                    |state| {
+                                        let target = state
+                                            .map_or(WaitlistView::History, WaitlistView::State);
+                                        let id = format!(
+                                            "wl-state-{}",
+                                            state.map_or("all", WaitlistState::as_str)
+                                        );
+                                        self.chip(
+                                            SharedString::from(id.clone()),
+                                            self.t(state.map_or(
+                                                Key::WaitlistAnyState,
+                                                waitlist_state_label,
+                                            )),
+                                            view == target,
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.open_waitlist(target, 1, cx)
+                                            }),
+                                        )
+                                        .debug_selector(|| id)
+                                    },
+                                ),
+                            )),
+                    )
+                })
                 .child(rows.when_some(desk.data.as_ref(), |r, data| {
                     r.when(active && page == 1, |r| {
                         r.children(data.imported.iter().map(|row| {
@@ -775,110 +827,11 @@ impl Root {
                     .when(data.entries.is_empty(), |r| {
                         r.child(div().p_2().child(self.t(Key::WaitlistEmpty)))
                     })
-                    .children(data.entries.iter().map(|entry| {
-                        let id = entry.id.clone();
-                        let review = entry.clone();
-                        let version = entry.version;
-                        let confirm = desk.confirm.as_ref() == Some(&entry.id);
-                        let pending =
-                            matches!(entry.state, WaitlistState::Waiting | WaitlistState::Offered);
-                        let state = self.t(match entry.state {
-                            WaitlistState::Waiting => Key::WaitlistWaiting,
-                            WaitlistState::Offered => Key::WaitlistOffered,
-                            WaitlistState::Booked => Key::WaitlistBooked,
-                            WaitlistState::Cancelled => Key::WaitlistCancelled,
-                            WaitlistState::Expired => Key::WaitlistExpired,
-                            WaitlistState::Unavailable => Key::WaitlistUnavailable,
-                        });
-                        div()
-                            .p_3()
-                            .border_1()
-                            .border_color(theme::line())
-                            .rounded_lg()
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(SharedString::from(
-                                        entry
-                                            .client_name
-                                            .as_deref()
-                                            .unwrap_or(self.t(Key::UnknownClient))
-                                            .to_owned(),
-                                    )),
-                            )
-                            .child(div().text_sm().child(SharedString::from(format!(
-                                "{state} · {}",
-                                entry.service_names.join(", ")
-                            ))))
-                            .child(div().text_sm().text_color(theme::muted()).child(
-                                SharedString::from(format!(
-                                    "{} – {} · {}–{}",
-                                    entry.from_date, entry.to_date, entry.from_time, entry.to_time
-                                )),
-                            ))
-                            .when_some(entry.staff_id.as_ref(), |d, id| {
-                                d.child(
-                                    div()
-                                        .text_sm()
-                                        .child(SharedString::from(self.staff_name(id))),
-                                )
-                            })
-                            .when_some(entry.offer.as_ref(), |d, offer| {
-                                d.child(div().text_sm().child(SharedString::from(format!(
-                                    "{} · {}",
-                                    self.date_time_label(offer.starts_at),
-                                    self.date_time_label(offer.expires_at)
-                                ))))
-                            })
-                            .when(
-                                can_write && entry.can_manage && entry.offer.is_some(),
-                                |d| {
-                                    d.child(self.button(
-                                        SharedString::from(format!("wl-offer-{}", entry.id)),
-                                        self.t(Key::WaitlistReviewOffer),
-                                        Kind::Primary,
-                                        cx.listener(move |this, _, _, cx| {
-                                            this.begin_waitlist_offer(review.clone(), cx)
-                                        }),
-                                    ))
-                                },
-                            )
-                            .when_some(entry.booked_appointment.clone(), |d, booked| {
-                                d.child(self.button(
-                                    SharedString::from(format!("wl-booked-{}", entry.id)),
-                                    self.t(Key::ViewBookingNotice),
-                                    Kind::Ghost,
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.open_waitlist_booking(&booked, cx)
-                                    }),
-                                ))
-                            })
-                            .when(can_write && pending && entry.can_manage, |d| {
-                                d.child(self.button(
-                                    SharedString::from(format!("wl-cancel-{}", entry.id)),
-                                    self.t(if confirm {
-                                        Key::WaitlistConfirm
-                                    } else {
-                                        Key::WaitlistRemove
-                                    }),
-                                    Kind::Danger,
-                                    cx.listener(move |this, _, _, cx| {
-                                        if confirm {
-                                            this.waitlist_request(
-                                                Action::Cancel(id.clone(), version),
-                                                cx,
-                                            );
-                                        } else if let Overlay::Waitlist(d) = &mut this.overlay {
-                                            d.confirm = Some(id.clone());
-                                            cx.notify();
-                                        }
-                                    }),
-                                ))
-                            })
-                    }))
+                    .children(
+                        data.entries
+                            .iter()
+                            .map(|entry| self.render_waitlist_request(desk, entry, can_write, cx)),
+                    )
                 }))
                 .child(
                     div()
@@ -1008,6 +961,165 @@ impl Root {
             (viewport.height - px(24.)).clamp(px(240.), px(720.)),
             None,
         )
+    }
+
+    fn render_waitlist_request(
+        &self,
+        desk: &Desk,
+        entry: &WaitlistEntry,
+        can_write: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let compact = desk.view.range().is_some();
+        let expanded = desk.expanded.as_deref() == Some(&entry.id);
+        let confirmation = (entry.id.clone(), entry.version);
+        let confirmed = desk.confirm.as_ref() == Some(&confirmation);
+        let manageable = can_write && entry.can_manage;
+        let can_cancel =
+            manageable && matches!(entry.state, WaitlistState::Waiting | WaitlistState::Offered);
+        let offer_active = entry
+            .offer
+            .as_ref()
+            .is_some_and(|offer| offer.expires_at > self.calendar_now);
+        let name = entry
+            .client_name
+            .as_deref()
+            .unwrap_or(self.t(Key::UnknownClient))
+            .to_owned();
+        let state = self.t(waitlist_state_label(entry.state));
+        let hours = format!("{}–{}", entry.from_time, entry.to_time);
+        let service_names = entry.service_names.join(", ");
+        let summary = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .flex_1()
+            .min_w_0()
+            .child(
+                div()
+                    .truncate()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(name),
+            )
+            .child(div().truncate().text_sm().child(service_names))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(theme::muted())
+                    .child(format!("{hours} · {state}")),
+            );
+        div()
+            .p_3()
+            .border_1()
+            .border_color(theme::line())
+            .rounded_lg()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(summary)
+                    .when(compact, |row| {
+                        let id = entry.id.clone();
+                        row.child(
+                            self.button(
+                                SharedString::from(format!("wl-details-{id}")),
+                                self.t(if expanded {
+                                    Key::WaitlistHideDetails
+                                } else {
+                                    Key::WaitlistShowDetails
+                                }),
+                                Kind::Ghost,
+                                cx.listener(move |this, _, _, cx| {
+                                    if let Overlay::Waitlist(desk) = &mut this.overlay {
+                                        let was_expanded = desk.expanded.as_ref() == Some(&id);
+                                        desk.expanded = (!was_expanded).then(|| id.clone());
+                                        desk.confirm = None;
+                                        cx.notify();
+                                    }
+                                }),
+                            )
+                            .debug_selector(|| format!("wl-details-{}", entry.id)),
+                        )
+                    }),
+            )
+            .when(expanded || !compact, |card| {
+                let from = i18n::date_label(self.locale, entry.from_date);
+                let dates = if entry.from_date == entry.to_date {
+                    from
+                } else {
+                    format!("{from} – {}", i18n::date_label(self.locale, entry.to_date))
+                };
+                card.child(
+                    div()
+                        .debug_selector(|| format!("wl-body-{}", entry.id))
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(div().text_sm().text_color(theme::muted()).child(dates))
+                        .when_some(entry.staff_id.as_ref(), |d, id| {
+                            d.child(div().text_sm().child(self.staff_name(id)))
+                        })
+                        .when_some(entry.offer.as_ref(), |d, offer| {
+                            d.child(div().text_sm().child(format!(
+                                "{} · {}",
+                                self.date_time_label(offer.starts_at),
+                                if offer_active {
+                                    self.date_time_label(offer.expires_at)
+                                } else {
+                                    self.t(Key::WaitlistOfferExpired).into()
+                                }
+                            )))
+                        })
+                        .when(manageable && offer_active, |d| {
+                            let review = entry.clone();
+                            d.child(self.button(
+                                SharedString::from(format!("wl-offer-{}", entry.id)),
+                                self.t(Key::WaitlistReviewOffer),
+                                Kind::Primary,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.begin_waitlist_offer(review.clone(), cx)
+                                }),
+                            ))
+                        })
+                        .when_some(entry.booked_appointment.clone(), |d, booked| {
+                            d.child(self.button(
+                                SharedString::from(format!("wl-booked-{}", entry.id)),
+                                self.t(Key::ViewBookingNotice),
+                                Kind::Ghost,
+                                cx.listener(move |this, _, _, cx| {
+                                    this.open_waitlist_booking(&booked, cx)
+                                }),
+                            ))
+                        })
+                        .when(can_cancel, |d| {
+                            d.child(self.button(
+                                SharedString::from(format!("wl-cancel-{}", entry.id)),
+                                self.t(if confirmed {
+                                    Key::WaitlistConfirm
+                                } else {
+                                    Key::WaitlistRemove
+                                }),
+                                Kind::Danger,
+                                cx.listener(move |this, _, _, cx| {
+                                    if confirmed {
+                                        this.waitlist_request(
+                                            Action::Cancel(confirmation.0.clone(), confirmation.1),
+                                            cx,
+                                        );
+                                    } else if let Overlay::Waitlist(desk) = &mut this.overlay {
+                                        desk.confirm = Some(confirmation.clone());
+                                        cx.notify();
+                                    }
+                                }),
+                            ))
+                        }),
+                )
+            })
     }
 
     fn render_waitlist_draft(
@@ -1240,6 +1352,94 @@ mod tests {
     use sob_core::waitlist::WaitlistPolicy;
 
     #[gpui::test]
+    async fn calendar_requests_expand_one_at_a_time_and_status_filters_load_their_own_pages(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = super::super::tests::desk();
+        let (entity, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(600.), px(560.)));
+        entity.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            let range = root.calendar_waitlist_range();
+            let row = |id: &str, state| WaitlistEntry {
+                id: id.to_owned(),
+                client_id: id.to_owned(),
+                client_name: Some(id.to_owned()),
+                service_ids: vec![],
+                staff_id: None,
+                service_names: vec!["Haircut".into()],
+                from_date: range.from,
+                to_date: range.to,
+                from_time: "09:00".into(),
+                to_time: "10:00".into(),
+                state,
+                version: 1,
+                can_manage: true,
+                offer: None,
+                booked_appointment: None,
+            };
+            let page = WaitlistPage {
+                page: 1,
+                page_size: 15,
+                total: 2,
+                imported: vec![],
+                policy: WaitlistPolicy {
+                    enabled: true,
+                    offer_minutes: 30,
+                    version: 1,
+                },
+                entries: vec![
+                    row("one", WaitlistState::Waiting),
+                    row("two", WaitlistState::Waiting),
+                ],
+            };
+            let scope = root.svc.store.calendar_cache_scope().unwrap();
+            for (view, snapshot) in [
+                (WaitlistView::Calendar(range), page.clone()),
+                (
+                    WaitlistView::State(WaitlistState::Cancelled),
+                    WaitlistPage {
+                        total: 1,
+                        entries: vec![row("cancelled", WaitlistState::Cancelled)],
+                        ..page
+                    },
+                ),
+            ] {
+                assert!(
+                    root.svc
+                        .store
+                        .cache_waitlist(&scope, view, &snapshot)
+                        .unwrap()
+                        .is_some()
+                );
+            }
+            root.open_waitlist(WaitlistView::Calendar(range), 1, cx);
+        });
+        let click = |cx: &mut gpui::VisualTestContext, selector| {
+            cx.run_until_parked();
+            let bounds = cx
+                .debug_bounds(selector)
+                .unwrap_or_else(|| panic!("missing {selector}"));
+            cx.simulate_click(bounds.center(), Default::default());
+            cx.run_until_parked();
+        };
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("wl-body-one").is_none());
+        click(cx, "wl-details-one");
+        assert!(cx.debug_bounds("wl-body-one").is_some());
+        click(cx, "wl-details-two");
+        assert!(cx.debug_bounds("wl-body-two").is_some());
+        assert!(cx.debug_bounds("wl-body-one").is_none());
+        entity.update(cx, |root, cx| {
+            root.open_waitlist(WaitlistView::History, 1, cx)
+        });
+        click(cx, "wl-state-cancelled");
+        assert!(cx.debug_bounds("wl-body-cancelled").is_some());
+        assert!(cx.debug_bounds("wl-body-two").is_none());
+    }
+
+    #[gpui::test]
     async fn imported_review_controls_follow_the_centre_date_and_offer_policy(
         cx: &mut TestAppContext,
     ) {
@@ -1279,6 +1479,7 @@ mod tests {
                 saved_pages: vec![],
                 error: None,
                 confirm: None,
+                expanded: None,
                 form: None,
                 offer_review: None,
                 policy_review: None,

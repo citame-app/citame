@@ -619,6 +619,7 @@ pub(in crate::root) fn show_intake_test_offer(root: &mut Root, cx: &mut Context<
         cached: false,
         error: None,
         confirm: None,
+        expanded: None,
         form: None,
         policy_review: None,
         booked: None,

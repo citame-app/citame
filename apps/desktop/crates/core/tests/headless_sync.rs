@@ -6828,6 +6828,17 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
         .unwrap();
     assert_eq!(ranged.total, visible_before + 1);
     assert!(ranged.entries.iter().any(|row| row.id == created.id));
+    let waiting = desk
+        .transport
+        .waitlist(1, WaitlistView::State(WaitlistState::Waiting))
+        .unwrap();
+    assert!(waiting.entries.iter().any(|row| row.id == created.id));
+    assert!(
+        waiting
+            .entries
+            .iter()
+            .all(|row| row.state == WaitlistState::Waiting)
+    );
     assert!(
         desk.transport
             .waitlist(1, WaitlistView::Active)
@@ -6846,6 +6857,17 @@ fn native_waitlist_uses_the_same_request_and_cancellation_rules_as_web() {
     assert_eq!(
         desk.transport.waitlist_count(range).unwrap(),
         visible_before
+    );
+    let cancelled = desk
+        .transport
+        .waitlist(1, WaitlistView::State(WaitlistState::Cancelled))
+        .unwrap();
+    assert!(cancelled.entries.iter().any(|row| row.id == created.id));
+    assert!(
+        cancelled
+            .entries
+            .iter()
+            .all(|row| row.state == WaitlistState::Cancelled)
     );
     assert!(
         !desk
