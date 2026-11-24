@@ -26,7 +26,7 @@ export class ApiError extends Error {
   }
 }
 
-/** The request never produced a response: offline, DNS, connection refused. */
+/** The connection failed before the full API response could be read. */
 export class NetworkError extends Error {
   override readonly name = "NetworkError";
   constructor(cause?: unknown) {
@@ -129,6 +129,7 @@ export function createApiClient(options: ApiClientOptions) {
       headers.set("x-citame-generation", requestOptions.reviewedGeneration);
 
     let response: Response;
+    let text: string;
     try {
       response = await doFetch(urlFor(path, requestOptions.query), {
         method,
@@ -138,12 +139,17 @@ export function createApiClient(options: ApiClientOptions) {
         signal: requestOptions.signal,
         ...(requestOptions.cache ? { cache: requestOptions.cache } : {}),
       });
+      text = await response.text();
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
+      if (
+        requestOptions.signal?.aborted &&
+        error instanceof DOMException &&
+        error.name === "AbortError"
+      )
+        throw error;
       throw new NetworkError(error);
     }
 
-    const text = await response.text();
     let parsed: unknown;
     try {
       parsed = text ? JSON.parse(text) : null;

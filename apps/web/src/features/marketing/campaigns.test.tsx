@@ -313,3 +313,77 @@ test("campaign comparison keeps selections across pages and shows separate deliv
     onlineManager.setOnline(true);
   }
 });
+
+test("a formatted email validates its blocks, saves their order and reopens with the same design", async () => {
+  let saved: Campaign | undefined;
+  globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname.endsWith("/campaigns") && init?.method === "POST") {
+      const packet: CampaignCreate = JSON.parse(String(init.body));
+      saved = {
+        ...packet,
+        status: "draft",
+        version: 1,
+        counts: {
+          pending: 0,
+          processing: 0,
+          sent: 0,
+          skipped: 0,
+          failed: 0,
+          unknown: 0,
+          cancelled: 0,
+        },
+        scheduledFor: null,
+        activatedAt: null,
+        createdAt: "2026-11-22T08:00:00Z",
+        updatedAt: "2026-11-22T08:00:00Z",
+      };
+      return Response.json(saved);
+    }
+    if (url.pathname.endsWith("/campaigns")) {
+      expect(url.searchParams.get("emailLayout")).toBe("1");
+      return Response.json({
+        campaigns: saved ? [saved] : [],
+        pagination: { total: saved ? 1 : 0, page: 1, pageSize: 20 },
+      });
+    }
+    return Response.json({}, { status: 404 });
+  }) as unknown as typeof fetch;
+  renderApp(<CampaignsView viewerId="owner" isOwner />);
+  fireEvent.click(await screen.findByRole("button", { name: "New campaign" }));
+  fireEvent.change(screen.getByLabelText("Campaign name"), { target: { value: "Seasonal offer" } });
+  fireEvent.click(screen.getByRole("radio", { name: "With layout" }));
+  fireEvent.change(screen.getByLabelText("Header (optional)"), {
+    target: { value: "Hello {{first_name}}" },
+  });
+  fireEvent.change(screen.getByLabelText("Inbox preview text (optional)"), {
+    target: { value: "Preview line" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add booking button" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  expect(screen.getByText("Enter text for this block.")).toBeVisible();
+  expect(screen.getByText("Review the text of each content block.")).toHaveFocus();
+  expect(saved).toBeUndefined();
+  fireEvent.change(screen.getByLabelText("Booking button text"), {
+    target: { value: "Plan your visit" },
+  });
+  fireEvent.change(screen.getByLabelText("Paragraph style"), { target: { value: "strong" } });
+  fireEvent.click(screen.getAllByRole("button", { name: "Move up" })[1] as HTMLElement);
+  expect(screen.getByRole("heading", { name: "Hello Ana" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
+  await screen.findByText("Draft saved");
+  expect(saved).toMatchObject({
+    emailLayout: {
+      heading: "Hello {{first_name}}",
+      preheader: "Preview line",
+      blocks: [
+        { kind: "booking", label: "Plan your visit" },
+        { kind: "paragraph", emphasis: "strong" },
+      ],
+    },
+    emailBody: expect.stringContaining("Plan your visit: {{booking_url}}"),
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /Seasonal offer/ }));
+  expect(screen.getByRole("radio", { name: "With layout" })).toBeChecked();
+  expect(screen.getByLabelText("Booking button text")).toHaveValue("Plan your visit");
+});

@@ -10,6 +10,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Campañas de correo con cabecera, texto para la bandeja de entrada, bloques reordenables y botón de reserva en Citame Web y Desktop. Citame genera una versión de texto plano para cada mensaje.
+
 - The commerce API prepares the individual receipts for native and imported multi-professional visits in one transaction, including existing collections and cancelled parts.
 - The commerce API can record one reviewed cash or external-terminal payment across the payable receipts of a visit, with atomic allocation and safe retries.
 - Web calendar details show the grouped payment review and distinguish a confirmed payment, a changed balance and an uncertain result that can be retried.
@@ -112,6 +114,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Fixed
 
+- Desktop shows starting and pending prices, surcharges, and service instructions when reviewing a waitlist offer.
+
 - Reconciliation recognizes audited package content restored from the original inventory archive in a prepared local copy.
 
 - Account bootstrap and the main appointment endpoint resolve the current session and permissions once per request.
@@ -126,6 +130,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 - Database recovery restores the exact archive verified by checksum, including when a newer backup replaces the input file during validation.
 
 - Screen readers can identify the appointment reschedule form once the form and its heading are visible.
+
+- Web keeps the reviewed waitlist booking request available for verification after an interrupted response, including a failed list refresh or a rate-limited retry. The offer list shows starting and variable prices consistently with the review.
 
 - Campaign email tests charge the owner’s quota only for committed send claims. Stale drafts, failed claims and replays preserve the available quota.
 

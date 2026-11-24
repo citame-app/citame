@@ -12,6 +12,83 @@ export const campaignStatusSchema = z.enum([
   "cancelled",
 ]);
 export const BOOKING_INVITATION_MAX_CONTACTS = 100;
+export const CAMPAIGN_EMAIL_LIMITS = {
+  heading: 140,
+  preheader: 150,
+  bookingLabel: 80,
+  blocks: 16,
+  paragraphLines: 256,
+  body: 10000,
+} as const;
+
+const layoutText = (max: number, min = 0) =>
+  z
+    .string()
+    .trim()
+    .min(min)
+    .max(max)
+    .refine((value) => !value.includes("\0"), "Text cannot contain NUL");
+const layoutLine = (max: number, min = 0) =>
+  layoutText(max, min).refine((value) => !/[\r\n]/.test(value), "Enter a single line");
+const campaignEmailLayoutFields = z.strictObject({
+  heading: layoutLine(CAMPAIGN_EMAIL_LIMITS.heading).default(""),
+  preheader: layoutLine(CAMPAIGN_EMAIL_LIMITS.preheader).default(""),
+  blocks: z
+    .array(
+      z.discriminatedUnion("kind", [
+        z.strictObject({
+          kind: z.literal("heading"),
+          text: layoutLine(CAMPAIGN_EMAIL_LIMITS.heading, 1),
+        }),
+        z.strictObject({
+          kind: z.literal("paragraph"),
+          text: layoutText(CAMPAIGN_EMAIL_LIMITS.body, 1)
+            .transform((value) => value.replace(/\r\n?/g, "\n"))
+            .refine(
+              (value) => value.split("\n").length <= CAMPAIGN_EMAIL_LIMITS.paragraphLines,
+              "Split long messages into paragraphs of at most 256 lines",
+            ),
+          emphasis: z.enum(["none", "strong", "italic"]),
+        }),
+        z.strictObject({
+          kind: z.literal("booking"),
+          label: layoutLine(CAMPAIGN_EMAIL_LIMITS.bookingLabel, 1),
+        }),
+      ]),
+    )
+    .min(1)
+    .max(CAMPAIGN_EMAIL_LIMITS.blocks),
+});
+export type CampaignEmailLayout = z.infer<typeof campaignEmailLayoutFields>;
+
+export function campaignEmailLayoutText(layout: CampaignEmailLayout): string {
+  return [
+    layout.heading,
+    layout.preheader,
+    ...layout.blocks.map((block) =>
+      block.kind === "booking" ? `${block.label}: {{booking_url}}` : block.text,
+    ),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+export function campaignEmailHasBookingLink(
+  body: string,
+  layout?: CampaignEmailLayout | null,
+): boolean {
+  const hasLink = (text: string) => text.includes("{{booking_url}}");
+  return layout
+    ? hasLink(layout.heading) ||
+        layout.blocks.some((block) => block.kind === "booking" || hasLink(block.text))
+    : hasLink(body);
+}
+
+export const campaignEmailLayoutSchema = campaignEmailLayoutFields.refine(
+  (layout) => campaignEmailLayoutText(layout).length <= CAMPAIGN_EMAIL_LIMITS.body,
+  "Email layout exceeds the message limit",
+);
+
 export const campaignAudienceSchema = z
   .object({
     tags: clientTagsSchema.default([]),
@@ -36,7 +113,8 @@ const campaignFields = {
     .trim()
     .max(200)
     .regex(/^[^\r\n]*$/),
-  emailBody: z.string().trim().max(10000),
+  emailBody: z.string().trim().max(CAMPAIGN_EMAIL_LIMITS.body),
+  emailLayout: campaignEmailLayoutSchema.nullable().optional(),
   smsBody: z.string().trim().max(304),
   audience: campaignAudienceSchema,
   trigger: marketingTriggerSchema,
@@ -48,7 +126,8 @@ export const campaignCreateSchema = campaignDraftSchema.extend({ id: idSchema })
 export const campaignUpdateSchema = campaignDraftSchema
   .extend({ version: z.number().int().positive() })
   .strict();
-export const campaignQuerySchema = z.object({
+export const campaignDetailQuerySchema = z.object({ emailLayout: z.literal("1").optional() });
+export const campaignQuerySchema = campaignDetailQuerySchema.extend({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
   search: z.string().trim().max(100).default(""),

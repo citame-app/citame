@@ -5,6 +5,9 @@ import {
   type CampaignQueue,
   type CampaignTestEmail,
   campaignDraftSchema,
+  campaignEmailHasBookingLink,
+  campaignEmailLayoutSchema,
+  campaignEmailLayoutText,
   campaignStatusSchema,
 } from "@sob/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,6 +27,11 @@ import { ApiError, NetworkError } from "~/lib/api/client";
 import { api } from "~/lib/api/instance";
 import { localDateOf } from "~/lib/format";
 import { zonedInstant } from "~/lib/zoned";
+import {
+  CampaignEmailEditor,
+  CampaignEmailPreview,
+  SavedCampaignEmailPreview,
+} from "./campaign-email-editor";
 import { InvitationContacts } from "./invitation-contacts";
 
 function lostMarketingAccess(error: unknown): error is ApiError {
@@ -44,6 +52,7 @@ export const campaignFields = (c: CampaignDraft): CampaignDraft => ({
   channel: c.channel,
   subject: c.subject,
   emailBody: c.emailBody,
+  ...(c.emailLayout !== undefined && { emailLayout: c.emailLayout }),
   smsBody: c.smsBody,
   audience: c.audience,
   trigger: c.trigger,
@@ -109,6 +118,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
     queryFn: () =>
       api().marketing.list({
         bookingInvitations: "1",
+        emailLayout: "1",
         search: term,
         status: campaignStatusSchema.safeParse(status).success
           ? (status as Campaign["status"])
@@ -328,7 +338,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
           onClose={() => setReview(null)}
           onQueued={(c) => {
             setReview(null);
-            setDetail(c);
+            setDetail({ ...c, emailLayout: review.emailLayout });
             refresh();
           }}
         />
@@ -473,8 +483,11 @@ function CampaignEditor({
   const [invalid, setInvalid] = useState(false);
   const [discard, setDiscard] = useState(false);
   const action = useRef(false);
+  const layout = campaignEmailLayoutSchema.safeParse(draft.emailLayout);
   const candidate = campaignDraftSchema.safeParse({
     ...draft,
+    ...(layout.success && { emailBody: campaignEmailLayoutText(layout.data) }),
+    ...(draft.channel === "sms" && draft.emailLayout && { emailLayout: null }),
     audience: {
       ...draft.audience,
       tags: tags
@@ -500,11 +513,16 @@ function CampaignEditor({
         return await api().marketing.update(initial.id, { ...packet, version: initial.version });
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) {
-          const current = await api().marketing.get(initial.id);
+          const current = await api().marketing.get(initial.id, true);
           if (
             current.status === "draft" &&
             current.version === initial.version + 1 &&
-            JSON.stringify(campaignFields(current)) === JSON.stringify(packet)
+            JSON.stringify(
+              campaignFields({
+                ...current,
+                emailLayout: packet.emailLayout === undefined ? undefined : current.emailLayout,
+              }),
+            ) === JSON.stringify(packet)
           )
             return current;
         }
@@ -533,7 +551,8 @@ function CampaignEditor({
     if (!candidate.success) return;
     if (
       selected &&
-      ((draft.channel !== "sms" && !draft.emailBody.includes("{{booking_url}}")) ||
+      ((draft.channel !== "sms" &&
+        !campaignEmailHasBookingLink(candidate.data.emailBody, candidate.data.emailLayout)) ||
         (draft.channel !== "email" && !draft.smsBody.includes("{{booking_url}}")))
     ) {
       setInvalid(true);
@@ -628,6 +647,11 @@ function CampaignEditor({
                   label: t(`marketing.${value}`),
                 }))}
                 onChange={(v) => set("channel", v as CampaignDraft["channel"])}
+                hint={
+                  draft.channel === "sms" && draft.emailLayout
+                    ? t("marketing.smsLayoutRemoval")
+                    : undefined
+                }
               />
               {!selected && (
                 <SelectField
@@ -675,13 +699,17 @@ function CampaignEditor({
                   onChange={(e) => set("subject", e.target.value)}
                   error={error("subject")}
                 />
-                <TextAreaField
-                  label={t("marketing.emailBody")}
-                  value={draft.emailBody}
-                  rows={7}
-                  maxLength={10000}
-                  onChange={(e) => set("emailBody", e.target.value)}
-                  error={error("emailBody")}
+                <CampaignEmailEditor
+                  body={draft.emailBody}
+                  layout={draft.emailLayout}
+                  onBodyChange={(value) => set("emailBody", value)}
+                  onLayoutChange={(emailLayout, emailBody) => {
+                    setDraft({ ...draft, emailLayout, emailBody });
+                    changed();
+                    setInvalid(false);
+                  }}
+                  invalid={invalid && !!draft.emailLayout && !layout.success}
+                  bodyError={error("emailBody")}
                 />
               </>
             )}
@@ -755,12 +783,10 @@ function CampaignEditor({
               {draft.channel !== "sms" && (
                 <strong className="block break-words">{draft.subject}</strong>
               )}
-              <p className="mt-3 whitespace-pre-wrap break-words">
-                {(draft.channel === "sms" ? draft.smsBody : draft.emailBody)
-                  .replaceAll("{{first_name}}", "Ana")
-                  .replaceAll("{{salon_name}}", "Citame")
-                  .replaceAll("{{booking_url}}", "https://citame.example/book")}
-              </p>
+              <CampaignEmailPreview
+                body={draft.channel === "sms" ? draft.smsBody : draft.emailBody}
+                layout={draft.channel === "sms" ? null : draft.emailLayout}
+              />
             </section>
           </fieldset>
           {invalid && (
@@ -938,6 +964,9 @@ function CampaignReview({
       >
         <div className="space-y-5">
           <h3 className="font-semibold">{campaign.name}</h3>
+          {campaign.emailLayout && (
+            <SavedCampaignEmailPreview subject={campaign.subject} layout={campaign.emailLayout} />
+          )}
           {audience.isPending ? (
             <Skeleton className="h-32" />
           ) : audience.isError ? (
@@ -1095,7 +1124,7 @@ function CampaignHistory({
   const [confirm, setConfirm] = useState(false);
   const query = useQuery({
     queryKey: ["marketing", "campaign", viewerId, initial.id],
-    queryFn: () => api().marketing.get(initial.id),
+    queryFn: () => api().marketing.get(initial.id, true),
     initialData: initial,
     refetchInterval: 5000,
   });
@@ -1138,6 +1167,9 @@ function CampaignHistory({
           <p className="text-sm text-muted">
             {t(`marketing.${c.status}`)} · {t(`marketing.${c.trigger}`)}
           </p>
+          {c.emailLayout && (
+            <SavedCampaignEmailPreview subject={c.subject} layout={c.emailLayout} />
+          )}
           <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
             {Object.entries(c.counts).map(([key, value]) => (
               <div key={key} className="rounded-xl border border-line p-4">

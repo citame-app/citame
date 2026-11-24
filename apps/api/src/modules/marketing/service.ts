@@ -7,6 +7,9 @@ import {
   type CampaignQuery,
   type CampaignQueue,
   type CampaignUpdate,
+  campaignEmailHasBookingLink,
+  campaignEmailLayoutSchema,
+  campaignEmailLayoutText,
   campaignSchema,
 } from "@sob/contracts";
 import {
@@ -29,6 +32,13 @@ type Connection = Database | Tx;
 export type CampaignRow = typeof marketingCampaign.$inferSelect;
 const editablePurpose = () =>
   inArray(marketingCampaign.purpose, ["campaign", "booking_invitation"]);
+
+function normalizeEmail(fields: Omit<CampaignCreate, "id">) {
+  if (!fields.emailLayout) return fields;
+  if (fields.channel === "sms")
+    throw new DomainError("validation_error", "Formatted content requires an email channel");
+  return { ...fields, emailBody: campaignEmailLayoutText(fields.emailLayout) };
+}
 
 function draftPurpose(fields: Pick<CampaignCreate, "audience" | "trigger">) {
   if (!fields.audience.selectedClientIds) return "campaign";
@@ -73,7 +83,11 @@ async function campaignCounts(db: Connection, ids: string[]) {
   }
   return totals;
 }
-export async function campaignViews(db: Connection, rows: CampaignRow[]): Promise<Campaign[]> {
+export async function campaignViews(
+  db: Connection,
+  rows: CampaignRow[],
+  includeEmailLayout = false,
+): Promise<Campaign[]> {
   const totals = await campaignCounts(
     db,
     rows.map((row) => row.id),
@@ -93,9 +107,17 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
     : [];
   const contactNames = new Map(contacts.map(({ id, name }) => [id, name]));
   return rows.map((row) => {
-    const { createdBy: _, requestDigest: __, evaluatedAt: ___, purpose: ____, ...visible } = row;
+    const {
+      createdBy: _,
+      requestDigest: __,
+      evaluatedAt: ___,
+      purpose: ____,
+      emailLayout,
+      ...visible
+    } = row;
     return campaignSchema.parse({
       ...visible,
+      ...(includeEmailLayout ? { emailLayout } : {}),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
@@ -109,12 +131,20 @@ export async function campaignViews(db: Connection, rows: CampaignRow[]): Promis
     });
   });
 }
-export async function getCampaign(db: Database, id: string, p: Principal) {
+export async function getCampaign(
+  db: Database,
+  id: string,
+  p: Principal,
+  includeEmailLayout = false,
+) {
   requirePermission(p, "editCatalog");
-  return db.transaction(async (tx) => (await campaignViews(tx, [await campaignRow(tx, id)]))[0]!, {
-    isolationLevel: "repeatable read",
-    accessMode: "read only",
-  });
+  return db.transaction(
+    async (tx) => (await campaignViews(tx, [await campaignRow(tx, id)], includeEmailLayout))[0]!,
+    {
+      isolationLevel: "repeatable read",
+      accessMode: "read only",
+    },
+  );
 }
 export async function compareCampaigns(db: Database, ids: string[], p: Principal) {
   requirePermission(p, "editCatalog");
@@ -162,7 +192,7 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
         .limit(q.pageSize)
         .offset((q.page - 1) * q.pageSize);
       return {
-        campaigns: await campaignViews(tx, rows),
+        campaigns: await campaignViews(tx, rows, q.emailLayout === "1"),
         pagination: { page: q.page, pageSize: q.pageSize, total: total?.n ?? 0 },
         bookingInvitations: q.bookingInvitations ? true : undefined,
       };
@@ -172,7 +202,9 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
 }
 export async function createCampaign(db: Database, input: CampaignCreate, p: Principal) {
   requirePermission(p, "editCatalog");
-  const { id, ...fields } = input;
+  const { id, ...draft } = input;
+  const fields = normalizeEmail(draft);
+  const includeEmailLayout = fields.emailLayout !== undefined;
   const purpose = draftPurpose(fields);
   const digest = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
   return db.transaction(async (tx) => {
@@ -186,7 +218,7 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
     if (previous) {
       if (previous.createdBy !== p.userId || previous.requestDigest !== digest)
         throw new DomainError("invalid_state", "Campaign request already used");
-      return (await campaignViews(tx, [previous]))[0]!;
+      return (await campaignViews(tx, [previous], includeEmailLayout))[0]!;
     }
     const [row] = await tx
       .insert(marketingCampaign)
@@ -199,7 +231,7 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
       entity: "marketing_campaign",
       entityId: id,
     });
-    return (await campaignViews(tx, [row]))[0]!;
+    return (await campaignViews(tx, [row], includeEmailLayout))[0]!;
   });
 }
 export async function updateCampaign(
@@ -212,7 +244,9 @@ export async function updateCampaign(
   requirePermission(p, "editCatalog");
   return db.transaction(async (tx) => {
     const current = await campaignRow(tx, id, true);
-    const { version, ...fields } = input;
+    const { version, ...draft } = input;
+    const fields = normalizeEmail(draft);
+    const includeEmailLayout = fields.emailLayout !== undefined;
     if (draftPurpose(fields) !== current.purpose)
       throw new DomainError(
         "invalid_state",
@@ -226,7 +260,7 @@ export async function updateCampaign(
         isDeepStrictEqual(current[key as keyof typeof fields], value),
       )
     ) {
-      return (await campaignViews(tx, [current]))[0]!;
+      return (await campaignViews(tx, [current], includeEmailLayout))[0]!;
     }
     if (current.version !== version)
       throw new DomainError("version_conflict", "Campaign changed; reload before editing");
@@ -234,6 +268,15 @@ export async function updateCampaign(
       throw new DomainError(
         "invalid_state",
         "Only a draft can be edited; cancel or duplicate this campaign",
+      );
+    if (
+      current.emailLayout &&
+      !includeEmailLayout &&
+      (fields.emailBody !== current.emailBody || fields.channel === "sms")
+    )
+      throw new DomainError(
+        "invalid_state",
+        "Open the formatted campaign editor to change its email content",
       );
     const [row] = await tx
       .update(marketingCampaign)
@@ -247,7 +290,7 @@ export async function updateCampaign(
       entity: "marketing_campaign",
       entityId: id,
     });
-    return (await campaignViews(tx, [row]))[0]!;
+    return (await campaignViews(tx, [row], includeEmailLayout))[0]!;
   });
 }
 function requireContent(row: CampaignRow) {
@@ -260,7 +303,11 @@ function requireContent(row: CampaignRow) {
     throw new DomainError("validation_error", "SMS needs a message");
   if (
     row.purpose === "booking_invitation" &&
-    ((row.channel !== "sms" && !row.emailBody.includes("{{booking_url}}")) ||
+    ((row.channel !== "sms" &&
+      !campaignEmailHasBookingLink(
+        row.emailBody,
+        campaignEmailLayoutSchema.nullable().parse(row.emailLayout),
+      )) ||
       (row.channel !== "email" && !row.smsBody.includes("{{booking_url}}")))
   )
     throw new DomainError(
