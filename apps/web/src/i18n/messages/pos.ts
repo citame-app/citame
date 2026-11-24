@@ -144,6 +144,7 @@ export const posEn = {
   "pos.billingReview.paidInBooksy": "Marked as paid in Booksy",
   "pos.billingReview.invoicedInBooksy": "Marked as invoiced in Booksy",
   "pos.billingReview.unknownPayment": "Booksy payment status unknown",
+  "pos.billingReview.balanceChanged": "Booksy balance needs review",
   "pos.billingReview.unpaid": "Verify no payment was taken",
   "pos.billingReview.unpaidHelp":
     "Check the booking and payment records. Confirm that there is no prior payment to deduct before collecting in Citame.",
@@ -351,6 +352,7 @@ export const posEs: Record<keyof typeof posEn, string> = {
   "pos.billingReview.paidInBooksy": "Marcada como pagada en Booksy",
   "pos.billingReview.invoicedInBooksy": "Marcada como facturada en Booksy",
   "pos.billingReview.unknownPayment": "Estado del pago en Booksy desconocido",
+  "pos.billingReview.balanceChanged": "Saldo de Booksy pendiente de revisión",
   "pos.billingReview.unpaid": "Verificar que no hubo un pago previo",
   "pos.billingReview.unpaidHelp":
     "Revisa la reserva y el registro de pagos. Confirma que no hay un pago previo que descontar antes de cobrar en Citame.",

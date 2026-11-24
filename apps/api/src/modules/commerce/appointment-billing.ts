@@ -23,11 +23,12 @@ import { recordAudit } from "../../audit";
 import { requireRole } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
-import { lockScheduling } from "../../tx";
+import { lockScheduling, type Tx } from "../../tx";
 
 export const importedPriceReviewAudit = "commerce.imported_price_reviewed";
 const importedSettlementAudit = "commerce.imported_settlement_recorded";
 const importedPartialAudit = "commerce.imported_partial_payment_recorded";
+const importedPartialEvidenceChangedAudit = "commerce.imported_partial_payment_evidence_changed";
 const importedUnpaidAudit = "commerce.imported_unpaid_confirmed";
 const sourceBilling = and(
   eq(appointmentContext.source, "booksy"),
@@ -38,19 +39,26 @@ const sourceBilling = and(
 export function compatibleBillingReasons(
   reasons: BillingReviewReason[],
   supportsUnknownPayment: boolean,
+  supportsBalanceChange: boolean,
 ): BillingReviewReason[] {
-  return supportsUnknownPayment || !reasons.includes("unknown_booksy_payment")
-    ? reasons
-    : [
-        ...new Set(
-          reasons.map((reason) =>
-            reason === "unknown_booksy_payment" ? "unknown_amount" : reason,
-          ),
-        ),
-      ];
+  return [
+    ...new Set(
+      reasons.map((reason) =>
+        (reason === "unknown_booksy_payment" && !supportsUnknownPayment) ||
+        (reason === "booksy_balance_changed" && !supportsBalanceChange)
+          ? "unknown_amount"
+          : reason,
+      ),
+    ),
+  ];
 }
 
-async function unknownBooksyPayments(db: Pick<Database, "select">, ids: string[]) {
+async function booksyPaymentEvidence(
+  db: Pick<Database, "select">,
+  ids: string[],
+  unknownOnly = false,
+) {
+  if (!ids.length) return new Map<string, string[]>();
   const rows = await db
     .select({
       id: appointmentContext.appointmentId,
@@ -62,7 +70,12 @@ async function unknownBooksyPayments(db: Pick<Database, "select">, ids: string[]
       and(
         inArray(appointmentContext.appointmentId, ids),
         eq(appointmentContext.source, "booksy"),
-        or(isNull(appointmentContext.paid), eq(appointmentContext.sourcePaymentUnverified, true)),
+        unknownOnly
+          ? or(
+              isNull(appointmentContext.paid),
+              eq(appointmentContext.sourcePaymentUnverified, true),
+            )
+          : undefined,
       ),
     )
     .orderBy(asc(appointmentContext.id));
@@ -74,6 +87,9 @@ async function unknownBooksyPayments(db: Pick<Database, "select">, ids: string[]
   }
   return snapshots;
 }
+
+const unknownBooksyPayments = (db: Pick<Database, "select">, ids: string[]) =>
+  booksyPaymentEvidence(db, ids, true);
 
 async function importedUnpaidReviews(db: Pick<Database, "select">, ids: string[]) {
   return db
@@ -117,8 +133,17 @@ export async function externallySettledAppointments(db: Pick<Database, "select">
   return new Set(rows.flatMap(({ id }) => (id ? [id] : [])));
 }
 
-export async function importedPartialPayments(db: Pick<Database, "select">, ids: string[]) {
-  if (!ids.length) return new Map<string, ExternalBalance>();
+type PartialPaymentReview = {
+  balance: ExternalBalance;
+  reference: unknown;
+  revision: number;
+  legacy: boolean;
+  current: boolean;
+};
+
+export async function importedPartialPaymentReviews(db: Pick<Database, "select">, ids: string[]) {
+  const result = new Map<string, PartialPaymentReview>();
+  if (!ids.length) return result;
   const rows = await db
     .select({ id: auditLog.entityId, metadata: auditLog.metadata })
     .from(auditLog)
@@ -129,11 +154,77 @@ export async function importedPartialPayments(db: Pick<Database, "select">, ids:
         eq(auditLog.action, importedPartialAudit),
       ),
     );
+  if (!rows.length) return result;
+  const latest = new Map<
+    string,
+    { metadata: (typeof rows)[number]["metadata"]; revision: number }
+  >();
+  for (const { id, metadata } of rows) {
+    if (!id) continue;
+    const revision = metadata.revision ?? 0;
+    if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0)
+      throw new Error("Invalid imported partial payment revision");
+    const previous = latest.get(id);
+    if (previous?.revision === revision)
+      throw new Error("Duplicate imported partial payment revision");
+    if (!previous || previous.revision < revision) latest.set(id, { metadata, revision });
+  }
+  const legacyIds = [...latest]
+    .filter(([, row]) => row.metadata.snapshot === undefined)
+    .map(([id]) => id);
+  const [evidence, legacyChanges] = await Promise.all([
+    booksyPaymentEvidence(db, [...latest.keys()]),
+    legacyIds.length
+      ? db
+          .select({ id: auditLog.entityId })
+          .from(auditLog)
+          .where(
+            and(
+              eq(auditLog.entity, "appointment"),
+              inArray(auditLog.entityId, legacyIds),
+              eq(auditLog.action, importedPartialEvidenceChangedAudit),
+            ),
+          )
+      : [],
+  ]);
+  const changed = new Set(legacyChanges.map(({ id }) => id));
+  for (const [id, { metadata, revision }] of latest) {
+    const legacy = metadata.snapshot === undefined;
+    result.set(id, {
+      balance: externalBalanceSchema.parse(metadata),
+      reference: metadata.reference,
+      revision,
+      legacy,
+      current: legacy
+        ? !changed.has(id)
+        : metadata.snapshot === JSON.stringify(evidence.get(id) ?? []),
+    });
+  }
+  return result;
+}
+
+export async function importedPartialPayments(db: Pick<Database, "select">, ids: string[]) {
+  const reviews = await importedPartialPaymentReviews(db, ids);
   return new Map(
-    rows.flatMap((row) =>
-      row.id ? [[row.id, externalBalanceSchema.parse(row.metadata)] as const] : [],
-    ),
+    [...reviews].flatMap(([id, review]) => (review.current ? [[id, review.balance] as const] : [])),
   );
+}
+
+/** Old partial-payment records have no frozen evidence. Fence them on the next financial import. */
+export async function invalidateLegacyPartialPayments(
+  tx: Tx,
+  ids: string[],
+  actorUserId: string | null,
+) {
+  for (const [id, review] of await importedPartialPaymentReviews(tx, ids)) {
+    if (!review.legacy || !review.current) continue;
+    await recordAudit(tx, {
+      actorUserId,
+      action: importedPartialEvidenceChangedAudit,
+      entity: "appointment",
+      entityId: id,
+    });
+  }
 }
 
 export async function appointmentBillingHolds(
@@ -156,13 +247,16 @@ export async function appointmentBillingHolds(
       ),
     );
   const settled = await externallySettledAppointments(db, appointmentIds);
-  const partial = await importedPartialPayments(db, appointmentIds);
+  const partial = await importedPartialPaymentReviews(db, appointmentIds);
   const reviews = await booksyPaymentReviews(db, appointmentIds);
   return new Set([
-    ...rows.filter(({ id }) => !partial.has(id)).map(({ id }) => id),
+    ...rows.filter(({ id }) => !partial.get(id)?.current).map(({ id }) => id),
     ...unpriced.map(({ id }) => id),
     ...settled,
-    ...[...reviews].flatMap(([id, state]) => (state === "pending" && !partial.has(id) ? [id] : [])),
+    ...[...partial].flatMap(([id, review]) => (review.current ? [] : [id])),
+    ...[...reviews].flatMap(([id, state]) =>
+      state === "pending" && !partial.get(id)?.current ? [id] : [],
+    ),
   ]);
 }
 
@@ -181,7 +275,7 @@ async function assertPriceCanBeReviewed(
   if (
     receipt ||
     (await externallySettledAppointments(db, [booking.id])).size ||
-    (await importedPartialPayments(db, [booking.id])).size
+    (await importedPartialPaymentReviews(db, [booking.id])).size
   )
     throw new DomainError(
       "invalid_state",
@@ -257,7 +351,8 @@ export async function confirmImportedSettlement(
         return { appointmentVersion: booking.version, settlement: previous };
       throw new DomainError("version_conflict", "The imported settlement was already reconciled");
     }
-    if ((await importedPartialPayments(tx, [id])).size)
+    const partial = (await importedPartialPaymentReviews(tx, [id])).get(id);
+    if (partial?.current)
       throw new DomainError("invalid_state", "A Booksy partial payment is already reconciled");
     if (booking.version !== input.appointmentVersion)
       throw new DomainError(
@@ -271,7 +366,8 @@ export async function confirmImportedSettlement(
       .from(appointmentContext)
       .where(and(eq(appointmentContext.appointmentId, id), sourceBilling))
       .limit(1);
-    const unknown = !source && (await unknownBooksyPayments(tx, [id])).has(id);
+    const unknown =
+      !source && (Boolean(partial) || (await unknownBooksyPayments(tx, [id])).has(id));
     if (!source && !unknown)
       throw new DomainError(
         "invalid_state",
@@ -338,6 +434,11 @@ export async function confirmImportedUnpaid(
       .limit(1);
     if (!lines || source || booking.status === "cancelled")
       throw new DomainError("invalid_state", "No unknown Booksy payment can be confirmed unpaid");
+    if (
+      (await externallySettledAppointments(tx, [id])).size ||
+      (await importedPartialPaymentReviews(tx, [id])).size
+    )
+      throw new DomainError("invalid_state", "A Booksy payment is already reconciled");
     const snapshot = JSON.stringify(lines);
     const previous = (await importedUnpaidReviews(tx, [id])).find(
       ({ metadata }) => metadata.snapshot === snapshot,
@@ -346,11 +447,6 @@ export async function confirmImportedUnpaid(
       return { appointmentVersion: booking.version };
     if (previous || booking.version !== input.appointmentVersion)
       throw new DomainError("version_conflict", "Reload the appointment before reviewing payment");
-    if (
-      (await externallySettledAppointments(tx, [id])).size ||
-      (await importedPartialPayments(tx, [id])).size
-    )
-      throw new DomainError("invalid_state", "A Booksy payment is already reconciled");
     await assertNoNativeCollection(tx, id);
     await recordAudit(tx, {
       actorUserId: principal.userId,
@@ -410,9 +506,9 @@ export async function previewImportedPartialPayment(
       const [booking] = await tx.select().from(appointment).where(eq(appointment.id, id));
       if (!booking || booking.deletedAt)
         throw new DomainError("not_found", "Appointment not found");
-      const externalBalance = (await importedPartialPayments(tx, [id])).get(id);
-      return externalBalance
-        ? { appointmentVersion: booking.version, externalBalance }
+      const review = (await importedPartialPaymentReviews(tx, [id])).get(id);
+      return review?.current
+        ? { appointmentVersion: booking.version, externalBalance: review.balance }
         : {
             appointmentVersion: booking.version,
             originalTotalCents: await originalPartialPaymentTotal(tx, booking),
@@ -438,21 +534,12 @@ export async function confirmImportedPartialPayment(
       .where(eq(appointment.id, id))
       .for("update");
     if (!booking || booking.deletedAt) throw new DomainError("not_found", "Appointment not found");
-    const [previous] = await tx
-      .select({ metadata: auditLog.metadata })
-      .from(auditLog)
-      .where(
-        and(
-          eq(auditLog.entity, "appointment"),
-          eq(auditLog.entityId, id),
-          eq(auditLog.action, importedPartialAudit),
-        ),
-      );
-    if (previous) {
-      const externalBalance = externalBalanceSchema.parse(previous.metadata);
+    const previous = (await importedPartialPaymentReviews(tx, [id])).get(id);
+    if (previous?.current) {
+      const externalBalance = previous.balance;
       if (
         externalBalance.paidInBooksyCents === input.amountCents &&
-        previous.metadata.reference === input.reference
+        previous.reference === input.reference
       )
         return { appointmentVersion: booking.version, externalBalance };
       throw new DomainError("version_conflict", "A Booksy partial payment is already reconciled");
@@ -472,12 +559,18 @@ export async function confirmImportedPartialPayment(
       paidInBooksyCents: input.amountCents,
       dueInCitameCents: total - input.amountCents,
     };
+    const evidence = await booksyPaymentEvidence(tx, [id]);
     await recordAudit(tx, {
       actorUserId: principal.userId,
       action: importedPartialAudit,
       entity: "appointment",
       entityId: id,
-      metadata: { ...externalBalance, reference: input.reference },
+      metadata: {
+        ...externalBalance,
+        reference: input.reference,
+        snapshot: JSON.stringify(evidence.get(id) ?? []),
+        revision: (previous?.revision ?? 0) + 1,
+      },
     });
     await tx
       .update(appointment)

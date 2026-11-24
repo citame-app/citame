@@ -447,6 +447,7 @@ function DrawerBody({
               billingRole === "owner" &&
               (appointment.billingReviewReasons.includes("paid_in_booksy") ||
                 appointment.billingReviewReasons.includes("invoiced_in_booksy") ||
+                appointment.billingReviewReasons.includes("booksy_balance_changed") ||
                 appointment.billingReviewReasons.includes("unknown_booksy_payment")) && (
                 <ImportedSettlementForm
                   key={appointment.version}

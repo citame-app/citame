@@ -125,6 +125,7 @@ impl Root {
                                 BillingReviewReason::PaidInBooksy
                                     | BillingReviewReason::InvoicedInBooksy
                                     | BillingReviewReason::UnknownBooksyPayment
+                                    | BillingReviewReason::BooksyBalanceChanged
                             )
                         })
                 }

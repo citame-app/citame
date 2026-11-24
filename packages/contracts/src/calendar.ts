@@ -37,6 +37,7 @@ export const calendarQuerySchema = z
     from: instantSchema,
     to: instantSchema,
     booksyPaymentReview: z.literal("1").optional(),
+    booksyBalanceReview: z.literal("1").optional(),
     resourceOccupancy: z.literal("1").optional(),
     staffIds: z
       .string()
@@ -76,6 +77,7 @@ const billingReviewReasonSchema = z.enum([
   "paid_in_booksy",
   "invoiced_in_booksy",
   "unknown_booksy_payment",
+  "booksy_balance_changed",
 ]);
 export type BillingReviewReason = z.infer<typeof billingReviewReasonSchema>;
 export const billingReviewReasonsSchema = z.array(billingReviewReasonSchema).min(1).max(3);

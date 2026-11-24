@@ -471,6 +471,146 @@ test("the owner can reconcile a full Booksy settlement without a receipt or a se
   expect(audit).toHaveLength(1);
 });
 
+test.each(["current", "legacy"] as const)(
+  "changed Booksy payment evidence freezes a %s reviewed balance",
+  async (kind) => {
+    await t.db.insert(appointmentContext).values({
+      appointmentId,
+      servicePosition: 0,
+      source: "booksy",
+      sourceRef: "synthetic-changing-partial",
+      paid: false,
+      invoiced: false,
+    });
+    const path = `/admin/commerce/appointments/${appointmentId}/imported-partial-payment`;
+    const first = { appointmentVersion: 1, amountCents: 3500, reference: "First source receipt" };
+    expect((await call(owner, path, "PUT", first)).status).toBe(200);
+    if (kind === "legacy") {
+      await t.db
+        .update(auditLog)
+        .set({
+          metadata: { paidInBooksyCents: 3500, dueInCitameCents: 6500, reference: first.reference },
+        })
+        .where(eq(auditLog.action, "commerce.imported_partial_payment_recorded"));
+    }
+    const calendar =
+      "?from=2026-03-09T00:00:00Z&to=2026-03-10T00:00:00Z&booksyPaymentReview=1&booksyBalanceReview=1";
+    const getDesk = async () =>
+      unpaidAppointmentsSchema.parse(
+        await (await call(owner, `/admin/commerce/unpaid${calendar}`)).json(),
+      );
+    await t.db
+      .update(appointmentContext)
+      .set({ internalNote: "Follow-up note" })
+      .where(eq(appointmentContext.appointmentId, appointmentId));
+    expect((await getDesk()).appointments[0]?.externalBalance).toEqual({
+      paidInBooksyCents: 3500,
+      dueInCitameCents: 6500,
+    });
+    const input = {
+      rows: [
+        {
+          appointmentId,
+          appointmentVersion: 2,
+          contextVersion: 1,
+          servicePosition: 0,
+          sourceRef: "synthetic-changing-partial",
+          requestedStaffId: null,
+          internalNote: "Follow-up note",
+          customerComment: null,
+          paid: true,
+          invoiced: true,
+        },
+      ],
+    };
+    const preview = await call(owner, "/appointments/booksy-context/preview", "POST", input);
+    expect(preview.status, await preview.clone().text()).toBe(200);
+    const { reviewHash } = (await preview.json()) as { reviewHash: string };
+    expect(
+      (await call(owner, "/appointments/booksy-context/import", "POST", { input, reviewHash }))
+        .status,
+    ).toBe(200);
+    expect(await getDesk()).toMatchObject({
+      appointments: [],
+      billingReview: [{ id: appointmentId, reasons: ["booksy_balance_changed"] }],
+    });
+    const replica = syncPullResponseSchema.parse(
+      await (
+        await call(owner, "/sync/pull?since=0&booksyPaymentReview=1&booksyBalanceReview=1")
+      ).json(),
+    );
+    const synced = replica.changes.find(({ id }) => id === appointmentId)?.data;
+    expect(synced).toMatchObject({ version: 3, billingReviewReasons: ["booksy_balance_changed"] });
+    expect(synced).not.toHaveProperty("externalBalance");
+    const compatibility = syncPullResponseSchema.parse(
+      await (await call(owner, "/sync/pull?since=0&booksyPaymentReview=1")).json(),
+    );
+    expect(compatibility.changes.find(({ id }) => id === appointmentId)?.data).toMatchObject({
+      billingReviewReasons: ["unknown_amount"],
+    });
+    const detail = `/appointments/${appointmentId}/calendar-entry`;
+    expect(await (await call(owner, detail)).json()).toMatchObject({
+      billingReviewReasons: ["unknown_amount"],
+    });
+    expect(await (await call(owner, `${detail}?booksyBalanceReview=1`)).json()).toMatchObject({
+      billingReviewReasons: ["booksy_balance_changed"],
+    });
+    expect(
+      (
+        await call(owner, "/admin/commerce/checkouts", "POST", {
+          appointmentId,
+          idempotencyKey: crypto.randomUUID(),
+        })
+      ).status,
+    ).toBe(409);
+    expect((await call(owner, path, "PUT", first)).status).toBe(409);
+    if (kind === "legacy") {
+      const settled = await call(
+        owner,
+        `/admin/commerce/appointments/${appointmentId}/imported-settlement`,
+        "PUT",
+        { appointmentVersion: 3, amountCents: 10000, reference: "Verified full external payment" },
+      );
+      expect(settled.status, await settled.clone().text()).toBe(200);
+      expect(await getDesk()).toEqual({ appointments: [] });
+      expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+      return;
+    }
+    const corrected = {
+      appointmentVersion: 3,
+      amountCents: 8000,
+      reference: "Latest source receipt",
+    };
+    expect((await call(owner, path, "PUT", corrected)).status).toBe(200);
+    const sale = await checkout();
+    expect(sale.totalCents).toBe(2000);
+    const correction = {
+      rows: [{ ...input.rows[0], appointmentVersion: 4, contextVersion: 2, paid: null }],
+    };
+    const nextPreview = await call(
+      owner,
+      "/appointments/booksy-context/preview",
+      "POST",
+      correction,
+    );
+    expect(nextPreview.status, await nextPreview.clone().text()).toBe(200);
+    const next = (await nextPreview.json()) as { reviewHash: string };
+    expect(
+      (
+        await call(owner, "/appointments/booksy-context/import", "POST", {
+          input: correction,
+          reviewHash: next.reviewHash,
+        })
+      ).status,
+    ).toBe(200);
+    expect((await pay(sale.id, "external_card", 2000)).status).toBe(409);
+    expect((await call(owner, path, "PUT", { ...corrected, appointmentVersion: 5 })).status).toBe(
+      409,
+    );
+    expect(await t.db.select().from(checkoutPayment)).toHaveLength(0);
+  },
+);
+
 test("a verified Booksy part-payment leaves only the outstanding balance collectible", async () => {
   await t.db.insert(appointmentContext).values({
     appointmentId,

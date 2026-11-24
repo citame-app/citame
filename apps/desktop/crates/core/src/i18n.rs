@@ -1425,6 +1425,7 @@ keys! {
     BooksyUnpaidConfirmed => ("No prior payment in Booksy confirmed", "Sin pago previo en Booksy confirmado"),
     ImportedUnpaidInvalid => ("Enter a reference of 3 to 300 characters.", "Introduce una referencia de 3 a 300 caracteres."),
     DueUnknownBooksyPayment => ("Booksy payment status unknown", "Estado del pago en Booksy desconocido"),
+    DueBooksyBalanceChanged => ("Booksy balance needs review", "Saldo de Booksy pendiente de revisión"),
     SettlementHelp => ("Check the receipt and confirm that this appointment was paid in full.", "Comprueba el justificante y confirma que esta cita se pagó por completo."),
     SettlementAmount => ("Amount already paid (EUR)", "Importe ya pagado (EUR)"),
     SettlementInvalid => ("Enter the full amount and a reference of 3 to 300 characters.", "Introduce el importe completo y una referencia de 3 a 300 caracteres."),

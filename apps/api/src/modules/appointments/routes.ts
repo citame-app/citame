@@ -308,14 +308,13 @@ export function appointmentsRoutes({
           query.resourceOccupancy && !booksyNativePreview
             ? await getCalendarWithResourceOccupancy(db, query, scope, now())
             : await getCalendar(db, query, scope);
-        if (query.booksyPaymentReview !== "1") {
-          for (const entry of calendar.appointments) {
-            if (entry.billingReviewReasons)
-              entry.billingReviewReasons = compatibleBillingReasons(
-                entry.billingReviewReasons,
-                false,
-              );
-          }
+        for (const entry of calendar.appointments) {
+          if (entry.billingReviewReasons)
+            entry.billingReviewReasons = compatibleBillingReasons(
+              entry.billingReviewReasons,
+              query.booksyPaymentReview === "1",
+              query.booksyBalanceReview === "1",
+            );
         }
         return c.json(
           booksyNativePreview ? { ...calendar, importSnapshot: booksyNativePreview } : calendar,
@@ -325,7 +324,14 @@ export function appointmentsRoutes({
         const id = parseOrThrow(idSchema, c.req.param("id"));
         const scope = authorizeCalendarQuery(c.get("principal"), {});
         if (booksyNativePreview) throw new DomainError("not_found", "Appointment not found");
-        return c.json(await getCalendarAppointment(db, id, scope));
+        const entry = await getCalendarAppointment(db, id, scope);
+        if (entry.billingReviewReasons)
+          entry.billingReviewReasons = compatibleBillingReasons(
+            entry.billingReviewReasons,
+            true,
+            c.req.query("booksyBalanceReview") === "1",
+          );
+        return c.json(entry);
       })
       .post("/", create(false))
       .post("/desktop-booking", create(true))

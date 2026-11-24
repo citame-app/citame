@@ -444,6 +444,7 @@ impl Root {
                         BillingReviewReason::PaidInBooksy => Key::DuePaidInBooksy,
                         BillingReviewReason::InvoicedInBooksy => Key::DueInvoicedInBooksy,
                         BillingReviewReason::UnknownBooksyPayment => Key::DueUnknownBooksyPayment,
+                        BillingReviewReason::BooksyBalanceChanged => Key::DueBooksyBalanceChanged,
                     }))
             }))
             .when_some(unavailable, |body, label| {

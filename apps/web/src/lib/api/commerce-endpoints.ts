@@ -36,7 +36,7 @@ export function commerceEndpoints(client: ApiClient) {
       }),
     unpaid: (query: { from: string; to: string }, signal?: AbortSignal) =>
       client.get("/admin/commerce/unpaid", unpaidAppointmentsSchema, {
-        query: { ...query, booksyPaymentReview: "1" },
+        query: { ...query, booksyPaymentReview: "1", booksyBalanceReview: "1" },
         signal,
       }),
     reviewImportedPrice: (id: string, input: ImportedPriceReview) =>

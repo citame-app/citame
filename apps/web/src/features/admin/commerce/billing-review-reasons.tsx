@@ -6,6 +6,7 @@ const messageFor = {
   paid_in_booksy: "pos.billingReview.paidInBooksy",
   invoiced_in_booksy: "pos.billingReview.invoicedInBooksy",
   unknown_booksy_payment: "pos.billingReview.unknownPayment",
+  booksy_balance_changed: "pos.billingReview.balanceChanged",
 } as const satisfies Record<BillingReviewReason, string>;
 
 export function BillingReviewReasons({ reasons }: { reasons: readonly BillingReviewReason[] }) {

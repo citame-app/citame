@@ -4005,6 +4005,9 @@ impl Root {
                                             BillingReviewReason::UnknownBooksyPayment => {
                                                 Key::DueUnknownBooksyPayment
                                             }
+                                            BillingReviewReason::BooksyBalanceChanged => {
+                                                Key::DueBooksyBalanceChanged
+                                            }
                                             BillingReviewReason::UnknownAmount => {
                                                 return None;
                                             }

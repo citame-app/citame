@@ -25,7 +25,8 @@ import { appointmentDepositStatus, protectionView } from "../booking-protection/
 import {
   booksyPaymentReviews,
   externallySettledAppointments,
-  importedPartialPayments,
+  importedPartialPaymentReviews,
+  invalidateLegacyPartialPayments,
 } from "../commerce/appointment-billing";
 import { saleRow } from "../commerce/service";
 import { hasGroupedCheckout } from "./visit-checkout-access";
@@ -221,7 +222,7 @@ export async function calendarBadges(
           )
       : [],
     includeBilling ? externallySettledAppointments(db, ids) : null,
-    includeBilling ? importedPartialPayments(db, ids) : null,
+    includeBilling ? importedPartialPaymentReviews(db, ids) : null,
     includeBilling ? booksyPaymentReviews(db, ids) : null,
   ]);
   const indexed = new Map(contexts.map((c) => [`${c.appointmentId}:${c.servicePosition}`, c]));
@@ -243,23 +244,30 @@ export async function calendarBadges(
   }
   for (const visit of visits) {
     const services = grouped.get(visit.id) ?? [];
-    const externalBalance = partial?.get(visit.id);
+    const partialReview = partial?.get(visit.id);
+    const settled = externallySettled?.has(visit.id) ?? false;
+    const partialNeedsReview = partialReview && !partialReview.current && !settled;
+    const externalBalance = partialReview?.current && !settled ? partialReview.balance : undefined;
     const reasons: BillingReviewReason[] = [];
     if (includeBilling && services.some((s) => s.sourceUnpriced && s.reviewedPriceCents === null))
       reasons.push("unknown_amount");
-    if (!externalBalance && paidInBooksy.has(visit.id)) reasons.push("paid_in_booksy");
-    if (!externalBalance && invoicedInBooksy.has(visit.id)) reasons.push("invoiced_in_booksy");
+    if (!externalBalance && !partialNeedsReview && paidInBooksy.has(visit.id))
+      reasons.push("paid_in_booksy");
+    if (!externalBalance && !partialNeedsReview && invoicedInBooksy.has(visit.id))
+      reasons.push("invoiced_in_booksy");
     const paymentReview =
       !externalBalance &&
-      !externallySettled?.has(visit.id) &&
+      !settled &&
+      !partialReview &&
       !paidInBooksy.has(visit.id) &&
       !invoicedInBooksy.has(visit.id)
         ? unknownPayments?.get(visit.id)
         : undefined;
+    if (partialNeedsReview) reasons.push("booksy_balance_changed");
     if (paymentReview === "pending") reasons.push("unknown_booksy_payment");
     result.set(visit.id, {
       reasons,
-      externallySettled: externallySettled?.has(visit.id) ?? false,
+      externallySettled: settled,
       importedFromBooksy: imported.has(visit.id),
       booksyUnpaidConfirmed: paymentReview === "confirmed_unpaid",
       externalBalance,
@@ -413,9 +421,17 @@ export async function importBooksyContext(
     await lockScheduling(tx);
     const prepared = await prepareImport(tx, input, principal, now);
     const changed = new Set<string>();
+    const financialChanges = new Set<string>();
     for (const r of input.rows) {
       const current = prepared.byPosition.get(`${r.appointmentId}:${r.servicePosition}`);
       if (sameContext(current, r)) continue;
+      if (
+        current?.source !== "booksy" ||
+        current.sourceRef !== r.sourceRef ||
+        current.paid !== r.paid ||
+        current.invoiced !== r.invoiced
+      )
+        financialChanges.add(r.appointmentId);
       const {
         appointmentVersion: _appointmentVersion,
         contextVersion: _contextVersion,
@@ -430,6 +446,7 @@ export async function importBooksyContext(
         await tx.insert(appointmentContext).values({ ...values, source: "booksy", updatedAt: now });
       changed.add(r.appointmentId);
     }
+    await invalidateLegacyPartialPayments(tx, [...financialChanges], principal.userId);
     for (const visit of prepared.visits.filter((v) => changed.has(v.id))) {
       const updated = await tx
         .update(appointment)

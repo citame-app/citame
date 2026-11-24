@@ -126,6 +126,7 @@ pub enum BillingReviewReason {
     PaidInBooksy,
     InvoicedInBooksy,
     UnknownBooksyPayment,
+    BooksyBalanceChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

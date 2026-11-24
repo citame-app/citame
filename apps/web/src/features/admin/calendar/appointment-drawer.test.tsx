@@ -180,6 +180,26 @@ describe("AppointmentDrawer", () => {
     expect(within(dialog).getByText(/11:00 AM/)).toBeInTheDocument();
   });
 
+  test("a changed Booksy balance offers payment review without offering unpaid confirmation", async () => {
+    open({
+      appointment: {
+        ...appointment,
+        importedFromBooksy: true,
+        billingReviewReasons: ["booksy_balance_changed"],
+        services: appointment.services.map((service) => ({ ...service, currency: "EUR" })),
+      },
+    });
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Booksy balance needs review")).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("form", { name: "Reconcile Booksy payment" }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("form", { name: "Reconcile partial Booksy payment" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("Verify no payment was taken")).not.toBeInTheDocument();
+  });
+
   test("lets an owner review an unknown amount while retaining Booksy payment review", async () => {
     open({
       appointment: {

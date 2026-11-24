@@ -71,7 +71,10 @@ async function loadVisible(
   principal: Principal,
   entity: SyncEntity,
   ids: string[],
-  projection: Pick<SyncPullQuery, "booksyPaymentReview" | "clientGroups" | "bookingCombinations">,
+  projection: Pick<
+    SyncPullQuery,
+    "booksyPaymentReview" | "booksyBalanceReview" | "clientGroups" | "bookingCombinations"
+  >,
 ): Promise<Visible> {
   const out: Visible = new Map();
   const put = (id: string, data: unknown) => out.set(id, { entity, id, op: "upsert", data });
@@ -147,6 +150,7 @@ async function loadVisible(
                 billingReviewReasons: compatibleBillingReasons(
                   billing.reasons,
                   projection.booksyPaymentReview === "1",
+                  projection.booksyBalanceReview === "1",
                 ),
               }
             : {}),

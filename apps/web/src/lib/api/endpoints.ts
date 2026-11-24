@@ -278,7 +278,10 @@ export function createEndpoints(client: ApiClient) {
     appointments: {
       catalog: () => client.get("/appointments/catalog", listServicesResponseSchema),
       calendarEntry: (id: string, signal?: AbortSignal) =>
-        client.get(`/appointments/${id}/calendar-entry`, calendarAppointmentSchema, { signal }),
+        client.get(`/appointments/${id}/calendar-entry`, calendarAppointmentSchema, {
+          signal,
+          query: { booksyBalanceReview: "1" },
+        }),
       context: (id: string, signal?: AbortSignal) =>
         client.get(`/appointments/${id}/context`, appointmentContextSchema, { signal }),
       updateContext: (id: string, request: AppointmentContextUpdate) =>
@@ -350,6 +353,7 @@ export function createEndpoints(client: ApiClient) {
             to: query.to,
             staffIds: query.staffIds?.join(","),
             booksyPaymentReview: "1",
+            booksyBalanceReview: "1",
             resourceOccupancy: query.resourceOccupancy,
           },
         }),

@@ -461,6 +461,33 @@ fn an_upgrade_refreshes_legacy_billing_holds_without_discarding_the_mirror_or_ou
 }
 
 #[test]
+fn a_changed_imported_balance_replaces_the_previous_collectible_balance() {
+    let mut store = Store::open_in_memory().unwrap();
+    let mut current = appt_change(1, A1, 1);
+    current.data.as_mut().unwrap()["externalBalance"] =
+        json!({"paidInBooksyCents": 3500, "dueInCitameCents": 6500});
+    store.apply_page(&[current], 1).unwrap();
+    assert!(
+        store
+            .appointment(A1)
+            .unwrap()
+            .unwrap()
+            .external_balance
+            .is_some()
+    );
+
+    let mut changed = appt_change(2, A1, 2);
+    changed.data.as_mut().unwrap()["billingReviewReasons"] = json!(["booksy_balance_changed"]);
+    store.apply_page(&[changed], 2).unwrap();
+    let stored = store.appointment(A1).unwrap().unwrap();
+    assert!(stored.external_balance.is_none());
+    assert_eq!(
+        stored.billing_review_reasons().collect::<Vec<_>>(),
+        vec![crate::model::BillingReviewReason::BooksyBalanceChanged]
+    );
+}
+
+#[test]
 fn upgrading_booked_resources_preserves_the_live_cursor_notices_and_unsent_work() {
     let mut conn = Connection::open_in_memory().unwrap();
     for sql in &MIGRATIONS[..9] {

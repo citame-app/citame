@@ -1307,6 +1307,7 @@ impl HttpTransport {
             .append_pair("from", &from.to_rfc3339())
             .append_pair("to", &to.to_rfc3339())
             .append_pair("booksyPaymentReview", "1")
+            .append_pair("booksyBalanceReview", "1")
             .finish();
         let response = self.get(
             &self.agent,
@@ -2685,7 +2686,7 @@ impl HttpTransport {
         let resp = self.get(
             &self.agent,
             &format!(
-                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&clientGroups=1{catalogue_snapshots}"
+                "/sync/pull?since={since}&limit={limit}{catalog}&reviewRequests=1&portfolio=1&intakeViews=1&bookingPolicy=1&peakPriceViews=1&emailDelivery=1&marketingViews=1&promotionViews=1&loyaltyViews=1&whatsappDesk=1&resourceCatalogue=1&inventoryAccess=1&booksyPaymentReview=1&booksyBalanceReview=1&clientGroups=1{catalogue_snapshots}"
             ),
             None,
         )?;

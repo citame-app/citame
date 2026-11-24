@@ -556,6 +556,7 @@ export const syncPullQuerySchema = z.object({
   peakPriceViews: z.literal("1").optional(),
   inventoryAccess: z.literal("1").optional(),
   booksyPaymentReview: z.literal("1").optional(),
+  booksyBalanceReview: z.literal("1").optional(),
   clientGroups: z.literal("1").optional(),
 });
 export type SyncPullQuery = z.infer<typeof syncPullQuerySchema>;
