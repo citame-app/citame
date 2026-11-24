@@ -51,7 +51,7 @@ impl OfferReview {
             && entry.id == self.entry.id
             && entry.version == self.entry.version
             && entry.offer.as_ref().is_some_and(|offer| {
-                offer.expires_at > Utc::now()
+                !offer.is_expired(Utc::now())
                     && self
                         .entry
                         .offer
@@ -364,7 +364,7 @@ impl Root {
                         &[("date", &self.date_time_label(offer.expires_at))],
                     ))),
             )
-            .when(offer.expires_at <= Utc::now(), |d| {
+            .when(offer.is_expired(Utc::now()), |d| {
                 d.child(self.t(Key::WaitlistOfferExpired))
             });
         let awaiting_confirmation = review.request.is_some();

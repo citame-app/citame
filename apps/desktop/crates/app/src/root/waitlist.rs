@@ -22,7 +22,7 @@ pub(super) struct Desk {
     cached: bool,
     saved_pages: Vec<u32>,
     error: Option<Key>,
-    confirm: Option<(String, u32)>,
+    confirm: Option<Cancellation>,
     expanded: Option<String>,
     form: Option<Draft>,
     offer_review: Option<review::OfferReview>,
@@ -118,10 +118,16 @@ impl Draft {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
+struct Cancellation {
+    request_id: String,
+    version: u32,
+}
+
 enum Action {
     Read,
     Join(WaitlistRequest),
-    Cancel(String, u32),
+    Cancel(Cancellation),
     Decline(String, u32, String),
     Policy(WaitlistPolicy),
     Accept(String, AcceptOffer),
@@ -166,6 +172,18 @@ impl Root {
         self.calendar_edits_allowed && self.directory_enabled()
     }
 
+    fn waitlist_action(
+        &self,
+        id: impl Into<ElementId>,
+        label: impl Into<SharedString>,
+        kind: Kind,
+        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Stateful<gpui::Div> {
+        self.button(id, label, kind, on_click)
+            .tab_index(0)
+            .focus(|style| style.border_color(theme::text()))
+    }
+
     pub(super) fn waitlist_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let range = self.calendar_waitlist_range();
         let total = self.waitlist_count.total_for(range);
@@ -178,7 +196,7 @@ impl Root {
                 )
             },
         );
-        self.button(
+        self.waitlist_action(
             "waitlist",
             label,
             Kind::Ghost,
@@ -359,9 +377,9 @@ impl Root {
                     let change = match &action {
                         Action::Read => Ok(None),
                         Action::Join(input) => transport.join_waitlist(input).map(|_| None),
-                        Action::Cancel(id, version) => {
-                            transport.cancel_waitlist(id, *version).map(|_| None)
-                        }
+                        Action::Cancel(target) => transport
+                            .cancel_waitlist(&target.request_id, target.version)
+                            .map(|_| None),
                         Action::Decline(id, version, offer) => transport
                             .requeue_waitlist_offer(id, *version, offer)
                             .map(|_| None),
@@ -681,7 +699,7 @@ impl Root {
                         .flex()
                         .flex_wrap()
                         .gap_2()
-                        .child(self.button(
+                        .child(self.waitlist_action(
                             "wl-calendar",
                             self.t(Key::WaitlistThisPeriod),
                             if view.range().is_some() {
@@ -693,7 +711,7 @@ impl Root {
                                 this.open_waitlist(calendar_view, 1, cx)
                             }),
                         ))
-                        .child(self.button(
+                        .child(self.waitlist_action(
                             "wl-active",
                             self.t(Key::WaitlistActive),
                             if view == WaitlistView::Active {
@@ -705,7 +723,7 @@ impl Root {
                                 this.open_waitlist(WaitlistView::Active, 1, cx)
                             }),
                         ))
-                        .child(self.button(
+                        .child(self.waitlist_action(
                             "wl-all",
                             self.t(Key::WaitlistAll),
                             if !active { Kind::Primary } else { Kind::Ghost },
@@ -714,7 +732,7 @@ impl Root {
                             }),
                         ))
                         .when(can_join, |d| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-new",
                                 self.t(Key::WaitlistNew),
                                 Kind::Ghost,
@@ -729,7 +747,7 @@ impl Root {
                                     .current_session()
                                     .is_some_and(|s| s.role == "owner"),
                             |d| {
-                                d.child(self.button(
+                                d.child(self.waitlist_action(
                                     "wl-policy",
                                     self.t(Key::WaitlistPolicySettings),
                                     Kind::Ghost,
@@ -770,6 +788,8 @@ impl Root {
                                                 this.open_waitlist(target, 1, cx)
                                             }),
                                         )
+                                        .tab_index(0)
+                                        .focus(|style| style.border_color(theme::text()))
                                         .debug_selector(|| id)
                                     },
                                 ),
@@ -808,7 +828,7 @@ impl Root {
                                 )))
                                 .when(can_write && !expired, |d| {
                                     d.child(
-                                        self.button(
+                                        self.waitlist_action(
                                             SharedString::from(format!("wl-import-{}", row.id)),
                                             self.t(Key::WaitlistReview),
                                             Kind::Ghost,
@@ -839,7 +859,7 @@ impl Root {
                         .gap_2()
                         .items_center()
                         .when_some(previous, |d, previous| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-prev",
                                 self.t(Key::InboxPrevious),
                                 Kind::Ghost,
@@ -852,7 +872,7 @@ impl Root {
                             self.t(Key::InboxPage).replace("{n}", &page.to_string()),
                         ))
                         .when_some(next, |d, next| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-next",
                                 self.t(Key::InboxNext),
                                 Kind::Ghost,
@@ -877,6 +897,7 @@ impl Root {
             };
         self.modal_with_height(
             div()
+                .tab_group()
                 .child(
                     div()
                         .text_lg()
@@ -921,7 +942,7 @@ impl Root {
                             .items_center()
                             .gap_2()
                             .child(self.t(Key::WaitlistBookingConfirmed))
-                            .child(self.button(
+                            .child(self.waitlist_action(
                                 "wl-open-booked",
                                 self.t(Key::ViewBookingNotice),
                                 Kind::Primary,
@@ -938,7 +959,7 @@ impl Root {
                         .justify_end()
                         .gap_2()
                         .when(online && !desk.busy, |d| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 "wl-refresh",
                                 self.t(Key::InboxRefresh),
                                 Kind::Ghost,
@@ -947,7 +968,7 @@ impl Root {
                                 }),
                             ))
                         })
-                        .child(self.button(
+                        .child(self.waitlist_action(
                             "wl-close",
                             self.t(Key::Close),
                             Kind::Ghost,
@@ -972,7 +993,10 @@ impl Root {
     ) -> gpui::Div {
         let compact = desk.view.range().is_some();
         let expanded = desk.expanded.as_deref() == Some(&entry.id);
-        let confirmation = (entry.id.clone(), entry.version);
+        let confirmation = Cancellation {
+            request_id: entry.id.clone(),
+            version: entry.version,
+        };
         let confirmed = desk.confirm.as_ref() == Some(&confirmation);
         let manageable = can_write && entry.can_manage;
         let can_cancel =
@@ -980,7 +1004,7 @@ impl Root {
         let offer_active = entry
             .offer
             .as_ref()
-            .is_some_and(|offer| offer.expires_at > self.calendar_now);
+            .is_some_and(|offer| !offer.is_expired(Utc::now()));
         let name = entry
             .client_name
             .as_deref()
@@ -997,11 +1021,16 @@ impl Root {
             .min_w_0()
             .child(
                 div()
-                    .truncate()
+                    .when(compact && !expanded, |d| d.truncate())
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(name),
             )
-            .child(div().truncate().text_sm().child(service_names))
+            .child(
+                div()
+                    .when(compact && !expanded, |d| d.truncate())
+                    .text_sm()
+                    .child(service_names),
+            )
             .child(
                 div()
                     .text_sm()
@@ -1026,7 +1055,7 @@ impl Root {
                     .when(compact, |row| {
                         let id = entry.id.clone();
                         row.child(
-                            self.button(
+                            self.waitlist_action(
                                 SharedString::from(format!("wl-details-{id}")),
                                 self.t(if expanded {
                                     Key::WaitlistHideDetails
@@ -1075,9 +1104,9 @@ impl Root {
                                 }
                             )))
                         })
-                        .when(manageable && offer_active, |d| {
+                        .when(manageable && entry.offer.is_some(), |d| {
                             let review = entry.clone();
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 SharedString::from(format!("wl-offer-{}", entry.id)),
                                 self.t(Key::WaitlistReviewOffer),
                                 Kind::Primary,
@@ -1087,7 +1116,7 @@ impl Root {
                             ))
                         })
                         .when_some(entry.booked_appointment.clone(), |d, booked| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 SharedString::from(format!("wl-booked-{}", entry.id)),
                                 self.t(Key::ViewBookingNotice),
                                 Kind::Ghost,
@@ -1097,7 +1126,7 @@ impl Root {
                             ))
                         })
                         .when(can_cancel, |d| {
-                            d.child(self.button(
+                            d.child(self.waitlist_action(
                                 SharedString::from(format!("wl-cancel-{}", entry.id)),
                                 self.t(if confirmed {
                                     Key::WaitlistConfirm
@@ -1108,7 +1137,7 @@ impl Root {
                                 cx.listener(move |this, _, _, cx| {
                                     if confirmed {
                                         this.waitlist_request(
-                                            Action::Cancel(confirmation.0.clone(), confirmation.1),
+                                            Action::Cancel(confirmation.clone()),
                                             cx,
                                         );
                                     } else if let Overlay::Waitlist(desk) = &mut this.overlay {
@@ -1428,15 +1457,25 @@ mod tests {
         assert!(cx.debug_bounds("wl-body-one").is_none());
         click(cx, "wl-details-one");
         assert!(cx.debug_bounds("wl-body-one").is_some());
-        click(cx, "wl-details-two");
+        cx.simulate_keystrokes("tab enter");
+        cx.run_until_parked();
         assert!(cx.debug_bounds("wl-body-two").is_some());
-        assert!(cx.debug_bounds("wl-body-one").is_none());
+        entity.update(cx, |root, _| {
+            assert!(matches!(&root.overlay, Overlay::Waitlist(desk) if desk.expanded.as_deref() == Some("two")));
+        });
         entity.update(cx, |root, cx| {
             root.open_waitlist(WaitlistView::History, 1, cx)
         });
         click(cx, "wl-state-cancelled");
         assert!(cx.debug_bounds("wl-body-cancelled").is_some());
-        assert!(cx.debug_bounds("wl-body-two").is_none());
+        entity.update(cx, |root, _| {
+            let Overlay::Waitlist(desk) = &root.overlay else {
+                panic!("missing waitlist")
+            };
+            assert_eq!(desk.view, WaitlistView::State(WaitlistState::Cancelled));
+            assert_eq!(desk.data.as_ref().unwrap().entries[0].id, "cancelled");
+            assert!(desk.expanded.is_none());
+        });
     }
 
     #[gpui::test]
@@ -1606,7 +1645,13 @@ mod tests {
                 assert_eq!(desk.data.as_ref(), Some(&history));
                 assert_eq!(desk.adjacent_pages(false), (Some(1), None));
                 assert!(!desk.busy);
-                root.waitlist_request(Action::Cancel("stale".into(), 1), cx);
+                root.waitlist_request(
+                    Action::Cancel(Cancellation {
+                        request_id: "stale".into(),
+                        version: 1,
+                    }),
+                    cx,
+                );
                 let Overlay::Waitlist(desk) = &root.overlay else {
                     panic!("missing waitlist");
                 };

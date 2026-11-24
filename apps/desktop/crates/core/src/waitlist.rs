@@ -219,7 +219,7 @@ impl WaitlistEntry {
         let offer = self.offer.as_ref()?;
         (self.can_manage
             && self.state == WaitlistState::Offered
-            && offer.expires_at > now
+            && !offer.is_expired(now)
             && (!offer.policy.enabled
                 || (can_waive && (8..=300).contains(&reason.trim().encode_utf16().count()))))
         .then_some(offer)
@@ -244,6 +244,12 @@ impl WaitlistEntry {
             intake_responses: intake.inline,
             protection_waiver_reason: offer.policy.enabled.then(|| waiver.trim().to_owned()),
         })
+    }
+}
+
+impl WaitlistOffer {
+    pub fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at <= now
     }
 }
 
