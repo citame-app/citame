@@ -9,6 +9,7 @@ import {
   passPeriod,
   reminder,
   service,
+  staffProfile,
 } from "@sob/db";
 import { eq } from "drizzle-orm";
 import {
@@ -94,6 +95,67 @@ test("policy is disabled by default, public and editable only by the owner with 
     ).status,
   ).toBe(400);
 });
+test("private appointment context shows protection and redacts amounts without commerce access", async () => {
+  const p = await enable();
+  const response = await book({ protectionAcceptedVersion: p.version });
+  expect(response.status).toBe(201);
+  const { id, protection: booking } = (await response.json()) as {
+    id: string;
+    protection: { checkoutId: string };
+  };
+  const path = `/appointments/${id}/context`;
+  const details = await call(owner, path);
+  expect(details.status).toBe(200);
+  expect(details.headers.get("cache-control")).toBe("private, no-store");
+  expect(await details.json()).toMatchObject({
+    protection: {
+      state: "pending",
+      attendanceBlock: "pending_deposit",
+      depositCents: 2500,
+      feeCents: 0,
+      refundDueCents: 0,
+    },
+  });
+
+  const professional = await actor(t, "staff", "staff@deposits.test", { staffProfileId: f.anaId });
+  await t.db
+    .update(staffProfile)
+    .set({ accessPreset: "restricted" })
+    .where(eq(staffProfile.id, f.anaId));
+  expect((await call(client, path)).status).toBe(403);
+  const restricted = await call(professional, path);
+  expect(restricted.status).toBe(200);
+  const context = (await restricted.json()) as { protection: Record<string, unknown> };
+  expect(context).toMatchObject({
+    protection: {
+      state: "pending",
+      expiresAt: expect.any(String),
+      cancellationCutoff: expect.any(String),
+    },
+  });
+  expect(Object.keys(context.protection).sort()).toEqual([
+    "attendanceBlock",
+    "cancellationCutoff",
+    "expiresAt",
+    "state",
+  ]);
+
+  const payment = await call(
+    owner,
+    `/admin/commerce/checkouts/${booking.checkoutId}/payments`,
+    "POST",
+    {
+      method: "external_card",
+      amountCents: 2500,
+      idempotencyKey: crypto.randomUUID(),
+    },
+  );
+  expect(payment.status).toBe(201);
+  expect(await (await call(owner, path)).json()).toMatchObject({
+    protection: { state: "confirmed", depositCents: 2500 },
+  });
+});
+
 test("a required signal needs explicit current policy acceptance and creates one server-priced appointment receipt", async () => {
   const p = await enable();
   expect((await book()).status).toBe(409);
@@ -210,6 +272,9 @@ test("early cancellation releases the slot and shows the whole signal due back w
   ).toBe(409);
   const [row] = await t.db.select().from(appointment).where(eq(appointment.id, a.id));
   expect(row?.status).toBe("cancelled");
+  expect(await (await call(owner, `/appointments/${a.id}/context`)).json()).toMatchObject({
+    protection: { state: "cancelled", attendanceBlock: "closed_protection", refundDueCents: 2500 },
+  });
   const projections = await calendarProtections(t.db, [a.id, crypto.randomUUID()]);
   expect(projections.get(a.id)).toEqual((await protectionView(t.db, a.id)) ?? undefined);
   expect(projections.get(a.id)?.refundDueCents).toBe(2500);

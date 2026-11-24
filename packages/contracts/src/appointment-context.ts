@@ -1,5 +1,21 @@
 import { z } from "zod";
+import { bookingProtectionSchema } from "./booking-protection";
 import { idSchema, LIMITS } from "./common";
+
+export const appointmentProtectionContextSchema = bookingProtectionSchema
+  .pick({
+    state: true,
+    expiresAt: true,
+    cancellationCutoff: true,
+  })
+  .extend(
+    bookingProtectionSchema
+      .pick({ depositCents: true, feeCents: true, refundDueCents: true })
+      .partial().shape,
+  )
+  .extend({
+    attendanceBlock: z.enum(["pending_deposit", "closed_protection"]).optional(),
+  });
 
 export const appointmentContextInputSchema = z
   .object({
@@ -20,6 +36,7 @@ export const appointmentContextSchema = z.object({
   appointmentVersion: z.number().int().positive().optional(),
   canEdit: z.boolean().optional(),
   defaultRequested: z.boolean().optional(),
+  protection: appointmentProtectionContextSchema.optional(),
   businessMessage: z.string().nullable().optional(),
   rows: z.array(appointmentContextRowSchema),
   customerComment: z.string().nullable().optional(),

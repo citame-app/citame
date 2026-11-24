@@ -47,6 +47,8 @@ The response includes the current `clientDirectory` permission and `calendarScop
 
 Linked Desktop devices load team photo metadata at `GET /admin/staff/portrait-directory`. Reads and uploads use `/admin/staff/:id/portrait`, and publication uses `/admin/staff/:id/portrait/publication`. The same-origin gateway forwards those paths to the authenticated API. The directory uses the staff permissions of the browser API, and `/admin/staff` remains the browser page on Cloud.
 
+Desktop reads the booking protection status and applicable deadlines from the private appointment context at `GET /appointments/:id/context`. The context includes deposit, fee and refund amounts only for callers with commerce access. The information stays in the open appointment detail, outside the offline replica. Desktop hides attendance actions when a loaded deposit state requires payment or prohibits a change. The API enforces booking protection on every submitted status transition.
+
 ## Reviewed recurring bookings
 
 Reviewed desktop series use `POST /appointments/desktop-series/preview` and

@@ -11,6 +11,39 @@ pub(super) enum Annotations {
     Unavailable,
 }
 
+impl Annotations {
+    pub(super) fn protection(&self) -> Option<&AppointmentProtection> {
+        match self {
+            Self::Loading { previous, .. } => previous.as_ref()?.protection.as_ref(),
+            Self::Ready(context) => context.protection.as_ref(),
+            Self::Editing(draft) => draft.notes.protection.as_ref(),
+            Self::Unavailable => None,
+        }
+    }
+
+    fn forget_protection(&mut self) {
+        let context = match self {
+            Self::Loading { previous, .. } => previous.as_mut(),
+            Self::Ready(context) => Some(context),
+            Self::Editing(draft) => Some(&mut draft.notes),
+            Self::Unavailable => None,
+        };
+        if let Some(context) = context {
+            context.protection = None;
+        }
+    }
+}
+
+impl Details {
+    pub(super) fn install_annotation_context(&mut self, context: AppointmentAnnotations) {
+        self.deposit_outcome_block = context
+            .protection
+            .as_ref()
+            .and_then(|deposit| deposit.attendance_block);
+        self.annotations = Some(Annotations::Ready(context));
+    }
+}
+
 pub(super) struct NoteDraft {
     notes: AppointmentAnnotations,
     position: usize,
@@ -70,6 +103,12 @@ fn note_field(text: &str, cx: &mut Context<Root>) -> Entity<TextField> {
 
 impl Root {
     pub(super) fn refresh_open_annotations(&mut self, force_refresh: bool, cx: &mut Context<Self>) {
+        if force_refresh
+            && let Overlay::Details(details) = &mut self.overlay
+            && let Some(annotations) = &mut details.annotations
+        {
+            annotations.forget_protection();
+        }
         if self.status.connectivity != Connectivity::Online {
             return;
         }
@@ -86,7 +125,13 @@ impl Root {
             _ => None,
         };
         let known_version = loaded_version.max(details.annotations_requested_version);
+        let commerce_revision = self
+            .svc
+            .store
+            .live_view_revision("commerce")
+            .unwrap_or_default();
         if force_refresh
+            || commerce_revision != details.annotations_commerce_revision
             || self
                 .svc
                 .store
@@ -206,6 +251,7 @@ impl Root {
         };
         let id = details.id.clone();
         let session = self.svc.session.clone();
+        let time_off_scope = self.time_off_scope.clone();
         let request = Arc::new(());
         draft.pending = Some(request.clone());
         draft.error = None;
@@ -236,8 +282,10 @@ impl Root {
                 draft.pending = None;
                 match result {
                     Ok(Some(notes)) => {
-                        details.annotations = Some(Annotations::Ready(notes));
+                        let permissions_changed = this.time_off_scope != time_off_scope;
+                        details.install_annotation_context(notes);
                         this.svc.wake(Wake::Manual);
+                        this.refresh_open_annotations(permissions_changed, cx);
                     }
                     Ok(None) => {
                         draft.conflicted = true;
@@ -265,6 +313,11 @@ impl Root {
             return;
         };
         let id = details.id.clone();
+        details.annotations_commerce_revision = self
+            .svc
+            .store
+            .live_view_revision("commerce")
+            .unwrap_or_default();
         details.annotations_requested_version = self
             .svc
             .store
@@ -301,10 +354,10 @@ impl Root {
                 {
                     return;
                 }
-                details.annotations = Some(match result {
-                    Ok(notes) => Annotations::Ready(notes),
-                    Err(_) => Annotations::Unavailable,
-                });
+                match result {
+                    Ok(notes) => details.install_annotation_context(notes),
+                    Err(_) => details.annotations = Some(Annotations::Unavailable),
+                }
                 this.refresh_open_annotations(this.time_off_scope != time_off_scope, cx);
                 cx.notify();
             });
@@ -691,6 +744,7 @@ mod tests {
                     appointment_version: Some(3),
                     can_edit: None,
                     default_requested: None,
+                    protection: None,
                     customer_comment: None,
                     business_message: None,
                     rows: vec![],
@@ -770,6 +824,7 @@ mod tests {
                 appointment_version: Some(3),
                 can_edit: Some(true),
                 default_requested: Some(true),
+                protection: None,
                 customer_comment: Some("Customer message".into()),
                 business_message: None,
                 rows: vec![],
@@ -855,6 +910,7 @@ mod tests {
                     appointment_version: Some(3),
                     can_edit: Some(true),
                     default_requested: Some(false),
+                    protection: None,
                     customer_comment: None,
                     business_message: None,
                     rows: vec![ServiceAnnotations {

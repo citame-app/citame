@@ -10,6 +10,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Desktop appointment details show the server-confirmed deposit state and payment deadlines. Staff with commerce access can also see the deposit amount, retained fee and refund due.
+
 - Desktop lets team members who can edit all calendars correct a completed appointment or a no-show from its details.
 
 - Desktop calendar shortcuts navigate between dates and views, open or move an appointment, and sync the replica. Find the key guide in the calendar header.
