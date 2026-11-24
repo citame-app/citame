@@ -84,7 +84,7 @@ test("removing Desktop access clears linked devices before the new fetch and dis
         : [
             {
               clientId: DESKTOP_CLIENT_ID,
-              name: "Citame Desktop",
+              name: "Sisters of Beauty Desktop",
               updatedAt: time,
               scopes: ["desktop:sign-in"],
             },
