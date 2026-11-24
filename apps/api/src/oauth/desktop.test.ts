@@ -8,12 +8,15 @@ import {
   dateShiftPreviewSchema,
   dateShiftResultSchema,
   dateShiftsResponseSchema,
+  desktopDeviceLinkResponseSchema,
+  desktopDevicesSchema,
   intakeAdminFormSchema,
   intakeFormSummariesSchema,
   intakeFormsSchema,
   intakeSubmissionSchema,
   intakeSubmissionsSchema,
   listServicesResponseSchema,
+  oauthAccessTokenResponseSchema,
   reviewedBookingPolicySchema,
   reviewedSalonSettingsSchema,
   reviewedServiceListSchema,
@@ -1279,77 +1282,77 @@ test("desktop review invitations and moderation require the live management perm
   ).toBe(403);
 });
 
+const deviceEndpoint = (action: string, body: unknown, bearer?: string) =>
+  t.app.request(`/api/auth/desktop/${action}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(bearer && { authorization: `Bearer ${bearer}` }),
+    },
+    body: JSON.stringify(body),
+  });
+
+async function linkDevice(cookie: string, label: string) {
+  const { tokens: initial } = await obtainTokens(t.app, {
+    clientId: DESKTOP_CLIENT_ID,
+    cookie,
+    scope: DESKTOP_SIGN_IN_SCOPE,
+    resource,
+    redirectUri,
+  });
+  expect(initial.refresh_token).toBeUndefined();
+  expect((await request("/me", initial.access_token)).status).toBe(401);
+  const pair = generateKeyPairSync("ed25519");
+  const publicKey = pair.publicKey
+    .export({ type: "spki", format: "der" })
+    .subarray(-32)
+    .toString("base64url");
+  const linked = await deviceEndpoint("link", { label, publicKey }, initial.access_token);
+  expect(linked.status).toBe(200);
+  const { deviceId } = desktopDeviceLinkResponseSchema.parse(await linked.json());
+  expect(
+    await (await deviceEndpoint("link", { label, publicKey }, initial.access_token)).json(),
+  ).toEqual({ deviceId });
+  const wrongKey = generateKeyPairSync("ed25519")
+    .publicKey.export({ type: "spki", format: "der" })
+    .subarray(-32)
+    .toString("base64url");
+  expect(
+    (await deviceEndpoint("link", { label, publicKey: wrongKey }, initial.access_token)).status,
+  ).toBe(403);
+
+  return {
+    id: deviceId,
+    proof(
+      action: "token" | "revoke" | "browser-ticket",
+      issuedAt = Math.floor(Date.now() / 1000),
+      binding: string[] = [],
+    ) {
+      const nonce = randomBytes(32).toString("base64url");
+      const bytes = Buffer.from(
+        ["citame-desktop-v1", resource, deviceId, action, issuedAt, nonce, ...binding].join("\n"),
+      );
+      return {
+        deviceId,
+        issuedAt,
+        nonce,
+        signature: sign(null, bytes, pair.privateKey).toString("base64url"),
+      };
+    },
+  };
+}
+
 test("linked devices renew independently and can be revoked from either client", async () => {
   const who = await actor(t, "owner", "devices@example.com");
   const other = await actor(t, "owner", "other-devices@example.com");
   const webHeaders = { cookie: who.cookie, origin: ORIGIN };
   const list = () => t.app.request("/me/desktop-devices", { headers: webHeaders });
-  const endpoint = (action: string, body: unknown, bearer?: string) =>
-    t.app.request(`/api/auth/desktop/${action}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...(bearer && { authorization: `Bearer ${bearer}` }),
-      },
-      body: JSON.stringify(body),
-    });
-
-  async function connect(label: string) {
-    const { tokens: initial } = await obtainTokens(t.app, {
-      clientId: DESKTOP_CLIENT_ID,
-      cookie: who.cookie,
-      scope: DESKTOP_SIGN_IN_SCOPE,
-      resource,
-      redirectUri,
-    });
-    expect(initial.refresh_token).toBeUndefined();
-    expect((await request("/me", initial.access_token)).status).toBe(401);
-    const pair = generateKeyPairSync("ed25519");
-    const publicKey = pair.publicKey
-      .export({ type: "spki", format: "der" })
-      .subarray(-32)
-      .toString("base64url");
-    const linked = await endpoint("link", { label, publicKey }, initial.access_token);
-    expect(linked.status).toBe(200);
-    const { deviceId } = (await linked.json()) as { deviceId: string };
-    expect(
-      await (await endpoint("link", { label, publicKey }, initial.access_token)).json(),
-    ).toEqual({ deviceId });
-    const wrongKey = generateKeyPairSync("ed25519")
-      .publicKey.export({ type: "spki", format: "der" })
-      .subarray(-32)
-      .toString("base64url");
-    expect(
-      (await endpoint("link", { label, publicKey: wrongKey }, initial.access_token)).status,
-    ).toBe(403);
-
-    return {
-      id: deviceId,
-      proof(
-        action: "token" | "revoke" | "browser-ticket",
-        issuedAt = Math.floor(Date.now() / 1000),
-        binding: string[] = [],
-      ) {
-        const nonce = randomBytes(32).toString("base64url");
-        const bytes = Buffer.from(
-          ["citame-desktop-v1", resource, deviceId, action, issuedAt, nonce, ...binding].join("\n"),
-        );
-        return {
-          deviceId,
-          issuedAt,
-          nonce,
-          signature: sign(null, bytes, pair.privateKey).toString("base64url"),
-        };
-      },
-    };
-  }
-
-  const first = await connect("Recepción · Linux");
-  const second = await connect("Despacho · Mac");
+  const first = await linkDevice(who.cookie, "Recepción · Linux");
+  const second = await linkDevice(who.cookie, "Despacho · Mac");
   const browserOrigin = "http://127.0.0.1:54321";
   const calendar = { date: "2026-11-18", view: "week" };
   const issueBrowser = async (destination = calendar) => {
-    const response = await endpoint("browser-ticket", {
+    const response = await deviceEndpoint("browser-ticket", {
       proof: first.proof("browser-ticket", undefined, [
         browserOrigin,
         destination.date,
@@ -1410,18 +1413,20 @@ test("linked devices renew independently and can be revoked from either client",
     proof: first.proof("browser-ticket", undefined, [browserOrigin, "workspace", "inventory"]),
   };
   expect(
-    (await endpoint("browser-ticket", { ...workspaceRequest, workspace: "settings" })).status,
+    (await deviceEndpoint("browser-ticket", { ...workspaceRequest, workspace: "settings" })).status,
   ).toBe(401);
   expect(
     (
-      await endpoint("browser-ticket", {
+      await deviceEndpoint("browser-ticket", {
         ...workspaceRequest,
         workspace: "https://outside.example.test",
       })
     ).status,
   ).toBe(400);
-  expect((await endpoint("browser-ticket", { ...workspaceRequest, calendar })).status).toBe(400);
-  const workspaceTicket = await endpoint("browser-ticket", workspaceRequest);
+  expect((await deviceEndpoint("browser-ticket", { ...workspaceRequest, calendar })).status).toBe(
+    400,
+  );
+  const workspaceTicket = await deviceEndpoint("browser-ticket", workspaceRequest);
   expect(workspaceTicket.status).toBe(200);
   const workspace = await redeemBrowser(
     ((await workspaceTicket.json()) as { ticket: string }).ticket,
@@ -1448,13 +1453,17 @@ test("linked devices renew independently and can be revoked from either client",
     proof: first.proof("browser-ticket", undefined, [browserOrigin, "receipt", receiptId]),
   });
   expect(
-    (await endpoint("browser-ticket", { ...receiptTicketRequest(), receipt: crypto.randomUUID() }))
-      .status,
+    (
+      await deviceEndpoint("browser-ticket", {
+        ...receiptTicketRequest(),
+        receipt: crypto.randomUUID(),
+      })
+    ).status,
   ).toBe(401);
   const missingReceipt = crypto.randomUUID();
   expect(
     (
-      await endpoint("browser-ticket", {
+      await deviceEndpoint("browser-ticket", {
         origin: browserOrigin,
         receipt: missingReceipt,
         proof: first.proof("browser-ticket", undefined, [browserOrigin, "receipt", missingReceipt]),
@@ -1462,14 +1471,14 @@ test("linked devices renew independently and can be revoked from either client",
     ).status,
   ).toBe(403);
   const issueReceipt = async () => {
-    const response = await endpoint("browser-ticket", receiptTicketRequest());
+    const response = await deviceEndpoint("browser-ticket", receiptTicketRequest());
     expect(response.status).toBe(200);
     return ((await response.json()) as { ticket: string }).ticket;
   };
   const redeemReceipt = await redeemBrowser(await issueReceipt());
   expect(redeemReceipt.status).toBe(303);
   expect(redeemReceipt.headers.get("location")).toBe(`/admin/commerce?checkout=${receiptId}`);
-  const observer = await endpoint("token", second.proof("token"));
+  const observer = await deviceEndpoint("token", second.proof("token"));
   expect(observer.status).toBe(200);
   await assertHostedReceiptPayment(
     receiptId,
@@ -1514,12 +1523,12 @@ test("linked devices renew independently and can be revoked from either client",
   expect(deniedWorkspace.status).toBe(403);
   const revokedTicket = await issueBrowser();
   const payload = first.proof("token");
-  const issuance = await endpoint("token", payload);
+  const issuance = await deviceEndpoint("token", payload);
   expect(issuance.status).toBe(200);
   const firstToken = ((await issuance.json()) as { access_token: string }).access_token;
-  expect((await endpoint("token", payload)).status).toBe(401);
-  expect((await endpoint("revoke", second.proof("token"))).status).toBe(401);
-  expect((await endpoint("token", second.proof("token", 1))).status).toBe(401);
+  expect((await deviceEndpoint("token", payload)).status).toBe(401);
+  expect((await deviceEndpoint("revoke", second.proof("token"))).status).toBe(401);
+  expect((await deviceEndpoint("token", second.proof("token", 1))).status).toBe(401);
   const menu = await request("/me/desktop-workspaces", firstToken);
   expect(menu.status).toBe(200);
   expect(await menu.json()).toMatchObject({
@@ -1598,40 +1607,53 @@ test("linked devices renew independently and can be revoked from either client",
   expect((await request(salesReportPath, firstToken)).status).toBe(401);
   expect((await request(outcomeExportPath, firstToken)).status).toBe(401);
   expect((await redeemBrowser(revokedTicket)).status).toBe(403);
-  expect((await endpoint("token", first.proof("token"))).status).toBe(404);
+  expect((await deviceEndpoint("token", first.proof("token"))).status).toBe(404);
   while (!(await reader.read()).done) {
     /* Drain the live connection until revocation closes it. */
   }
 
-  const secondIssued = await endpoint("token", second.proof("token"));
+  const secondIssued = await deviceEndpoint("token", second.proof("token"));
   expect(secondIssued.status).toBe(200);
   const secondToken = ((await secondIssued.json()) as { access_token: string }).access_token;
   expect((await request("/me", secondToken)).status).toBe(200);
-  expect((await endpoint("revoke", second.proof("revoke"))).status).toBe(204);
-  expect((await endpoint("revoke", second.proof("revoke"))).status).toBe(404);
+  expect((await deviceEndpoint("revoke", second.proof("revoke"))).status).toBe(204);
+  expect((await deviceEndpoint("revoke", second.proof("revoke"))).status).toBe(404);
   expect((await request("/sync/pull", secondToken)).status).toBe(401);
   expect(await (await list()).json()).toEqual({ devices: [] });
+});
 
-  const allDevices = [await connect("Recepción de prueba"), await connect("Despacho de prueba")];
-  const activeTokens = await Promise.all(
-    allDevices.map(async (device) => {
-      const response = await endpoint("token", device.proof("token"));
-      expect(response.status).toBe(200);
-      const { access_token } = (await response.json()) as { access_token: string };
-      expect((await request("/sync/pull", access_token)).status).toBe(200);
-      return access_token;
-    }),
-  );
-  expect(
-    (
-      await t.app.request(`/me/connections/${DESKTOP_CLIENT_ID}`, {
-        method: "DELETE",
-        headers: webHeaders,
-      })
-    ).status,
-  ).toBe(204);
-  for (const token of activeTokens) expect((await request("/sync/pull", token)).status).toBe(401);
-  for (const device of allDevices)
-    expect((await endpoint("token", device.proof("token"))).status).toBe(404);
-  expect(await (await list()).json()).toEqual({ devices: [] });
+test("revoking the Desktop connection disconnects every device for that account", async () => {
+  const owner = await actor(t, "owner", "grant-owner@example.com");
+  const another = await actor(t, "owner", "another-grant-owner@example.com");
+  const reception = await linkDevice(owner.cookie, "Test reception");
+  const backOffice = await linkDevice(owner.cookie, "Test back office");
+  const unrelated = await linkDevice(another.cookie, "Unrelated device");
+
+  async function token(device: Awaited<ReturnType<typeof linkDevice>>) {
+    const response = await deviceEndpoint("token", device.proof("token"));
+    expect(response.status).toBe(200);
+    const { access_token } = oauthAccessTokenResponseSchema.parse(await response.json());
+    expect((await request("/sync/pull", access_token)).status).toBe(200);
+    return access_token;
+  }
+
+  const [frontToken, backToken, unrelatedToken] = await Promise.all([
+    token(reception),
+    token(backOffice),
+    token(unrelated),
+  ]);
+  const response = await t.app.request(`/me/connections/${DESKTOP_CLIENT_ID}`, {
+    method: "DELETE",
+    headers: { cookie: owner.cookie, origin: ORIGIN },
+  });
+  expect(response.status).toBe(204);
+  for (const existing of [frontToken, backToken])
+    expect((await request("/sync/pull", existing)).status).toBe(401);
+  for (const device of [reception, backOffice])
+    expect((await deviceEndpoint("token", device.proof("token"))).status).toBe(404);
+  const list = await t.app.request("/me/desktop-devices", { headers: { cookie: owner.cookie } });
+  expect(list.status).toBe(200);
+  expect(desktopDevicesSchema.parse(await list.json()).devices).toEqual([]);
+  expect((await request("/sync/pull", unrelatedToken)).status).toBe(200);
+  await token(unrelated);
 });

@@ -69,9 +69,9 @@ MCP hosts cannot be provisioned beforehand, so `POST /oauth2/register` is open (
 
 ### First-party desktop client
 
-`sob-desktop` is seeded at API start as a native public client. To link a device, the system browser prompts for the account credentials and consent. The app uses PKCE S256, a loopback callback on an ephemeral port and the `desktop:sign-in` scope for the separate `/api/auth/desktop` audience. The authorization code exchange issues a token for enrolling the device key.
+`sob-desktop` is seeded at API start as a native public client. To link a device, the system browser prompts for the account credentials and asks for consent when authorization is needed. The app uses PKCE S256, a loopback callback on an ephemeral port and the `desktop:sign-in` scope for the separate `/api/auth/desktop` audience. The authorization code exchange issues a token for enrolling the device key.
 
-A linked device signs a fresh proof with its private key to obtain a short-lived sync token. The server checks the device link and the current account permissions when it authorizes requests. **My account → Profile → Desktop devices** lists the linked devices and disconnects one at a time. Desktop can disconnect itself when online. Revoking the Desktop connection in the account's connections list disconnects all linked devices for that account.
+A linked device signs a fresh proof with its private key to obtain a short-lived sync token. The device link has no scheduled expiry. The server checks the device link and the current account permissions when it authorizes requests. **My account → Profile → Desktop devices** lists the linked devices and disconnects one at a time. Desktop can disconnect itself when online. Revoking the Desktop connection under **My account → Profile → Connected apps** disconnects all linked devices for that account.
 
 To open the agenda in the browser, the linked device requests a single-use ticket for the selected date, view and professionals. The server redeems it into a browser session for the same account. Browser and older desktop sessions can still use cookies. Older Desktop clients can also use the previous OAuth refresh flow. MCP and Desktop have separate audiences, scopes and route permissions.
 
