@@ -1,11 +1,9 @@
 use super::*;
 
-pub(super) fn blocked_outcome(protection: &AppointmentProtection) -> Option<Key> {
-    use AppointmentProtectionState::*;
-    match protection.state {
-        Pending => Some(Key::DepositPendingAttendance),
-        Completed | Cancelled | Expired | NoShow => Some(Key::DepositClosedAttendance),
-        Confirmed | Waived | Unknown => None,
+pub(super) fn attendance_block_label(block: AttendanceProtectionBlock) -> Key {
+    match block {
+        AttendanceProtectionBlock::PendingDeposit => Key::DepositPendingAttendance,
+        AttendanceProtectionBlock::ClosedProtection => Key::DepositClosedAttendance,
     }
 }
 
@@ -84,8 +82,8 @@ impl Root {
                     &[("date", &self.date_time_label(protection.cancellation_cutoff))],
                 )))
             })
-            .when_some(blocked_outcome(protection), |panel, key| {
-                panel.child(div().text_color(theme::muted()).child(self.t(key)))
+            .when_some(protection.attendance_block, |panel, block| {
+                panel.child(div().text_color(theme::muted()).child(self.t(attendance_block_label(block))))
             })
     }
 }

@@ -34,6 +34,16 @@ impl Annotations {
     }
 }
 
+impl Details {
+    pub(super) fn install_annotation_context(&mut self, context: AppointmentAnnotations) {
+        self.deposit_outcome_block = context
+            .protection
+            .as_ref()
+            .and_then(|deposit| deposit.attendance_block);
+        self.annotations = Some(Annotations::Ready(context));
+    }
+}
+
 pub(super) struct NoteDraft {
     notes: AppointmentAnnotations,
     position: usize,
@@ -115,7 +125,13 @@ impl Root {
             _ => None,
         };
         let known_version = loaded_version.max(details.annotations_requested_version);
+        let commerce_revision = self
+            .svc
+            .store
+            .live_view_revision("commerce")
+            .unwrap_or_default();
         if force_refresh
+            || commerce_revision != details.annotations_commerce_revision
             || self
                 .svc
                 .store
@@ -235,6 +251,7 @@ impl Root {
         };
         let id = details.id.clone();
         let session = self.svc.session.clone();
+        let time_off_scope = self.time_off_scope.clone();
         let request = Arc::new(());
         draft.pending = Some(request.clone());
         draft.error = None;
@@ -265,8 +282,10 @@ impl Root {
                 draft.pending = None;
                 match result {
                     Ok(Some(notes)) => {
-                        details.annotations = Some(Annotations::Ready(notes));
+                        let permissions_changed = this.time_off_scope != time_off_scope;
+                        details.install_annotation_context(notes);
                         this.svc.wake(Wake::Manual);
+                        this.refresh_open_annotations(permissions_changed, cx);
                     }
                     Ok(None) => {
                         draft.conflicted = true;
@@ -294,6 +313,11 @@ impl Root {
             return;
         };
         let id = details.id.clone();
+        details.annotations_commerce_revision = self
+            .svc
+            .store
+            .live_view_revision("commerce")
+            .unwrap_or_default();
         details.annotations_requested_version = self
             .svc
             .store
@@ -330,10 +354,10 @@ impl Root {
                 {
                     return;
                 }
-                details.annotations = Some(match result {
-                    Ok(notes) => Annotations::Ready(notes),
-                    Err(_) => Annotations::Unavailable,
-                });
+                match result {
+                    Ok(notes) => details.install_annotation_context(notes),
+                    Err(_) => details.annotations = Some(Annotations::Unavailable),
+                }
                 this.refresh_open_annotations(this.time_off_scope != time_off_scope, cx);
                 cx.notify();
             });

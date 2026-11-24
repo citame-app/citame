@@ -281,7 +281,9 @@ struct Details {
     settlement_review: Option<settlement::SettlementReview>,
     checkout: Option<checkout::CheckoutReview>,
     annotations: Option<annotations::Annotations>,
+    deposit_outcome_block: Option<AttendanceProtectionBlock>,
     annotations_requested_version: Option<i64>,
+    annotations_commerce_revision: i64,
 }
 
 impl Details {
@@ -1432,7 +1434,9 @@ impl Root {
             settlement_review: None,
             checkout: None,
             annotations: None,
+            deposit_outcome_block: None,
             annotations_requested_version: None,
+            annotations_commerce_revision: 0,
         }));
         if synced {
             self.open_annotations(cx);
@@ -1531,12 +1535,8 @@ impl Root {
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
-        if let Some(key) = d
-            .annotations
-            .as_ref()
-            .and_then(annotations::Annotations::protection)
-            .and_then(deposit_context::blocked_outcome)
-        {
+        if let Some(block) = d.deposit_outcome_block {
+            let key = deposit_context::attendance_block_label(block);
             d.error = Some(i18n::t(self.locale, key).to_owned());
             cx.notify();
             return;
@@ -3607,9 +3607,7 @@ impl Root {
             .filter(|a| {
                 !stale
                     && self.can_edit_staff_calendar(&a.staff_id)
-                    && protection
-                        .and_then(deposit_context::blocked_outcome)
-                        .is_none()
+                    && d.deposit_outcome_block.is_none()
             })
             .map_or(&[][..], |a| {
                 ops::appointment_outcome_options(
@@ -3667,6 +3665,17 @@ impl Root {
                     cx,
                 ))
             })
+            .when_some(
+                d.deposit_outcome_block.filter(|_| protection.is_none()),
+                |details, block| {
+                    details.child(
+                        div()
+                            .text_sm()
+                            .text_color(theme::muted())
+                            .child(self.t(deposit_context::attendance_block_label(block))),
+                    )
+                },
+            )
             .when_some(current.as_ref(), |x, appointment| {
                 x.child(
                     div()
@@ -6274,22 +6283,15 @@ mod tests {
             let Overlay::Details(details) = &mut root.overlay else {
                 panic!("expected appointment details");
             };
-            details.annotations = Some(annotations::Annotations::Ready(AppointmentAnnotations {
-                appointment_version: Some(3),
-                can_edit: Some(true),
-                default_requested: None,
-                protection: Some(AppointmentProtection {
-                    state: AppointmentProtectionState::Pending,
-                    expires_at: now,
-                    cancellation_cutoff: now,
-                    deposit_cents: Some(2500),
-                    fee_cents: None,
-                    refund_due_cents: None,
-                }),
-                rows: vec![],
-                customer_comment: None,
-                business_message: None,
-            }));
+            let notes = serde_json::from_value(json!({
+                "appointmentVersion": 3, "canEdit": true, "rows": [],
+                "protection": {
+                    "state": "pending", "attendanceBlock": "pending_deposit",
+                    "expiresAt": now, "cancellationCutoff": now, "depositCents": 2500
+                }
+            }))
+            .unwrap();
+            details.install_annotation_context(notes);
             root.set_outcome(AppointmentStatus::Completed, now, cx);
             assert!(outbox_kinds(root).is_empty());
         });
@@ -6300,12 +6302,37 @@ mod tests {
             let Overlay::Details(details) = &mut root.overlay else {
                 panic!("expected appointment details");
             };
-            let Some(annotations::Annotations::Ready(notes)) = &mut details.annotations else {
-                panic!("expected payment status");
+            details.annotations = Some(annotations::Annotations::Unavailable);
+            root.set_outcome(AppointmentStatus::Completed, now, cx);
+            assert!(outbox_kinds(root).is_empty());
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mark-completed").is_none());
+
+        root.update(cx, |root, cx| {
+            let mut appointment = root.svc.store.appointment(EXISTING).unwrap().unwrap();
+            appointment.version += 1;
+            root.svc
+                .store
+                .apply_page(&[up(10, "appointment", EXISTING, json!(appointment))], 10)
+                .unwrap();
+            let Overlay::Details(details) = &mut root.overlay else {
+                panic!("expected appointment details");
             };
-            notes.protection.as_mut().unwrap().state = AppointmentProtectionState::Confirmed;
+            let notes = serde_json::from_value(json!({
+                "appointmentVersion": 4, "canEdit": true, "rows": [],
+                "protection": {
+                    "state": "confirmed", "expiresAt": now, "cancellationCutoff": now,
+                    "depositCents": 2500
+                }
+            }))
+            .unwrap();
+            details.install_annotation_context(notes);
             cx.notify();
         });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("mark-completed").is_none());
+        root.update(cx, |root, cx| root.review_updated_appointment(cx));
         cx.run_until_parked();
         assert!(cx.debug_bounds("mark-completed").is_some());
     }

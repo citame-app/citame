@@ -108,7 +108,13 @@ test("private appointment context shows protection and redacts amounts without c
   expect(details.status).toBe(200);
   expect(details.headers.get("cache-control")).toBe("private, no-store");
   expect(await details.json()).toMatchObject({
-    protection: { state: "pending", depositCents: 2500, feeCents: 0, refundDueCents: 0 },
+    protection: {
+      state: "pending",
+      attendanceBlock: "pending_deposit",
+      depositCents: 2500,
+      feeCents: 0,
+      refundDueCents: 0,
+    },
   });
 
   const professional = await actor(t, "staff", "staff@deposits.test", { staffProfileId: f.anaId });
@@ -128,6 +134,7 @@ test("private appointment context shows protection and redacts amounts without c
     },
   });
   expect(Object.keys(context.protection).sort()).toEqual([
+    "attendanceBlock",
     "cancellationCutoff",
     "expiresAt",
     "state",
@@ -265,6 +272,9 @@ test("early cancellation releases the slot and shows the whole signal due back w
   ).toBe(409);
   const [row] = await t.db.select().from(appointment).where(eq(appointment.id, a.id));
   expect(row?.status).toBe("cancelled");
+  expect(await (await call(owner, `/appointments/${a.id}/context`)).json()).toMatchObject({
+    protection: { state: "cancelled", attendanceBlock: "closed_protection", refundDueCents: 2500 },
+  });
   const projections = await calendarProtections(t.db, [a.id, crypto.randomUUID()]);
   expect(projections.get(a.id)).toEqual((await protectionView(t.db, a.id)) ?? undefined);
   expect(projections.get(a.id)?.refundDueCents).toBe(2500);

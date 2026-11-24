@@ -21,7 +21,7 @@ import { authorizeCalendarQuery, requirePermission, requireRole } from "../../au
 import type { Principal } from "../../auth/principal";
 import { DomainError } from "../../errors";
 import { lockScheduling, type Tx } from "../../tx";
-import { protectionView } from "../booking-protection/value";
+import { attendanceProtectionBlock, protectionView } from "../booking-protection/value";
 import {
   booksyPaymentReviews,
   externallySettledAppointments,
@@ -49,6 +49,7 @@ export async function getAppointmentContext(db: Connection, id: string, principa
     db.select().from(appointmentContext).where(eq(appointmentContext.appointmentId, id)),
     protectionView(db, id),
   ]);
+  const attendanceBlock = protection ? attendanceProtectionBlock(protection.state) : undefined;
   return {
     appointmentVersion: visit.version,
     canEdit: editCalendar,
@@ -59,6 +60,7 @@ export async function getAppointmentContext(db: Connection, id: string, principa
             state: protection.state,
             expiresAt: protection.expiresAt,
             cancellationCutoff: protection.cancellationCutoff,
+            ...(attendanceBlock ? { attendanceBlock } : {}),
             ...(commerce
               ? {
                   depositCents: protection.depositCents,
@@ -278,13 +280,13 @@ function sameContext(
 ) {
   return Boolean(
     a &&
-    a.source === "booksy" &&
-    a.sourceRef === b.sourceRef &&
-    a.requestedStaffId === b.requestedStaffId &&
-    a.internalNote === b.internalNote &&
-    a.customerComment === b.customerComment &&
-    a.invoiced === b.invoiced &&
-    a.paid === b.paid,
+      a.source === "booksy" &&
+      a.sourceRef === b.sourceRef &&
+      a.requestedStaffId === b.requestedStaffId &&
+      a.internalNote === b.internalNote &&
+      a.customerComment === b.customerComment &&
+      a.invoiced === b.invoiced &&
+      a.paid === b.paid,
   );
 }
 async function prepareImport(

@@ -12,7 +12,10 @@ export const appointmentProtectionContextSchema = bookingProtectionSchema
     bookingProtectionSchema
       .pick({ depositCents: true, feeCents: true, refundDueCents: true })
       .partial().shape,
-  );
+  )
+  .extend({
+    attendanceBlock: z.enum(["pending_deposit", "closed_protection"]).optional(),
+  });
 
 export const appointmentContextInputSchema = z
   .object({

@@ -173,10 +173,18 @@ pub enum AppointmentProtectionState {
     Unknown,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttendanceProtectionBlock {
+    PendingDeposit,
+    ClosedProtection,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppointmentProtection {
     pub state: AppointmentProtectionState,
+    pub attendance_block: Option<AttendanceProtectionBlock>,
     pub expires_at: DateTime<Utc>,
     pub cancellation_cutoff: DateTime<Utc>,
     pub deposit_cents: Option<i64>,
