@@ -430,6 +430,7 @@ pub struct Root {
     time_off_scope: String,
     calendar_scope: Option<String>,
     calendar_edits_allowed: bool,
+    calendar_read_failed: bool,
     replica_generation: Option<String>,
     theme_override: Option<bool>,
     pending_local_today: bool,
@@ -527,6 +528,7 @@ impl Root {
             time_off_scope: String::new(),
             calendar_scope: None,
             calendar_edits_allowed: false,
+            calendar_read_failed: false,
             replica_generation: None,
             theme_override,
             pending_local_today,
@@ -930,14 +932,10 @@ impl Root {
             self.notice_cursor = self.svc.store.booking_notice_head().unwrap_or_default();
         }
         self.calendar_scope = scope;
-        self.calendar_edits_allowed =
-            ops::calendar_scope_permits_edit(self.calendar_scope.as_deref(), None)
-                && self.svc.store.calendar_edits_allowed().unwrap_or(false);
         self.replica_generation = generation;
         if self.calendar_mode == CalendarMode::Resources && !self.can_view_resource_calendar() {
             self.calendar_mode = CalendarMode::Day;
         }
-        self.refresh_open_waitlist_scope();
         self.refresh_notices();
         let store = &self.svc.store;
         let previous_time_off_scope = std::mem::take(&mut self.time_off_scope);
@@ -961,21 +959,27 @@ impl Root {
             self.date = Utc::now().with_timezone(&self.tz).date_naive();
             self.pending_local_today = false;
         }
-        self.period_views = self
+        let period = self
             .calendar_mode
-            .period(store, self.date, self.week_layout)
-            .unwrap_or_default();
-        self.view = if matches!(
+            .period(store, self.date, self.week_layout);
+        let view = if matches!(
             self.calendar_mode,
             CalendarMode::Day | CalendarMode::Resources
         ) {
-            calendar::day_view(store, self.date).ok()
+            calendar::day_view(store, self.date).map(Some)
         } else {
-            self.period_views
-                .iter()
-                .find(|day| day.date == self.date)
-                .cloned()
+            Ok(period
+                .as_ref()
+                .ok()
+                .and_then(|days| days.iter().find(|day| day.date == self.date))
+                .cloned())
         };
+        self.calendar_read_failed = period.is_err() || view.is_err();
+        self.period_views = period.unwrap_or_default();
+        self.view = view.unwrap_or_default();
+        self.calendar_edits_allowed = !self.calendar_read_failed
+            && ops::calendar_scope_permits_edit(self.calendar_scope.as_deref(), None)
+            && store.calendar_edits_allowed().unwrap_or(false);
 
         if !self.view.as_ref().is_some_and(|view| {
             view.columns
@@ -1033,6 +1037,7 @@ impl Root {
             .collect();
         self.refresh_service_assignments(&catalogue);
         self.services = catalogue.into_iter().filter(|s| s.active).collect();
+        self.refresh_open_waitlist_scope();
         self.reload_directory();
         self.reload_marketing_invitation_contacts();
         self.refresh_client_controls(cx);
@@ -1295,7 +1300,14 @@ impl Root {
 
     fn book_reviewed(&mut self, peak_review: Option<&str>, cx: &mut Context<Self>) {
         if !self.calendar_edits_allowed {
-            self.show_new_booking_error(CoreError::AppointmentScopeDenied, cx);
+            if self.calendar_read_failed {
+                if let Overlay::New(form) = &mut self.overlay {
+                    form.error = Some(Key::CalendarReadFailed);
+                    cx.notify();
+                }
+            } else {
+                self.show_new_booking_error(CoreError::AppointmentScopeDenied, cx);
+            }
             return;
         }
         if matches!(&self.overlay, Overlay::New(form) if !form.visit_parts.is_empty()) {
@@ -1534,6 +1546,9 @@ impl Root {
     }
 
     fn apply_move(&mut self, cx: &mut Context<Self>) {
+        if self.calendar_read_failed {
+            return;
+        }
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
@@ -1580,6 +1595,9 @@ impl Root {
     }
 
     fn cancel_appointment(&mut self, cx: &mut Context<Self>) {
+        if self.calendar_read_failed {
+            return;
+        }
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
@@ -1604,6 +1622,9 @@ impl Root {
         now: DateTime<Utc>,
         cx: &mut Context<Self>,
     ) {
+        if self.calendar_read_failed {
+            return;
+        }
         let Overlay::Details(d) = &mut self.overlay else {
             return;
         };
@@ -1676,6 +1697,14 @@ impl Root {
     // ---------------------------------------------------------------- dialogs: conflicts
 
     fn resolve(&mut self, mutation_id: &str, resolution: Resolution, cx: &mut Context<Self>) {
+        if self.calendar_read_failed && matches!(resolution, Resolution::Reschedule { .. }) {
+            let message = self.t(Key::CalendarReadFailed).to_owned();
+            if let Overlay::Conflicts { error, .. } = &mut self.overlay {
+                *error = Some(message);
+            }
+            cx.notify();
+            return;
+        }
         match ops::resolve_conflict(&mut self.svc.store, mutation_id, resolution) {
             Ok(()) => {
                 self.overlay = Overlay::Conflicts {
@@ -2532,6 +2561,43 @@ impl Root {
             .px(px(3.0))
             .child(card)
             .into_any_element()
+    }
+
+    fn render_calendar_read_error(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .debug_selector(|| "calendar-read-error".into())
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_3()
+            .p_5()
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(self.t(Key::CalendarReadFailed)),
+            )
+            .child(
+                div()
+                    .text_color(theme::muted())
+                    .child(self.t(Key::CalendarReadRetryHelp)),
+            )
+            .child(
+                self.button(
+                    "retry-calendar-read",
+                    self.t(Key::CalendarReadRetry),
+                    Kind::Primary,
+                    cx.listener(|this, _, _, cx| {
+                        this.svc.wake(Wake::Manual);
+                        this.reload(cx);
+                    }),
+                )
+                .debug_selector(|| "retry-calendar-read".into())
+                .tab_index(0)
+                .focus(|style| style.border_color(theme::text())),
+            )
     }
 
     fn render_calendar(
@@ -4818,21 +4884,23 @@ impl Root {
                                     cx.notify();
                                 }),
                             ))
-                            .child(self.button(
-                                ("c-apply", i),
-                                self.t(Key::ApplyMove),
-                                Kind::Primary,
-                                cx.listener(move |this, _, _, cx| {
-                                    this.resolve(
-                                        &m,
-                                        Resolution::Reschedule {
-                                            starts_at: start,
-                                            staff_id: Some(staff_id.clone()),
-                                        },
-                                        cx,
-                                    )
-                                }),
-                            )),
+                            .when(!self.calendar_read_failed, |actions| {
+                                actions.child(self.button(
+                                    ("c-apply", i),
+                                    self.t(Key::ApplyMove),
+                                    Kind::Primary,
+                                    cx.listener(move |this, _, _, cx| {
+                                        this.resolve(
+                                            &m,
+                                            Resolution::Reschedule {
+                                                starts_at: start,
+                                                staff_id: Some(staff_id.clone()),
+                                            },
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                            }),
                     );
             }
             let (m1, m2, m3) = (mid.clone(), mid.clone(), c.clone());
@@ -5075,39 +5143,51 @@ impl Render for Root {
                     base.flex()
                         .flex_col()
                         .child(self.render_header(cx))
-                        .when(self.calendar_mode == CalendarMode::Resources, |frame| {
-                            frame.child(self.render_resource_calendar(content_viewport.width, cx))
+                        .when(self.calendar_read_failed, |frame| {
+                            frame.child(self.render_calendar_read_error(cx))
                         })
-                        .when(self.calendar_mode != CalendarMode::Resources, |frame| {
-                            frame.children(self.render_calendar_resource_filter(cx))
-                        })
-                        .when(self.calendar_mode == CalendarMode::Week, |frame| {
-                            frame.child(self.render_week_controls(cx))
-                        })
-                        .when(self.team_calendar_visible(), |frame| {
+                        .when(!self.calendar_read_failed, |frame| {
                             frame
-                                .child(self.render_overview_filter(cx))
-                                .child(self.render_team_calendar(content_viewport.width, cx))
-                        })
-                        .when(self.calendar_mode.is_overview(), |frame| {
-                            frame
-                                .child(self.render_overview_filter(cx))
-                                .child(self.render_calendar_overview(cx))
-                        })
-                        .when(
-                            self.calendar_mode != CalendarMode::Resources
-                                && !self.calendar_mode.is_overview()
-                                && !self.team_calendar_visible(),
-                            |frame| {
-                                frame
-                                    .when(
-                                        self.calendar_mode == CalendarMode::Day
-                                            && !self.overview_staff.is_empty(),
-                                        |frame| frame.child(self.render_overview_staff_filter(cx)),
+                                .when(self.calendar_mode == CalendarMode::Resources, |frame| {
+                                    frame.child(
+                                        self.render_resource_calendar(content_viewport.width, cx),
                                     )
-                                    .child(self.render_calendar(content_viewport, cx))
-                            },
-                        )
+                                })
+                                .when(self.calendar_mode != CalendarMode::Resources, |frame| {
+                                    frame.children(self.render_calendar_resource_filter(cx))
+                                })
+                                .when(self.calendar_mode == CalendarMode::Week, |frame| {
+                                    frame.child(self.render_week_controls(cx))
+                                })
+                                .when(self.team_calendar_visible(), |frame| {
+                                    frame.child(self.render_overview_filter(cx)).child(
+                                        self.render_team_calendar(content_viewport.width, cx),
+                                    )
+                                })
+                                .when(self.calendar_mode.is_overview(), |frame| {
+                                    frame
+                                        .child(self.render_overview_filter(cx))
+                                        .child(self.render_calendar_overview(cx))
+                                })
+                                .when(
+                                    self.calendar_mode != CalendarMode::Resources
+                                        && !self.calendar_mode.is_overview()
+                                        && !self.team_calendar_visible(),
+                                    |frame| {
+                                        frame
+                                            .when(
+                                                self.calendar_mode == CalendarMode::Day
+                                                    && !self.overview_staff.is_empty(),
+                                                |frame| {
+                                                    frame.child(
+                                                        self.render_overview_staff_filter(cx),
+                                                    )
+                                                },
+                                            )
+                                            .child(self.render_calendar(content_viewport, cx))
+                                    },
+                                )
+                        })
                         .when(!self.notices.is_empty(), |d| {
                             d.child(self.render_notices(cx))
                         })
@@ -5277,6 +5357,69 @@ mod tests {
             .into_iter()
             .map(|e| e.kind)
             .collect()
+    }
+
+    #[gpui::test]
+    async fn an_unreadable_calendar_blocks_new_appointments_until_it_recovers(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(740.)));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            root.update(app, |root, cx| {
+                root.svc.stop_sync();
+                assert!(root.calendar_edits_allowed);
+                root.svc
+                    .store
+                    .set_meta("client_directory", "allowed")
+                    .unwrap();
+                ops::create_time_off(
+                    &mut root.svc.store,
+                    BEA,
+                    "2026-03-09T21:00:00Z".parse().unwrap(),
+                    "2026-03-09T21:30:00Z".parse().unwrap(),
+                    "Retained offline block",
+                )
+                .unwrap();
+                root.open_new(window, cx);
+                assert!(matches!(root.overlay, Overlay::New(_)));
+                root.date = NaiveDate::MAX;
+                root.set_calendar_mode(CalendarMode::Month, cx);
+                assert!(!root.calendar_edits_allowed);
+                root.book(cx);
+                assert!(matches!(&root.overlay, Overlay::New(form)
+                    if form.error == Some(Key::CalendarReadFailed)));
+                assert_eq!(outbox_kinds(root), ["time_off.create"]);
+                root.overlay = Overlay::None;
+                root.open_new(window, cx);
+                root.open_block(None, root.date, cx);
+                assert!(matches!(root.overlay, Overlay::None));
+                root.open_directory(cx);
+                assert!(matches!(root.overlay, Overlay::Directory(_)));
+                root.overlay = Overlay::None;
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("calendar-read-error").is_some());
+        let retry = cx.debug_bounds("retry-calendar-read").unwrap().center();
+        cx.simulate_click(retry, Default::default());
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("calendar-read-error").is_some());
+        root.update(cx, |root, _| {
+            root.date = "2026-03-09".parse().unwrap();
+            root.calendar_mode = CalendarMode::Day;
+        });
+        cx.simulate_click(retry, Default::default());
+        cx.run_until_parked();
+        root.update(cx, |root, _| {
+            assert!(root.calendar_edits_allowed);
+            assert!(!root.calendar_read_failed);
+            assert_eq!(root.view.as_ref().unwrap().columns[0].items.len(), 1);
+            assert_eq!(outbox_kinds(root), ["time_off.create"]);
+        });
     }
 
     #[gpui::test]

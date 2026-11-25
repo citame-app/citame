@@ -79,7 +79,8 @@ pub(super) fn wall_minutes(row: &TimeOff, day: NaiveDate, tz: Tz) -> (u32, u32) 
 
 impl Root {
     pub(super) fn can_manage_block(&self, staff: &Staff) -> bool {
-        self.time_off_scope == "all" || self.time_off_scope == staff.id
+        !self.calendar_read_failed
+            && (self.time_off_scope == "all" || self.time_off_scope == staff.id)
     }
 
     pub(super) fn render_time_off_list(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -364,6 +365,11 @@ impl Root {
         let Overlay::Block(form) = &mut self.overlay else {
             return;
         };
+        if self.calendar_read_failed {
+            form.error = Some(Key::CalendarReadFailed);
+            cx.notify();
+            return;
+        }
         let (old_start, old_end) = form
             .review
             .as_ref()
@@ -423,6 +429,11 @@ impl Root {
         let Overlay::Block(form) = &mut self.overlay else {
             return;
         };
+        if self.calendar_read_failed {
+            form.error = Some(Key::CalendarReadFailed);
+            cx.notify();
+            return;
+        }
         let Some(original) = &form.original else {
             return;
         };

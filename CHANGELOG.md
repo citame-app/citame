@@ -4,6 +4,8 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
+Desktop shows a recovery message when the local calendar cannot be read and pauses calendar edits until it can load again.
+
 The API checks OAuth signatures against the restored public keys before serving traffic. Startup validates keys assigned to MCP and Desktop without creating replacements and logs a structured error if the check fails.
 
 Prepared Booksy billing reports include owner-reviewed payment corrections when the audit trail connects the archived flags to the current appointment service.
