@@ -744,20 +744,31 @@ async function summarizeLocalPaymentReviews(tx: Tx, plan: NativePlan) {
   };
 }
 
-async function assertReconciliationSettings(tx: Tx, timezone: string, preparedCopy: boolean) {
+async function readValidatedReconciliationSettings(
+  tx: Tx,
+  timezone: string,
+  preparedCopy: boolean,
+) {
   const [settings] = await tx
     .select({
       timezone: salonSettings.timezone,
-      firstReminder: salonSettings.reminderFirstLeadMinutes,
-      secondReminder: salonSettings.reminderSecondLeadMinutes,
+      onlineBookingEnabled: salonSettings.onlineBookingEnabled,
+      reminderFirstLeadMinutes: salonSettings.reminderFirstLeadMinutes,
+      reminderSecondLeadMinutes: salonSettings.reminderSecondLeadMinutes,
     })
     .from(salonSettings);
   if (
     !settings ||
     settings.timezone !== timezone ||
-    (!preparedCopy && (settings.firstReminder !== null || settings.secondReminder !== null))
+    (!preparedCopy &&
+      (settings.reminderFirstLeadMinutes !== null || settings.reminderSecondLeadMinutes !== null))
   )
     throw new Error("The candidate must use the source timezone and pause appointment reminders");
+  return {
+    onlineBookingEnabled: settings.onlineBookingEnabled,
+    reminderFirstLeadMinutes: settings.reminderFirstLeadMinutes,
+    reminderSecondLeadMinutes: settings.reminderSecondLeadMinutes,
+  };
 }
 
 async function verifyNativePaymentEvidence(tx: Tx, plan: NativePlan) {
@@ -866,7 +877,11 @@ export async function inspectNativeBooksy(
       const { start, end } = booksyLocalDayBounds(date, model.base.timezone);
       if (date < model.fromDate || date > model.throughDate)
         throw new Error("The requested day is outside the captured calendar");
-      await assertReconciliationSettings(tx, model.base.timezone, options.preparedCopy === true);
+      const bookingPolicy = await readValidatedReconciliationSettings(
+        tx,
+        model.base.timezone,
+        options.preparedCopy === true,
+      );
       const base = await verifyBooksyProjection(tx, model.base, { candidate: true });
       const plan = planNativeRehearsal(model);
       const capacity = await expectedNativeCapacity(tx, plan);
@@ -960,6 +975,7 @@ export async function inspectNativeBooksy(
         .map(({ kind }) => ({ code: "unprojected_record", kind }));
       return {
         snapshotHash,
+        bookingPolicy,
         ...(options.preparedCopy
           ? {
               inspectionMode: "prepared-copy" as const,
@@ -1140,7 +1156,7 @@ export async function rehearseNativeBooksy(
             reminderSecondLeadMinutes: null,
           })
           .onConflictDoNothing();
-        await assertReconciliationSettings(tx, model.base.timezone, false);
+        await readValidatedReconciliationSettings(tx, model.base.timezone, false);
       }
       if (plan.resourceRules.length) {
         const [prior] = await tx

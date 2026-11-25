@@ -1228,6 +1228,13 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     const verified = await report();
     expect(verified.nativeFieldsVerified).toBe(true);
     expect(verified.canCutOver).toBe(false);
+    expect(verified).toMatchObject({
+      bookingPolicy: {
+        onlineBookingEnabled: true,
+        reminderFirstLeadMinutes: null,
+        reminderSecondLeadMinutes: null,
+      },
+    });
     expect(verified.bookingLinks).toBeUndefined();
     expect(verified.priceHolds).toBeUndefined();
     const verifyPaymentEvidence = () =>
@@ -1274,11 +1281,22 @@ test("candidate reconciliation rejects invented processing and an inactive staff
         reference: "Synthetic review",
       },
     });
-    await db.update(salonSettings).set({ reminderFirstLeadMinutes: 1440 });
+    await db.update(salonSettings).set({
+      reminderFirstLeadMinutes: 1440,
+      reminderSecondLeadMinutes: 90,
+      onlineBookingEnabled: false,
+    });
     const prepared = await inspectPreparedCopy();
     expect(prepared.inspectionMode).toBe("prepared-copy");
     expect(prepared.nativeFieldsVerified).toBe(true);
     expect(prepared.canCutOver).toBe(false);
+    expect(prepared).toMatchObject({
+      bookingPolicy: {
+        onlineBookingEnabled: false,
+        reminderFirstLeadMinutes: 1440,
+        reminderSecondLeadMinutes: 90,
+      },
+    });
     expect(prepared.candidate.receipts).toBe(1);
     expect(prepared.candidate.payments).toBe(0);
     expect(prepared.localPaymentReviews).toEqual({
@@ -1290,7 +1308,11 @@ test("candidate reconciliation rejects invented processing and an inactive staff
     expect(await db.select({ id: checkout.id }).from(checkout)).toEqual([{ id: draftId }]);
     await db.delete(checkout).where(eq(checkout.id, draftId));
     await db.delete(auditLog).where(eq(auditLog.id, unpaidReviewId));
-    await db.update(salonSettings).set({ reminderFirstLeadMinutes: null });
+    await db.update(salonSettings).set({
+      reminderFirstLeadMinutes: null,
+      reminderSecondLeadMinutes: null,
+      onlineBookingEnabled: true,
+    });
     const withPrivateLinks = await inspectNativeBooksy(db, hash, source.fromDate, {
       bookingLinks: true,
       priceHolds: "day",
