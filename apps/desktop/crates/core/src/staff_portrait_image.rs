@@ -14,17 +14,20 @@ pub(crate) fn is_bounded_jpeg(bytes: &[u8]) -> bool {
 }
 
 pub fn prepare_photo(path: &Path) -> Option<Vec<u8>> {
-    const MAX_BYTES: u64 = 20 * 1024 * 1024;
+    prepare_photo_with_limit(path, 20 * 1024 * 1024)
+}
+
+pub fn prepare_photo_with_limit(path: &Path, max_bytes: u64) -> Option<Vec<u8>> {
     if !std::fs::metadata(path).ok()?.is_file() {
         return None;
     }
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .ok()?
-        .take(MAX_BYTES + 1)
+        .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
         .ok()?;
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return None;
     }
 

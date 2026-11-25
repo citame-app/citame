@@ -76,15 +76,27 @@ export function createSmtpProvider(
           html: message.html,
           messageId: `<${message.idempotencyKey}@${domain}>`,
           headers: message.headers,
-          attachments: message.ics
-            ? [
-                {
-                  filename: "invite.ics",
-                  content: message.ics,
-                  contentType: "text/calendar; charset=utf-8; method=PUBLISH",
-                },
-              ]
-            : undefined,
+          attachments: [
+            ...(message.ics
+              ? [
+                  {
+                    filename: "invite.ics",
+                    content: message.ics,
+                    contentType: "text/calendar; charset=utf-8; method=PUBLISH",
+                  },
+                ]
+              : []),
+            ...(message.inlineJpeg
+              ? [
+                  {
+                    filename: "campaign-header.jpg",
+                    content: Buffer.from(message.inlineJpeg.imageBase64, "base64"),
+                    contentType: "image/jpeg",
+                    cid: message.inlineJpeg.cid,
+                  },
+                ]
+              : []),
+          ],
         });
         return { messageId: info.messageId };
       } catch (error) {

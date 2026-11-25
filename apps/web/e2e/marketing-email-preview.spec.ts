@@ -3,6 +3,57 @@ import { expectNoHorizontalScroll } from "./admin-helpers";
 import { expectNoSeriousA11yViolations, signInThroughUi } from "./helpers";
 import { waitForMail } from "./mail";
 
+test("a campaign header is previewed, reopens from its saved draft, and can be removed", async ({
+  page,
+}) => {
+  const email = process.env.E2E_OWNER_EMAIL;
+  const password = process.env.E2E_OWNER_PASSWORD;
+  if (!email || !password) {
+    test.skip(true, "The isolated owner is required");
+    return;
+  }
+  const name = `Header image ${crypto.randomUUID()}`;
+  await signInThroughUi(page, email, "/admin/marketing", password);
+  await page.getByRole("button", { name: "Campaigns and automations", exact: true }).click();
+  await page.getByRole("button", { name: "New campaign", exact: true }).click();
+  const draft = page.getByRole("dialog", { name: "New campaign", exact: true });
+  await draft.getByRole("button", { name: "Write your own message", exact: true }).click();
+  await draft.getByLabel("Campaign name", { exact: true }).fill(name);
+  await draft.getByLabel("Email subject", { exact: true }).fill("Open studio");
+  await draft.getByLabel("Email message", { exact: true }).fill("Join us on Saturday.");
+  await draft.getByRole("radio", { name: "With layout" }).check();
+  const picker = draft.getByLabel(/^Header image/);
+  await picker.setInputFiles({
+    name: "header.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAwAAAAGCAIAAAB4jOjWAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWOYZRFHEDEMVUUAJmlVgfbTbXoAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  const description = draft.getByLabel("Image description");
+  await expect(description).toBeEditable();
+  await draft.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(draft.getByText("Describe the image for readers who cannot see it.")).toBeVisible();
+  await description.fill("The pink studio entrance");
+  await expect(draft.getByRole("img", { name: "The pink studio entrance" })).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  await expectNoSeriousA11yViolations(page, "Campaign header editor");
+  await draft.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(draft).not.toBeVisible();
+
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  const reopened = page.getByRole("dialog", { name: "Edit", exact: true });
+  await expect(reopened.getByLabel("Image description")).toHaveValue("The pink studio entrance");
+  await expect(reopened.getByRole("img", { name: "The pink studio entrance" })).toBeVisible();
+  await reopened.getByRole("button", { name: "Remove image", exact: true }).click();
+  await reopened.getByRole("button", { name: "Save draft", exact: true }).click();
+  await expect(reopened).not.toBeVisible();
+  await page.getByRole("button", { name: new RegExp(name) }).click();
+  await expect(reopened.getByLabel(/^Header image/)).toBeAttached();
+  await expect(reopened.getByLabel("Image description")).toHaveCount(0);
+});
+
 test("booking invitations review selected contacts without granting marketing permission", async ({
   page,
 }) => {

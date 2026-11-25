@@ -5,6 +5,7 @@ use std::{cell::Cell, rc::Rc};
 mod email_layout;
 mod invitation;
 use email_layout::LayoutEditor;
+pub(super) use email_layout::saved_header_preview;
 use invitation::InvitationEditor;
 
 const MAX_EDITABLE_LINES: usize = EmailLayout::PARAGRAPH_LINE_LIMIT;
@@ -265,6 +266,13 @@ impl Editor {
     }
 
     fn packet(&self, cx: &App) -> Option<DraftWrite> {
+        if self
+            .email_layout
+            .as_ref()
+            .is_some_and(LayoutEditor::selecting_image)
+        {
+            return None;
+        }
         let selected_client_ids = match &self.invitation {
             Some(invitation) => Some(invitation.packet()?),
             None => None,
@@ -643,7 +651,7 @@ impl Root {
                             .child(preview_message(&text(&editor.subject, cx))),
                     )
                     .child(if let Some(layout) = &editor.email_layout {
-                        self.render_email_layout_preview(&layout.packet(cx))
+                        self.render_email_layout_preview(&layout.packet(cx), layout.image_preview())
                     } else {
                         div().child(preview_message(&message_text(&editor.email.lines, cx)))
                     })
@@ -875,6 +883,7 @@ mod tests {
         });
         root.update(cx, |_, cx| {
             let layout = EmailLayout {
+                header_image: None,
                 heading: "Hello {{first_name}}".into(),
                 preheader: "Appointment times are available".into(),
                 blocks: vec![

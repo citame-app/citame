@@ -246,6 +246,7 @@ export function createMarketingWorker(options: {
       const unsubscribeUrl = `${config.publicUrl}/marketing/opt-out?token=${token}`;
       const rendered = renderCampaignMessage({
         ...campaign,
+        messageId: row.id,
         name: client.name,
         firstName: client.contactDetails.firstName,
         salonName: salon.name,
@@ -309,6 +310,7 @@ export function createMarketingWorker(options: {
               subject: rendered.subject,
               text: rendered.text,
               html: rendered.html,
+              inlineJpeg: rendered.inlineJpeg,
               headers: {
                 "List-Unsubscribe": `<${config.publicUrl}/api/marketing/opt-out?token=${token}>`,
                 "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",

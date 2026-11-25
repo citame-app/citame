@@ -16,12 +16,16 @@ function renderEmailLayout(
   renderText: (text: string) => string,
   replace: (text: string) => string,
   bookingHref: string,
+  headerCid: string,
 ) {
   const preheader = layout.preheader
     ? `<div aria-hidden="true" style="display:none;max-height:0;overflow:hidden">${escapeHtml(replace(layout.preheader))}</div>`
     : "";
   const header = layout.heading
     ? `<header style="padding:24px;background:#f8edf2;color:#321223"><h1 style="margin:0;font-size:26px">${renderText(layout.heading)}</h1></header>`
+    : "";
+  const image = layout.headerImage
+    ? `<img src="cid:${headerCid}" width="600" alt="${escapeHtml(layout.headerImage.alt)}" style="width:100%;height:auto;display:block">`
     : "";
   const blocks = layout.blocks.map((block) => {
     if (block.kind === "heading")
@@ -37,10 +41,11 @@ function renderEmailLayout(
           : text;
     return `<p>${content}</p>`;
   });
-  return `${preheader}<div style="max-width:600px;margin:auto;font:16px/1.5 Arial,sans-serif">${header}<div style="padding:16px 24px">${blocks.join("")}</div></div>`;
+  return `${preheader}<div style="max-width:600px;margin:auto;font:16px/1.5 Arial,sans-serif">${image}${header}<div style="padding:16px 24px">${blocks.join("")}</div></div>`;
 }
 
 export function renderCampaignMessage(input: {
+  messageId: string;
   subject: string;
   emailBody: string;
   emailLayout?: unknown;
@@ -62,6 +67,7 @@ export function renderCampaignMessage(input: {
     );
   const layout =
     input.emailLayout == null ? null : campaignEmailLayoutSchema.parse(input.emailLayout);
+  const headerCid = `campaign-header.${input.messageId}@citame.app`;
   const body = replace(layout ? campaignEmailLayoutText(layout) : input.emailBody);
   const bookingHref = escapeHtml(input.bookingUrl);
   const renderText = (text: string) =>
@@ -70,7 +76,7 @@ export function renderCampaignMessage(input: {
       .map((part) => escapeHtml(replace(part)).replace(/\n/g, "<br>"))
       .join(`<a href="${bookingHref}">${bookingHref}</a>`);
   const htmlBody = layout
-    ? renderEmailLayout(layout, renderText, replace, bookingHref)
+    ? renderEmailLayout(layout, renderText, replace, bookingHref, headerCid)
     : `<p>${renderText(input.emailBody)}</p>`;
   const reviewText = input.reviewUrl ? `\n\n${input.reviewUrl}` : "";
   const reviewLink = input.reviewUrl
@@ -84,6 +90,9 @@ export function renderCampaignMessage(input: {
     subject: replace(input.subject).replace(/[\r\n]/g, " "),
     text: `${body}${reviewText}\n\nUnsubscribe / Darse de baja: ${unsubscribeText}`,
     html: `<!doctype html><html><body>${htmlBody}${reviewLink}<p>${unsubscribe}</p></body></html>`,
+    ...(layout?.headerImage && {
+      inlineJpeg: { cid: headerCid, imageBase64: layout.headerImage.imageBase64 },
+    }),
     sms: `${replace(input.smsBody)}\n${unsubscribeText}`,
   };
 }

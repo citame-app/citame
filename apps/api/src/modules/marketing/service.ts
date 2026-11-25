@@ -4,6 +4,8 @@ import {
   BOOKING_INVITATION_MAX_CONTACTS,
   type Campaign,
   type CampaignCreate,
+  type CampaignDetailQuery,
+  type CampaignEmailLayout,
   type CampaignQuery,
   type CampaignQueue,
   type CampaignUpdate,
@@ -19,13 +21,14 @@ import {
   marketingCampaign,
   marketingDelivery,
 } from "@sob/db";
-import { and, count, desc, eq, ilike, inArray, isNull, sql } from "drizzle-orm";
+import { and, count, desc, eq, getTableColumns, ilike, inArray, isNull, sql } from "drizzle-orm";
 import { recordAudit } from "../../audit";
 import { requirePermission } from "../../auth/policy";
 import type { Principal } from "../../auth/principal";
 import type { NotificationConfig } from "../../config";
 import { DomainError } from "../../errors";
 import type { Tx } from "../../tx";
+import { normalizeClientPhoto } from "../clients/photo-image";
 import { campaignAudience, marketingCapabilities } from "./audience";
 
 type Connection = Database | Tx;
@@ -38,6 +41,18 @@ function normalizeEmail(fields: Omit<CampaignCreate, "id">) {
   if (fields.channel === "sms")
     throw new DomainError("validation_error", "Formatted content requires an email channel");
   return { ...fields, emailBody: campaignEmailLayoutText(fields.emailLayout) };
+}
+
+async function normalizedHeader(
+  layout: CampaignEmailLayout,
+  existing?: CampaignEmailLayout["headerImage"],
+): Promise<CampaignEmailLayout> {
+  const { headerImage } = layout;
+  if (headerImage === undefined && existing !== undefined)
+    return { ...layout, headerImage: existing };
+  if (!headerImage || existing?.imageBase64 === headerImage.imageBase64) return layout;
+  const { image } = await normalizeClientPhoto(headerImage.imageBase64);
+  return { ...layout, headerImage: { ...headerImage, imageBase64: image.toString("base64") } };
 }
 
 function draftPurpose(fields: Pick<CampaignCreate, "audience" | "trigger">) {
@@ -85,8 +100,9 @@ async function campaignCounts(db: Connection, ids: string[]) {
 }
 export async function campaignViews(
   db: Connection,
-  rows: CampaignRow[],
+  rows: (CampaignRow & { hasHeaderImage?: boolean })[],
   includeEmailLayout = false,
+  includeHeaderImage = false,
 ): Promise<Campaign[]> {
   const totals = await campaignCounts(
     db,
@@ -113,11 +129,19 @@ export async function campaignViews(
       evaluatedAt: ___,
       purpose: ____,
       emailLayout,
+      hasHeaderImage,
       ...visible
     } = row;
+    const layout = includeEmailLayout
+      ? campaignEmailLayoutSchema.nullable().parse(emailLayout)
+      : undefined;
+    const { headerImage, ...textLayout } = layout ?? {};
     return campaignSchema.parse({
       ...visible,
-      ...(includeEmailLayout ? { emailLayout } : {}),
+      ...(includeEmailLayout && {
+        emailLayout: layout && (includeHeaderImage ? layout : textLayout),
+      }),
+      ...(includeHeaderImage && hasHeaderImage ? { hasHeaderImage: true } : {}),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
       scheduledFor: row.scheduledFor?.toISOString() ?? null,
@@ -135,11 +159,19 @@ export async function getCampaign(
   db: Database,
   id: string,
   p: Principal,
-  includeEmailLayout = false,
+  query: CampaignDetailQuery,
 ) {
   requirePermission(p, "editCatalog");
   return db.transaction(
-    async (tx) => (await campaignViews(tx, [await campaignRow(tx, id)], includeEmailLayout))[0]!,
+    async (tx) =>
+      (
+        await campaignViews(
+          tx,
+          [await campaignRow(tx, id)],
+          query.emailLayout === "1",
+          query.headerImages === "1",
+        )
+      )[0]!,
     {
       isolationLevel: "repeatable read",
       accessMode: "read only",
@@ -185,14 +217,20 @@ export async function listCampaigns(db: Database, q: CampaignQuery, p: Principal
     async (tx) => {
       const [total] = await tx.select({ n: count() }).from(marketingCampaign).where(where);
       const rows = await tx
-        .select()
+        .select({
+          ...getTableColumns(marketingCampaign),
+          emailLayout: sql<
+            CampaignRow["emailLayout"]
+          >`${marketingCampaign.emailLayout} - 'headerImage'`,
+          hasHeaderImage: sql<boolean>`coalesce(jsonb_typeof(${marketingCampaign.emailLayout}->'headerImage') = 'object', false)`,
+        })
         .from(marketingCampaign)
         .where(where)
         .orderBy(desc(marketingCampaign.createdAt), desc(marketingCampaign.id))
         .limit(q.pageSize)
         .offset((q.page - 1) * q.pageSize);
       return {
-        campaigns: await campaignViews(tx, rows, q.emailLayout === "1"),
+        campaigns: await campaignViews(tx, rows, q.emailLayout === "1", q.headerImages === "1"),
         pagination: { page: q.page, pageSize: q.pageSize, total: total?.n ?? 0 },
         bookingInvitations: q.bookingInvitations ? true : undefined,
       };
@@ -205,6 +243,7 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
   const { id, ...draft } = input;
   const fields = normalizeEmail(draft);
   const includeEmailLayout = fields.emailLayout !== undefined;
+  const includeHeaderImage = fields.emailLayout?.headerImage !== undefined;
   const purpose = draftPurpose(fields);
   const digest = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
   return db.transaction(async (tx) => {
@@ -218,11 +257,14 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
     if (previous) {
       if (previous.createdBy !== p.userId || previous.requestDigest !== digest)
         throw new DomainError("invalid_state", "Campaign request already used");
-      return (await campaignViews(tx, [previous], includeEmailLayout))[0]!;
+      return (await campaignViews(tx, [previous], includeEmailLayout, includeHeaderImage))[0]!;
     }
+    const emailLayout = fields.emailLayout
+      ? await normalizedHeader(fields.emailLayout)
+      : fields.emailLayout;
     const [row] = await tx
       .insert(marketingCampaign)
-      .values({ id, ...fields, purpose, createdBy: p.userId, requestDigest: digest })
+      .values({ id, ...fields, emailLayout, purpose, createdBy: p.userId, requestDigest: digest })
       .returning();
     if (!row) throw Error("Campaign insert failed");
     await recordAudit(tx, {
@@ -231,7 +273,7 @@ export async function createCampaign(db: Database, input: CampaignCreate, p: Pri
       entity: "marketing_campaign",
       entityId: id,
     });
-    return (await campaignViews(tx, [row], includeEmailLayout))[0]!;
+    return (await campaignViews(tx, [row], includeEmailLayout, includeHeaderImage))[0]!;
   });
 }
 export async function updateCampaign(
@@ -247,28 +289,37 @@ export async function updateCampaign(
     const { version, ...draft } = input;
     const fields = normalizeEmail(draft);
     const includeEmailLayout = fields.emailLayout !== undefined;
+    const includeHeaderImage = fields.emailLayout?.headerImage !== undefined;
     if (draftPurpose(fields) !== current.purpose)
       throw new DomainError(
         "invalid_state",
         "Keep the reviewed type and audience of this campaign",
       );
-    if (
-      allowIdenticalReplay &&
+    const mayReplay =
+      (allowIdenticalReplay || includeHeaderImage) &&
       current.status === "draft" &&
-      (current.version === version || current.version === version + 1) &&
-      Object.entries(fields).every(([key, value]) =>
-        isDeepStrictEqual(current[key as keyof typeof fields], value),
-      )
-    ) {
-      return (await campaignViews(tx, [current], includeEmailLayout))[0]!;
-    }
-    if (current.version !== version)
+      current.version === version + 1;
+    if (current.version !== version && !mayReplay)
       throw new DomainError("version_conflict", "Campaign changed; reload before editing");
     if (current.status !== "draft")
       throw new DomainError(
         "invalid_state",
         "Only a draft can be edited; cancel or duplicate this campaign",
       );
+    if (fields.emailLayout) {
+      const existing = campaignEmailLayoutSchema.nullable().parse(current.emailLayout);
+      fields.emailLayout = await normalizedHeader(fields.emailLayout, existing?.headerImage);
+    }
+    if (
+      (allowIdenticalReplay || mayReplay) &&
+      Object.entries(fields).every(([key, value]) =>
+        isDeepStrictEqual(current[key as keyof typeof fields], value),
+      )
+    ) {
+      return (await campaignViews(tx, [current], includeEmailLayout, includeHeaderImage))[0]!;
+    }
+    if (current.version !== version)
+      throw new DomainError("version_conflict", "Campaign changed; reload before editing");
     if (
       current.emailLayout &&
       !includeEmailLayout &&
@@ -290,7 +341,7 @@ export async function updateCampaign(
       entity: "marketing_campaign",
       entityId: id,
     });
-    return (await campaignViews(tx, [row], includeEmailLayout))[0]!;
+    return (await campaignViews(tx, [row], includeEmailLayout, includeHeaderImage))[0]!;
   });
 }
 function requireContent(row: CampaignRow) {

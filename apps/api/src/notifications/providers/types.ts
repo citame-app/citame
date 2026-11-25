@@ -5,6 +5,7 @@ export interface EmailMessage {
   html: string;
   /** Calendar entry, attached as `invite.ics`. */
   ics?: string;
+  inlineJpeg?: { cid: string; imageBase64: string };
   headers?: Record<string, string>;
   /** Stable per reminder row: providers that support it use it to drop duplicate sends. */
   idempotencyKey: string;

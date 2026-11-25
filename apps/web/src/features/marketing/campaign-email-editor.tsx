@@ -7,9 +7,11 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { TextField } from "~/components/ui/field";
 import { SelectField, TextAreaField } from "~/components/ui/select-field";
+import { preparePrivatePhoto } from "~/features/admin/clients/prepare-photo";
 import { useI18n } from "~/i18n/react";
 
 type Block = CampaignEmailLayout["blocks"][number];
+type HeaderImage = NonNullable<CampaignEmailLayout["headerImage"]>;
 const blockKinds = ["paragraph", "heading", "booking"] as const;
 const emphases = ["none", "strong", "italic"] as const;
 
@@ -24,6 +26,8 @@ export function CampaignEmailEditor({
   layout,
   onBodyChange,
   onLayoutChange,
+  onHeaderImageChange,
+  onImagePreparing,
   invalid,
   bodyError,
 }: {
@@ -31,6 +35,8 @@ export function CampaignEmailEditor({
   layout: CampaignEmailLayout | null | undefined;
   onBodyChange: (body: string) => void;
   onLayoutChange: (layout: CampaignEmailLayout | null, body: string) => void;
+  onHeaderImageChange: (image: HeaderImage | null) => void;
+  onImagePreparing: (preparing: boolean) => void;
   invalid: boolean;
   bodyError?: string;
 }) {
@@ -101,6 +107,12 @@ export function CampaignEmailEditor({
             value={layout.preheader}
             maxLength={CAMPAIGN_EMAIL_LIMITS.preheader}
             onChange={(event) => onLayoutChange({ ...layout, preheader: event.target.value }, body)}
+          />
+          <CampaignHeaderImage
+            image={layout.headerImage}
+            invalid={invalid}
+            onChange={onHeaderImageChange}
+            onPreparing={onImagePreparing}
           />
           <ol className="space-y-3">
             {layout.blocks.map((block, index) => {
@@ -251,6 +263,111 @@ function previewText(value: string) {
     .replaceAll("{{booking_url}}", "https://citame.example/book");
 }
 
+function CampaignHeaderImage({
+  image,
+  invalid,
+  onChange,
+  onPreparing,
+}: {
+  image?: HeaderImage | null;
+  invalid: boolean;
+  onChange: (value: HeaderImage | null) => void;
+  onPreparing: (working: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const id = useId();
+  const selection = useRef<AbortController | null>(null);
+  const [working, setWorking] = useState(false);
+  const [failed, setFailed] = useState(false);
+  useEffect(
+    () => () => {
+      selection.current?.abort();
+      onPreparing(false);
+    },
+    [onPreparing],
+  );
+
+  async function load(file: File) {
+    const current = new AbortController();
+    selection.current?.abort();
+    selection.current = current;
+    setWorking(true);
+    onPreparing(true);
+    setFailed(false);
+    try {
+      const imageBase64 = await preparePrivatePhoto(file, {
+        maxPixels: 32_000_000,
+        maxDimension: 16_384,
+      });
+      if (!current.signal.aborted) onChange({ imageBase64, alt: image?.alt ?? "" });
+    } catch {
+      if (!current.signal.aborted) setFailed(true);
+    } finally {
+      if (!current.signal.aborted) {
+        setWorking(false);
+        onPreparing(false);
+      }
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <span id={`${id}-title`} className="block text-sm font-medium">
+        {t("marketing.emailHeaderImage")}
+      </span>
+      <input
+        id={id}
+        type="file"
+        className="peer sr-only"
+        accept="image/jpeg,image/png,image/webp"
+        aria-labelledby={`${id}-title ${id}-button`}
+        aria-describedby={`${id}-help`}
+        disabled={working}
+        onChange={(event) => {
+          const file = event.currentTarget.files?.[0];
+          event.currentTarget.value = "";
+          if (file) void load(file);
+        }}
+      />
+      <label
+        id={`${id}-button`}
+        htmlFor={id}
+        className="inline-flex min-h-11 cursor-pointer items-center rounded-md border border-line bg-surface px-3 text-sm font-medium hover:bg-sunken peer-focus-visible:ring-2 peer-focus-visible:ring-offset-2 peer-disabled:pointer-events-none peer-disabled:opacity-50"
+      >
+        {t(image ? "marketing.emailImageReplace" : "marketing.emailImageChoose")}
+      </label>
+      <p id={`${id}-help`} aria-live="polite" className="text-sm text-muted">
+        {t(working ? "marketing.emailImagePreparing" : "marketing.emailImageHelp")}
+      </p>
+      {failed && (
+        <p role="alert" className="text-sm text-danger-fg">
+          {t("marketing.emailImageInvalid")}
+        </p>
+      )}
+      {image && (
+        <>
+          <TextField
+            label={t("marketing.emailImageAlt")}
+            value={image.alt}
+            maxLength={CAMPAIGN_EMAIL_LIMITS.imageAlt}
+            disabled={working}
+            onChange={(event) => onChange({ ...image, alt: event.target.value })}
+            error={invalid && !image.alt.trim() ? t("marketing.emailImageAltRequired") : undefined}
+          />
+          <Button
+            variant="secondary"
+            type="button"
+            disabled={working}
+            onClick={() => onChange(null)}
+          >
+            {t("marketing.emailImageRemove")}
+          </Button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function CampaignEmailPreview({
   body,
   layout,
@@ -262,6 +379,15 @@ export function CampaignEmailPreview({
   return (
     <div className="mt-3 space-y-3 break-words">
       {layout.preheader && <p className="text-sm text-muted">{previewText(layout.preheader)}</p>}
+      {layout.headerImage && (
+        <div className="grid aspect-video max-w-lg place-items-center overflow-hidden rounded-md bg-sunken">
+          <img
+            className="size-full min-h-0 object-contain"
+            src={`data:image/jpeg;base64,${layout.headerImage.imageBase64}`}
+            alt={layout.headerImage.alt}
+          />
+        </div>
+      )}
       {layout.heading && <h4 className="text-xl font-semibold">{previewText(layout.heading)}</h4>}
       {layout.blocks.map((block, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: This static preview has no state or focusable controls.

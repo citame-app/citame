@@ -315,6 +315,7 @@ export async function requestCampaignTest(
   const { draft, recipient, salonName } = claim;
   const message = renderCampaignMessage({
     ...draft,
+    messageId: `test.${draft.id}.${input.requestId}`,
     name: recipient.name,
     firstName: recipient.name.trim().split(/\s+/, 1)[0],
     salonName,
@@ -331,6 +332,7 @@ export async function requestCampaignTest(
           subject: `[Prueba / Test] ${message.subject}`,
           text: message.text,
           html: message.html,
+          inlineJpeg: message.inlineJpeg,
           idempotencyKey: input.requestId,
         });
       } finally {

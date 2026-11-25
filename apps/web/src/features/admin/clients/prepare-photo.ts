@@ -1,7 +1,10 @@
 import { CLIENT_PHOTO_INPUT_MAX_BYTES } from "@sob/contracts";
 
 /** Reduce camera files locally; the server independently decodes and strips metadata again. */
-export async function preparePrivatePhoto(file: File): Promise<string> {
+export async function preparePrivatePhoto(
+  file: File,
+  limits?: { maxPixels: number; maxDimension: number },
+): Promise<string> {
   if (!file.size || file.size > 15 * 1024 * 1024) throw new Error("Photo exceeds the file limit");
   const prefix = new Uint8Array(await file.slice(0, 12).arrayBuffer());
   const signature = Array.from(prefix);
@@ -15,6 +18,12 @@ export async function preparePrivatePhoto(file: File): Promise<string> {
     imageOrientation: "from-image",
   });
   try {
+    if (
+      limits &&
+      (bitmap.width * bitmap.height > limits.maxPixels ||
+        Math.max(bitmap.width, bitmap.height) > limits.maxDimension)
+    )
+      throw new Error("Image exceeds dimension limits");
     const scale = Math.min(1, 1024 / bitmap.width, 1024 / bitmap.height);
     const canvas = document.createElement("canvas");
     canvas.width = Math.max(1, Math.round(bitmap.width * scale));

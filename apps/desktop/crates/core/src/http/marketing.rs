@@ -1,4 +1,5 @@
 use super::*;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use url::form_urlencoded;
@@ -75,7 +76,47 @@ impl Pagination {
 pub struct EmailLayout {
     pub heading: String,
     pub preheader: String,
+    /// Omit when unchanged. Explicit null removes the saved header.
+    #[serde(
+        default,
+        rename = "headerImage",
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_header_image"
+    )]
+    pub header_image: Option<Option<EmailHeaderImage>>,
     pub blocks: Vec<EmailBlock>,
+}
+
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EmailHeaderImage {
+    pub image_base64: String,
+    pub alt: String,
+}
+
+fn deserialize_header_image<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<EmailHeaderImage>>, D::Error> {
+    Option::deserialize(deserializer).map(Some)
+}
+
+impl std::fmt::Debug for EmailHeaderImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailHeaderImage").finish_non_exhaustive()
+    }
+}
+
+impl EmailHeaderImage {
+    pub fn from_jpeg(bytes: &[u8], alt: String) -> Self {
+        Self {
+            image_base64: STANDARD.encode(bytes),
+            alt,
+        }
+    }
+
+    pub fn jpeg_bytes(&self) -> Option<Vec<u8>> {
+        STANDARD.decode(&self.image_base64).ok()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -105,9 +146,14 @@ impl EmailLayout {
     pub const BODY_LIMIT: usize = 10_000;
     pub const HEADING_LIMIT: usize = 140;
     pub const PREHEADER_LIMIT: usize = 150;
+    pub const IMAGE_ALT_LIMIT: usize = 180;
     pub const BOOKING_LIMIT: usize = 80;
     pub const BLOCK_LIMIT: usize = 16;
     pub const PARAGRAPH_LINE_LIMIT: usize = 256;
+
+    pub fn header_image(&self) -> Option<&EmailHeaderImage> {
+        self.header_image.as_ref()?.as_ref()
+    }
 
     pub fn plain_text(&self) -> String {
         [&self.heading, &self.preheader]
@@ -137,6 +183,9 @@ impl EmailLayout {
         let line = |text: &str, limit| fits(text, limit) && !text.contains(['\r', '\n']);
         if !line(&self.heading, Self::HEADING_LIMIT)
             || !line(&self.preheader, Self::PREHEADER_LIMIT)
+            || self.header_image().is_some_and(|image| {
+                image.alt.trim().is_empty() || !line(&image.alt, Self::IMAGE_ALT_LIMIT)
+            })
             || !(1..=Self::BLOCK_LIMIT).contains(&self.blocks.len())
             || !self.blocks.iter().all(|block| match block {
                 EmailBlock::Heading { text } => !text.is_empty() && line(text, Self::HEADING_LIMIT),
@@ -575,7 +624,7 @@ impl HttpTransport {
         read_response(
             self.get(
                 &self.agent,
-                &format!("{PATH}/{}?emailLayout=1", parse_id(id)?),
+                &format!("{PATH}/{}?emailLayout=1&headerImages=1", parse_id(id)?),
                 None,
             )?,
             false,

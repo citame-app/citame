@@ -114,12 +114,20 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
     setSelected((items) => items.filter((item) => item.id !== id));
   const [saved, setSaved] = useState(false);
   const queries = useQueryClient();
+  const openDraft = useMutation({
+    mutationFn: (id: string) => api().marketing.get(id, true),
+    onSuccess: (campaign) => {
+      if (campaign.status === "draft") setEditing({ initial: campaign });
+      else setDetail(campaign);
+    },
+  });
   const query = useQuery({
     queryKey: ["marketing", "campaigns", viewerId, term, status, page],
     queryFn: () =>
       api().marketing.list({
         bookingInvitations: "1",
         emailLayout: "1",
+        headerImages: "1",
         search: term,
         status: campaignStatusSchema.safeParse(status).success
           ? (status as Campaign["status"])
@@ -140,6 +148,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
         <div className="flex flex-wrap gap-2">
           {query.data?.bookingInvitations && !query.isError && (
             <Button
+              disabled={openDraft.isPending}
               variant="secondary"
               onClick={() => {
                 setSaved(false);
@@ -162,6 +171,7 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
             </Button>
           )}
           <Button
+            disabled={openDraft.isPending}
             onClick={() => {
               setSaved(false);
               setEditing({ initial: null });
@@ -175,6 +185,9 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
         <p role="status" className="text-sm text-success-fg">
           {t("marketing.saved")}
         </p>
+      )}
+      {openDraft.isError && (
+        <ErrorState error={openDraft.error} onRetry={() => openDraft.mutate(openDraft.variables)} />
       )}
       <div className="grid gap-3 sm:grid-cols-[1fr_15rem]">
         <TextField
@@ -266,10 +279,14 @@ export function CampaignsView({ viewerId, isOwner }: { viewerId: string; isOwner
 
                   <button
                     type="button"
+                    disabled={openDraft.isPending}
                     className="flex min-h-24 w-full flex-wrap items-center justify-between gap-4 p-5 text-left hover:bg-sunken"
-                    onClick={() =>
-                      c.status === "draft" ? setEditing({ initial: c }) : setDetail(c)
-                    }
+                    onClick={() => {
+                      openDraft.reset();
+                      if (c.status !== "draft") setDetail(c);
+                      else if (c.hasHeaderImage) openDraft.mutate(c.id);
+                      else setEditing({ initial: c });
+                    }}
                   >
                     <span className="min-w-0">
                       <strong className="block break-words">{c.name}</strong>
@@ -483,6 +500,7 @@ function CampaignEditor({
   const [id] = useState(() => crypto.randomUUID());
   const [invalid, setInvalid] = useState(false);
   const [discard, setDiscard] = useState(false);
+  const [imagePreparing, setImagePreparing] = useState(false);
   const action = useRef(false);
   const layout = campaignEmailLayoutSchema.safeParse(draft.emailLayout);
   const candidate = campaignDraftSchema.safeParse({
@@ -543,6 +561,7 @@ function CampaignEditor({
     else onClose();
   };
   const submit = (review: boolean) => {
+    if (imagePreparing) return;
     if (uncertain) {
       save.mutate();
       return;
@@ -587,13 +606,13 @@ function CampaignEditor({
             </Button>
             <Button
               variant="secondary"
-              disabled={!online || save.isPending || uncertain}
+              disabled={!online || save.isPending || uncertain || imagePreparing}
               onClick={() => submit(false)}
             >
               {t("marketing.saveDraft")}
             </Button>
             <Button
-              disabled={!online || save.isPending}
+              disabled={!online || save.isPending || imagePreparing}
               loading={save.isPending}
               onClick={() => submit(true)}
             >
@@ -609,7 +628,7 @@ function CampaignEditor({
             submit(true);
           }}
         >
-          <fieldset disabled={disabled} className="space-y-5">
+          <fieldset disabled={disabled || imagePreparing} className="space-y-5">
             {!initial && !copy && (
               <fieldset>
                 <legend className="mb-2 text-sm font-medium">{t("marketing.templates")}</legend>
@@ -709,6 +728,16 @@ function CampaignEditor({
                     changed();
                     setInvalid(false);
                   }}
+                  onHeaderImageChange={(headerImage) => {
+                    setDraft((current) =>
+                      current.emailLayout
+                        ? { ...current, emailLayout: { ...current.emailLayout, headerImage } }
+                        : current,
+                    );
+                    changed();
+                    setInvalid(false);
+                  }}
+                  onImagePreparing={setImagePreparing}
                   invalid={invalid && !!draft.emailLayout && !layout.success}
                   bodyError={error("emailBody")}
                 />
@@ -1219,7 +1248,11 @@ function CampaignHistory({
         size="lg"
         footer={
           <div className="flex flex-wrap justify-end gap-3">
-            <Button variant="secondary" onClick={() => onDuplicate(c)}>
+            <Button
+              variant="secondary"
+              disabled={c.hasHeaderImage && !c.emailLayout?.headerImage}
+              onClick={() => onDuplicate(c)}
+            >
               {t("marketing.duplicate")}
             </Button>
             {["scheduled", "active"].includes(c.status) && (

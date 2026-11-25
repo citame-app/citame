@@ -7447,6 +7447,7 @@ fn native_reviews_future_campaign_delivery_and_cancels_through_the_proxy() {
     let device = proxy_device();
     let generation = browser.store.verified_reviewed_generation().unwrap();
     let layout = EmailLayout {
+        header_image: None,
         heading: "Campaign news".into(),
         preheader: "Browse our availability".into(),
         blocks: vec![

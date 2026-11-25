@@ -1,11 +1,31 @@
 use super::*;
-use sob_core::http::marketing::{EmailBlock, EmailEmphasis};
+use sob_core::http::marketing::{EmailBlock, EmailEmphasis, EmailHeaderImage};
+use sob_core::staff_portrait_image::prepare_photo_with_limit;
 
 pub(super) struct LayoutEditor {
     heading: Entity<TextField>,
     preheader: Entity<TextField>,
+    header: Option<HeaderEditor>,
+    remove_header: bool,
+    selecting_image: bool,
+    image_error: bool,
+    identity: Arc<()>,
     blocks: Vec<(usize, BlockEditor)>,
     next_id: usize,
+}
+
+struct HeaderEditor {
+    description: Entity<TextField>,
+    image_base64: String,
+    preview: Option<Arc<gpui::Image>>,
+}
+
+fn header_preview(image: &EmailHeaderImage) -> Option<Arc<gpui::Image>> {
+    let bytes = image.jpeg_bytes()?;
+    Some(Arc::new(gpui::Image::from_bytes(
+        gpui::ImageFormat::Jpeg,
+        bytes,
+    )))
 }
 
 enum BlockEditor {
@@ -51,6 +71,15 @@ impl LayoutEditor {
         let mut editor = Self {
             heading: input(&layout.heading, cx),
             preheader: input(&layout.preheader, cx),
+            remove_header: matches!(layout.header_image, Some(None)),
+            header: layout.header_image.flatten().map(|image| HeaderEditor {
+                description: input(&image.alt, cx),
+                preview: header_preview(&image),
+                image_base64: image.image_base64,
+            }),
+            selecting_image: false,
+            image_error: false,
+            identity: Arc::new(()),
             blocks: Vec::new(),
             next_id: 0,
         };
@@ -114,6 +143,16 @@ impl LayoutEditor {
         EmailLayout {
             heading: text(&self.heading, cx),
             preheader: text(&self.preheader, cx),
+            header_image: self
+                .header
+                .as_ref()
+                .map(|header| {
+                    Some(EmailHeaderImage {
+                        alt: text(&header.description, cx),
+                        image_base64: header.image_base64.clone(),
+                    })
+                })
+                .or(self.remove_header.then_some(None)),
             blocks: self
                 .blocks
                 .iter()
@@ -132,9 +171,88 @@ impl LayoutEditor {
                 .collect(),
         }
     }
+
+    pub(super) fn selecting_image(&self) -> bool {
+        self.selecting_image
+    }
+
+    fn finish_header_selection(
+        &mut self,
+        selected: Result<Option<Vec<u8>>, ()>,
+        cx: &mut Context<Root>,
+    ) {
+        self.selecting_image = false;
+        match selected {
+            Ok(Some(bytes)) => {
+                let description = self
+                    .header
+                    .as_ref()
+                    .map(|header| header.description.clone())
+                    .unwrap_or_else(|| input("", cx));
+                self.header = Some(HeaderEditor {
+                    description,
+                    image_base64: EmailHeaderImage::from_jpeg(&bytes, String::new()).image_base64,
+                    preview: Some(Arc::new(gpui::Image::from_bytes(
+                        gpui::ImageFormat::Jpeg,
+                        bytes,
+                    ))),
+                });
+            }
+            Ok(None) => {}
+            Err(()) => self.image_error = true,
+        }
+    }
 }
 
 impl Root {
+    fn select_campaign_header_image(&mut self, cx: &mut Context<Self>) {
+        let prompt = self.t(Key::MarketingEmailImageChoose);
+        let Some(layout) = self
+            .marketing_desk()
+            .and_then(|desk| desk.editor.as_mut())
+            .and_then(|editor| editor.email_layout.as_mut())
+            .filter(|layout| !layout.selecting_image)
+        else {
+            return;
+        };
+        layout.selecting_image = true;
+        layout.image_error = false;
+        let identity = layout.identity.clone();
+        let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(prompt.into()),
+        });
+        cx.notify();
+        cx.spawn(async move |root, cx| {
+            let selected = match picker.await {
+                Ok(Ok(paths)) => match paths.and_then(|paths| paths.into_iter().next()) {
+                    None => Ok(None),
+                    Some(path) => {
+                        cx.background_executor()
+                            .spawn(async move {
+                                prepare_photo_with_limit(&path, 15 * 1024 * 1024)
+                                    .map(Some)
+                                    .ok_or(())
+                            })
+                            .await
+                    }
+                },
+                _ => Err(()),
+            };
+            let _ = root.update(cx, |root, cx| {
+                root.edit_email_layout(cx, |layout, cx| {
+                    if !Arc::ptr_eq(&layout.identity, &identity) {
+                        return;
+                    }
+                    layout.finish_header_selection(selected, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
     fn edit_email_layout(
         &mut self,
         cx: &mut Context<Self>,
@@ -181,6 +299,7 @@ impl Root {
                                         EmailLayout {
                                             heading: String::new(),
                                             preheader: String::new(),
+                                            header_image: None,
                                             blocks: vec![EmailBlock::Paragraph {
                                                 text: body,
                                                 emphasis: EmailEmphasis::None,
@@ -218,6 +337,57 @@ impl Root {
             .child(layout.heading.clone())
             .child(self.label(Key::MarketingEmailPreheader))
             .child(layout.preheader.clone())
+            .child(self.label(Key::MarketingEmailImage))
+            .child(if layout.selecting_image {
+                div().child(self.t(Key::MarketingEmailImagePreparing))
+            } else {
+                div().child(
+                    self.marketing_button(
+                        "choose-campaign-header-image",
+                        if layout.header.is_some() {
+                            Key::MarketingEmailImageReplace
+                        } else {
+                            Key::MarketingEmailImageChoose
+                        },
+                        Kind::Ghost,
+                        Root::select_campaign_header_image,
+                        cx,
+                    )
+                    .debug_selector(|| "choose-campaign-header-image".into()),
+                )
+            })
+            .when(layout.image_error, |body| {
+                body.child(
+                    div()
+                        .text_color(theme::conflict_fg())
+                        .child(self.t(Key::MarketingEmailImageInvalid)),
+                )
+            })
+            .when_some(layout.header.as_ref(), |body, header| {
+                body.when_some(header.preview.as_ref(), |body, preview| {
+                    body.child(campaign_header_image(preview.clone()))
+                })
+                .child(self.label(Key::MarketingEmailImageAlt))
+                .child(header.description.clone())
+                .when(!layout.selecting_image, |body| {
+                    body.child(
+                        self.marketing_button(
+                            "remove-campaign-header-image",
+                            Key::MarketingEmailImageRemove,
+                            Kind::Ghost,
+                            |root, cx| {
+                                root.edit_email_layout(cx, |layout, _| {
+                                    layout.header = None;
+                                    layout.remove_header = true;
+                                    layout.image_error = false;
+                                })
+                            },
+                            cx,
+                        )
+                        .debug_selector(|| "remove-campaign-header-image".into()),
+                    )
+                })
+            })
             .children(
                 layout
                     .blocks
@@ -360,6 +530,7 @@ impl Root {
     pub(in crate::root::marketing) fn render_email_layout_preview(
         &self,
         layout: &EmailLayout,
+        image: Option<Arc<gpui::Image>>,
     ) -> gpui::Div {
         div()
             .flex()
@@ -371,6 +542,17 @@ impl Root {
                         .text_sm()
                         .text_color(theme::muted())
                         .child(preview_message(&layout.preheader)),
+                )
+            })
+            .when_some(layout.header_image(), |body, header| {
+                body.when_some(image, |body, image| {
+                    body.child(campaign_header_image(image))
+                })
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(theme::muted())
+                        .child(header.alt.clone()),
                 )
             })
             .when(!layout.heading.is_empty(), |body| {
@@ -406,6 +588,25 @@ impl Root {
     }
 }
 
+impl LayoutEditor {
+    pub(super) fn image_preview(&self) -> Option<Arc<gpui::Image>> {
+        self.header.as_ref()?.preview.clone()
+    }
+}
+
+pub(in crate::root::marketing) fn saved_header_preview(
+    layout: &EmailLayout,
+) -> Option<Arc<gpui::Image>> {
+    header_preview(layout.header_image()?)
+}
+
+fn campaign_header_image(image: Arc<gpui::Image>) -> gpui::Img {
+    gpui::img(image)
+        .w_full()
+        .h(px(160.))
+        .object_fit(gpui::ObjectFit::Contain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,6 +632,89 @@ mod tests {
         );
         cx.simulate_click(center, Default::default());
         cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    async fn native_campaign_header_can_be_selected_described_and_removed(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (directory, config) = crate::root::tests::desk();
+        let (root, cx) = cx.add_window_view(|window, cx| {
+            let mut root = Root::new(config, window, cx);
+            root.svc.stop_sync();
+            root.status.connectivity = Connectivity::Offline;
+            root.open_marketing(cx);
+            root.status.connectivity = Connectivity::Online;
+            root.open_campaign_editor(EditorMode::Create(Trigger::Manual), cx);
+            root
+        });
+        let path = directory.path().join("camera.png");
+        std::fs::write(
+            &path,
+            [
+                137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 12, 0, 0, 0,
+                6, 8, 2, 0, 0, 0, 120, 140, 232, 214, 0, 0, 0, 9, 112, 72, 89, 115, 0, 0, 3, 232,
+                0, 0, 3, 232, 1, 181, 123, 82, 107, 0, 0, 0, 17, 73, 68, 65, 84, 8, 153, 99, 152,
+                101, 17, 71, 16, 49, 12, 85, 69, 0, 38, 105, 85, 129, 246, 211, 109, 122, 0, 0, 0,
+                0, 73, 69, 78, 68, 174, 66, 96, 130,
+            ],
+        )
+        .unwrap();
+        cx.simulate_resize(gpui::size(px(1100.), px(740.)));
+        cx.run_until_parked();
+        click_control(cx, "marketing-email-format-true");
+        assert!(cx.debug_bounds("choose-campaign-header-image").is_some());
+        let prepared = prepare_photo_with_limit(&path, 15 * 1024 * 1024).unwrap();
+        // GPUI's TestPlatform does not implement opening the system picker.
+        root.update(cx, |root, cx| {
+            root.edit_email_layout(cx, |layout, cx| {
+                layout.finish_header_selection(Ok(Some(prepared)), cx)
+            })
+        });
+        cx.run_until_parked();
+        root.update(cx, |root, cx| {
+            let editor = root.marketing_desk().unwrap().editor.as_ref().unwrap();
+            assert!(editor.packet(cx).is_none());
+            let header = editor
+                .email_layout
+                .as_ref()
+                .unwrap()
+                .header
+                .as_ref()
+                .unwrap();
+            assert!(header.preview.is_some());
+            header
+                .description
+                .update(cx, |field, cx| field.set_text("Studio exterior", cx));
+            let layout = editor
+                .packet(cx)
+                .unwrap()
+                .draft
+                .email_layout
+                .unwrap()
+                .unwrap();
+            assert_eq!(layout.header_image().unwrap().alt, "Studio exterior");
+            assert!(
+                layout
+                    .header_image()
+                    .unwrap()
+                    .jpeg_bytes()
+                    .unwrap()
+                    .starts_with(&[255, 216, 255])
+            );
+        });
+        click_control(cx, "remove-campaign-header-image");
+        root.update(cx, |root, cx| {
+            let editor = root.marketing_desk().unwrap().editor.as_ref().unwrap();
+            let layout = editor
+                .packet(cx)
+                .unwrap()
+                .draft
+                .email_layout
+                .unwrap()
+                .unwrap();
+            assert_eq!(layout.header_image, Some(None));
+        });
     }
 
     #[gpui::test]

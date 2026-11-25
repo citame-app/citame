@@ -24,6 +24,8 @@ Reviewed client identity links now join duplicate salon profiles while preservin
 
 ### Added
 
+- Web and Desktop campaigns support an optional header image with a description. Campaign and test emails include the image through SMTP.
+
 - Campañas de correo con cabecera, texto para la bandeja de entrada, bloques reordenables y botón de reserva en Citame Web y Desktop. Citame genera una versión de texto plano para cada mensaje.
 
 - The commerce API prepares the individual receipts for native and imported multi-professional visits in one transaction, including existing collections and cancelled parts.

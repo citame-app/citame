@@ -93,7 +93,7 @@ export function marketingAdminRoutes(deps: AppDeps, { deliveryTests = false } = 
           deps.db,
           id(c.req.param("id")),
           c.get("principal"),
-          parseOrThrow(campaignDetailQuerySchema, c.req.query()).emailLayout === "1",
+          parseOrThrow(campaignDetailQuerySchema, c.req.query()),
         ),
       ),
     )

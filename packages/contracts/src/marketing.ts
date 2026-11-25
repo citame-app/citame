@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { clientTagsSchema } from "./client-controls";
+import { rasterImageBase64Schema } from "./client-photos";
 import { idSchema, instantSchema, pageInfoSchema } from "./common";
 
 export const marketingChannelSchema = z.enum(["email", "sms", "optimized"]);
@@ -15,6 +16,7 @@ export const BOOKING_INVITATION_MAX_CONTACTS = 100;
 export const CAMPAIGN_EMAIL_LIMITS = {
   heading: 140,
   preheader: 150,
+  imageAlt: 180,
   bookingLabel: 80,
   blocks: 16,
   paragraphLines: 256,
@@ -33,6 +35,13 @@ const layoutLine = (max: number, min = 0) =>
 const campaignEmailLayoutFields = z.strictObject({
   heading: layoutLine(CAMPAIGN_EMAIL_LIMITS.heading).default(""),
   preheader: layoutLine(CAMPAIGN_EMAIL_LIMITS.preheader).default(""),
+  headerImage: z
+    .strictObject({
+      imageBase64: rasterImageBase64Schema,
+      alt: layoutLine(CAMPAIGN_EMAIL_LIMITS.imageAlt, 1),
+    })
+    .nullable()
+    .optional(),
   blocks: z
     .array(
       z.discriminatedUnion("kind", [
@@ -126,7 +135,10 @@ export const campaignCreateSchema = campaignDraftSchema.extend({ id: idSchema })
 export const campaignUpdateSchema = campaignDraftSchema
   .extend({ version: z.number().int().positive() })
   .strict();
-export const campaignDetailQuerySchema = z.object({ emailLayout: z.literal("1").optional() });
+export const campaignDetailQuerySchema = z.object({
+  emailLayout: z.literal("1").optional(),
+  headerImages: z.literal("1").optional(),
+});
 export const campaignQuerySchema = campaignDetailQuerySchema.extend({
   page: z.coerce.number().int().min(1).max(100000).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(20),
@@ -144,6 +156,7 @@ export const campaignCountsSchema = z.object({
   cancelled: z.number().int().nonnegative(),
 });
 export const campaignSchema = campaignDraftSchema.extend({
+  hasHeaderImage: z.literal(true).optional(),
   id: idSchema,
   status: campaignStatusSchema,
   version: z.number().int().positive(),
@@ -274,5 +287,6 @@ export type CampaignCreate = z.infer<typeof campaignCreateSchema>;
 export type CampaignUpdate = z.infer<typeof campaignUpdateSchema>;
 export type Campaign = z.infer<typeof campaignSchema>;
 export type CampaignQuery = z.infer<typeof campaignQuerySchema>;
+export type CampaignDetailQuery = z.infer<typeof campaignDetailQuerySchema>;
 export type CampaignQueue = z.infer<typeof campaignQueueSchema>;
 export type MarketingConsentInput = z.infer<typeof marketingConsentInputSchema>;

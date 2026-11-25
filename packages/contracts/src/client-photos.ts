@@ -7,24 +7,25 @@ export const CLIENT_PHOTO_PER_CLIENT_LIMIT = 20;
 export const CLIENT_PHOTO_SALON_LIMIT = 2000;
 export const CLIENT_PHOTO_PERMISSION_VERSION = "private-client-photo-v1";
 const caption = z.string().trim().min(1).max(300);
+export const rasterImageBase64Schema = z
+  .string()
+  .min(4)
+  .max(4 * Math.ceil(CLIENT_PHOTO_INPUT_MAX_BYTES / 3))
+  .regex(/^[A-Za-z0-9+/]*={0,2}$/)
+  .refine(
+    (value) =>
+      value.length % 4 === 0 &&
+      (value.length * 3) / 4 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <=
+        CLIENT_PHOTO_INPUT_MAX_BYTES,
+    "Photo exceeds the decoded byte limit",
+  );
 export const clientPhotoUploadSchema = z
   .object({
     idempotencyKey: idSchema,
     caption,
     capturedOn: localDateSchema.optional(),
     permissionConfirmed: z.literal(true),
-    imageBase64: z
-      .string()
-      .min(4)
-      .max(4 * Math.ceil(CLIENT_PHOTO_INPUT_MAX_BYTES / 3))
-      .regex(/^[A-Za-z0-9+/]*={0,2}$/)
-      .refine(
-        (value) =>
-          value.length % 4 === 0 &&
-          (value.length * 3) / 4 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0) <=
-            CLIENT_PHOTO_INPUT_MAX_BYTES,
-        "Photo exceeds the decoded byte limit",
-      ),
+    imageBase64: rasterImageBase64Schema,
   })
   .strict();
 export const clientPhotoUpdateSchema = z

@@ -2,7 +2,9 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createServer } from "node:net";
 import {
   type CampaignEmailLayout,
+  campaignListSchema,
   campaignPreviewSchema,
+  campaignSchema,
   campaignTestReceiptSchema,
   DESKTOP_CLIENT_ID,
   DESKTOP_SIGN_IN_SCOPE,
@@ -10,6 +12,7 @@ import {
 import { auditLog, marketingCampaign, marketingDelivery, staffProfile, user } from "@sob/db";
 import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
+import sharp from "sharp";
 import { actor, json, seedFixtures, setupApiTest } from "../../../test/helpers";
 import { createAuth } from "../../auth/auth";
 import { type AppEnv, loadPrincipal, requireAuth } from "../../auth/principal";
@@ -287,9 +290,20 @@ test("the desktop scope admits the SMS mutation and fences other methods", async
 });
 
 test("only the verified owner receives a reviewed test, with a safe replay", async () => {
+  const headerImage = {
+    imageBase64: (
+      await sharp({
+        create: { width: 24, height: 12, channels: 3, background: "#a84373" },
+      })
+        .png()
+        .toBuffer()
+    ).toString("base64"),
+    alt: 'Open <house> "Saturday"',
+  };
   const { owner, staff, id, root } = await prepareDraft({
     heading: "Local Campaign Heading",
     preheader: "Preview without customer recipients",
+    headerImage,
     blocks: [
       { kind: "paragraph", text: "Welcome to {{salon_name}}.", emphasis: "strong" },
       { kind: "booking", label: "Reserve Local Slot" },
@@ -338,12 +352,102 @@ test("only the verified owner receives a reviewed test, with a safe replay", asy
   expect(messages).toHaveLength(1);
   expect(messages[0]?.to).toBe("<preview-owner@example.com>");
   expect(messages[0]?.content).toContain("Subject: [Prueba / Test] Hello preview-owner");
-  const mail = messages[0]?.content.replaceAll("=\r\n", "");
+  const mail = messages[0]?.content.replaceAll("=\r\n", "").replace(/\r\n[ \t]+/g, " ");
   expect(mail).toContain("Local Campaign Heading");
   expect(mail).toContain("<strong>Welcome to Test Salon.</strong>");
+  const cid = `campaign-header.test.${id}.${packet.requestId}@citame.app`;
+  expect(mail).toContain(`cid:${cid}`);
+  expect(mail).toContain(`Content-ID: <${cid}>`);
+  expect(mail).toContain("Open &lt;house&gt; &quot;Saturday&quot;");
   expect(mail?.match(/Reserve Local Slot/g)).toHaveLength(2);
   expect(messages[0]?.content).not.toContain("/marketing/opt-out");
   expect(await t.db.select().from(marketingDelivery)).toEqual([]);
+});
+
+test("campaigns keep one normalized header across legacy edits and draft retries", async () => {
+  const { owner, id } = await prepareDraft();
+  const png = (
+    await sharp({
+      create: { width: 36, height: 18, channels: 3, background: "#a84373" },
+    })
+      .png()
+      .toBuffer()
+  ).toString("base64");
+  const path = `${root}/${id}`;
+  const layout: CampaignEmailLayout = {
+    heading: "",
+    preheader: "",
+    blocks: [{ kind: "paragraph", text: "News", emphasis: "none" }],
+  };
+  const edit = (version: number, emailLayout: CampaignEmailLayout) =>
+    json(
+      t.app,
+      path,
+      "PATCH",
+      {
+        name: "Campaign with an image",
+        channel: "email",
+        subject: "Latest news",
+        emailBody: "News",
+        emailLayout,
+        smsBody: "",
+        audience: {},
+        trigger: "manual",
+        delayMinutes: 0,
+        birthdayLeadDays: 0,
+        version,
+      },
+      owner.cookie,
+    );
+  const input = { ...layout, headerImage: { imageBase64: png, alt: "The salon" } };
+  expect(
+    (await edit(1, { ...input, headerImage: { ...input.headerImage, imageBase64: "aGVsbG8=" } }))
+      .status,
+  ).toBe(400);
+  const first = await edit(1, input);
+  expect(first.status).toBe(200);
+  const saved = campaignSchema.parse(await first.json());
+  const normalized = saved.emailLayout?.headerImage;
+  expect(normalized?.imageBase64).toStartWith("/9j/");
+  expect(normalized?.imageBase64).not.toBe(png);
+  const replay = await edit(1, input);
+  expect(replay.status).toBe(200);
+  expect(await replay.json()).toMatchObject({ version: saved.version });
+  expect(
+    (await edit(1, { ...input, headerImage: { ...input.headerImage, alt: "Other text" } })).status,
+  ).toBe(409);
+
+  const legacyList = await json(t.app, `${root}?emailLayout=1`, "GET", undefined, owner.cookie);
+  const [legacyCampaign] = campaignListSchema.parse(await legacyList.json()).campaigns;
+  expect(legacyCampaign?.hasHeaderImage).toBeUndefined();
+  expect(legacyCampaign?.emailLayout).toEqual(layout);
+  const list = await json(
+    t.app,
+    `${root}?emailLayout=1&headerImages=1`,
+    "GET",
+    undefined,
+    owner.cookie,
+  );
+  const [summary] = campaignListSchema.parse(await list.json()).campaigns;
+  expect(summary).toMatchObject({ id, hasHeaderImage: true });
+  expect(summary?.emailLayout).toEqual(layout);
+  const details = async (query: string) =>
+    campaignSchema.parse(
+      await (await json(t.app, `${path}?${query}`, "GET", undefined, owner.cookie)).json(),
+    ).emailLayout;
+  expect(await details("emailLayout=1")).toEqual(layout);
+  expect(await details("emailLayout=1&headerImages=1")).toEqual({
+    ...layout,
+    headerImage: normalized,
+  });
+  const preserved = await edit(saved.version, layout);
+  expect(campaignSchema.parse(await preserved.json()).emailLayout).toEqual(layout);
+  expect(await details("emailLayout=1&headerImages=1")).toEqual({
+    ...layout,
+    headerImage: normalized,
+  });
+  const removed = await edit(saved.version + 1, { ...layout, headerImage: null });
+  expect(await removed.json()).toMatchObject({ emailLayout: { ...layout, headerImage: null } });
 });
 
 test("test-email quota counts SMTP claims and permits replays after exhaustion", async () => {

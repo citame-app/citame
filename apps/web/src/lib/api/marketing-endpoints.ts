@@ -29,7 +29,7 @@ export function marketingEndpoints(client: ApiClient) {
       client.get(
         `${base}/${id}`,
         campaignSchema,
-        includeLayout ? { query: { emailLayout: "1" } } : undefined,
+        includeLayout ? { query: { emailLayout: "1", headerImages: "1" } } : undefined,
       ),
     create: (input: CampaignCreate) => client.post(base, input, campaignSchema),
     update: (id: string, input: CampaignUpdate) =>

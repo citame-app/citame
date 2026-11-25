@@ -33,6 +33,7 @@ pub(super) struct Desk {
     comparing: bool,
     comparison: Option<CampaignComparison>,
     detail: Option<(Campaign, DeliveryPage)>,
+    detail_image: Option<Arc<gpui::Image>>,
     review: Option<(Preview, Capabilities)>,
     test_deliveries: TestDeliveries,
     search: Entity<TextField>,
@@ -85,6 +86,10 @@ impl Desk {
             && current.id == campaign.id
             && self.generation == generation
         {
+            self.detail_image = campaign
+                .email_layout
+                .as_ref()
+                .and_then(draft::saved_header_preview);
             *current = campaign;
         } else if campaign.status == Status::Draft {
             let deliveries = DeliveryPage {
@@ -98,6 +103,7 @@ impl Desk {
             self.install_detail(campaign, deliveries, generation, cx);
         } else {
             self.detail = None;
+            self.detail_image = None;
         }
     }
 
@@ -114,6 +120,10 @@ impl Desk {
             })
         {
             self.review = None;
+            self.detail_image = campaign
+                .email_layout
+                .as_ref()
+                .and_then(draft::saved_header_preview);
             self.test_deliveries = TestDeliveries::default();
             self.schedule.update(cx, |field, cx| field.set_text("", cx));
         }
@@ -278,6 +288,7 @@ impl Root {
             comparing: false,
             comparison: None,
             detail: None,
+            detail_image: None,
             review: None,
             test_deliveries: TestDeliveries::default(),
             action: None,
@@ -558,6 +569,7 @@ impl Root {
                         desk.comparison = None;
                         desk.list = Some(list);
                         desk.detail = None;
+                        desk.detail_image = None;
                         desk.review = None;
                         desk.test_deliveries = TestDeliveries::default();
                         None
@@ -683,6 +695,7 @@ impl Root {
                             desk.editor = None;
                             desk.list = None;
                             desk.detail = None;
+                            desk.detail_image = None;
                             desk.review = None;
                             desk.observed = observed;
                         }
@@ -1360,7 +1373,7 @@ impl Root {
                 panel.child(div().text_sm().child(campaign.subject.clone()))
             })
             .when_some(campaign.email_layout.as_ref(), |panel, layout| {
-                panel.child(self.render_email_layout_preview(layout))
+                panel.child(self.render_email_layout_preview(layout, desk.detail_image.clone()))
             })
             .when(
                 campaign.email_layout.is_none() && !campaign.email_body.is_empty(),
