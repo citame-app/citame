@@ -13,6 +13,8 @@ import {
 } from "../test/helpers";
 import { mutation, pull, push, uuid } from "../test/sync";
 import { createApp } from "./app";
+import { createAuth } from "./auth/auth";
+import { verifyExistingOAuthSigningKey } from "./auth/signing-readiness";
 
 let t: ApiTest;
 let fixtures: Fixtures;
@@ -127,6 +129,33 @@ describe("liveness and readiness", () => {
     } finally {
       await t.db.delete(jwks).where(eq(jwks.id, rotated.id));
       await restarted.shutdown();
+    }
+  });
+
+  test("the OAuth preflight leaves resources missing for an unused origin", async () => {
+    const config = {
+      ...t.config,
+      auth: { ...t.config.auth, baseURL: "http://localhost:41077" },
+      oauth: { ...t.config.oauth, mcpResource: "http://localhost:41077/mcp" },
+    };
+    const resources = await t.db
+      .select({ id: oauthResource.id })
+      .from(oauthResource)
+      .orderBy(oauthResource.id);
+    const checkOnly = createAuth({
+      db: t.db,
+      valkey: t.valkey.client,
+      config,
+      seedOAuthResources: false,
+    });
+    try {
+      await checkOnly.$context;
+      await verifyExistingOAuthSigningKey(t.db, checkOnly.api.signJWT, config);
+      expect(
+        await t.db.select({ id: oauthResource.id }).from(oauthResource).orderBy(oauthResource.id),
+      ).toEqual(resources);
+    } finally {
+      await checkOnly.mailer.stop();
     }
   });
 

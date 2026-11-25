@@ -191,12 +191,7 @@ export function createApp(input: AppDeps): App {
   };
   app.ready = async () => {
     await ensureOAuthSeeds(deps.db, deps.config);
-    if (!consultation) {
-      await verifyExistingOAuthSigningKey(deps.db, auth.api.signJWT, [
-        deps.config.oauth.mcpResource,
-        desktopResource(deps.config.auth.baseURL),
-      ]);
-    }
+    if (!consultation) await verifyExistingOAuthSigningKey(deps.db, auth.api.signJWT, deps.config);
     auth.mailer.start();
   };
 

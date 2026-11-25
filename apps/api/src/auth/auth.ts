@@ -47,6 +47,8 @@ export interface AuthDeps {
   /** Sends account emails (verification, reset, invitation). Null: they are logged as skipped. */
   emailProvider?: EmailProvider | null;
   logger?: Logger;
+  /** Read-only preflight disables the provider's OAuth resource provisioning. */
+  seedOAuthResources?: boolean;
 }
 
 /** Lifetime of the emailed links, in seconds. Reset and verification are short; invitations longer. */
@@ -64,7 +66,14 @@ const tokenDigest = (token: string) =>
  * clients and the desktop app. Same Drizzle adapter, same Valkey secondary storage, same
  * secret. ADR 0009 explains why `oauthProvider()` and not the `mcp()` plugin.
  */
-export function createAuth({ db, valkey, config, emailProvider = null, logger }: AuthDeps) {
+export function createAuth({
+  db,
+  valkey,
+  config,
+  emailProvider = null,
+  logger,
+  seedOAuthResources = true,
+}: AuthDeps) {
   const log = logger ?? rootLogger;
   const mailer: AuthMailer = createAuthMailer({
     provider: emailProvider,
@@ -199,18 +208,20 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
         clientRegistrationDefaultApplicationType: "infer",
         clientRegistrationDefaultScopes: ["mcp:read", "mcp:book", "offline_access"],
         clientRegistrationAllowedScopes: ["schedule:read", ...MCP_MANAGEMENT_SCOPES],
-        resources: [
-          {
-            identifier: config.oauth.mcpResource,
-            name: "Sisters of Beauty MCP server",
-            allowedScopes: [...MCP_SCOPES],
-          },
-          {
-            identifier: desktopResource(config.auth.baseURL),
-            name: "Citame Desktop",
-            allowedScopes: [DESKTOP_SIGN_IN_SCOPE, "offline_access"],
-          },
-        ],
+        resources: seedOAuthResources
+          ? [
+              {
+                identifier: config.oauth.mcpResource,
+                name: "Sisters of Beauty MCP server",
+                allowedScopes: [...MCP_SCOPES],
+              },
+              {
+                identifier: desktopResource(config.auth.baseURL),
+                name: "Citame Desktop",
+                allowedScopes: [DESKTOP_SIGN_IN_SCOPE, "offline_access"],
+              },
+            ]
+          : [],
         extensions: [
           {
             claims: {
@@ -243,7 +254,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
             },
           },
         ],
-        clientRegistrationDefaultResources: [config.oauth.mcpResource],
+        clientRegistrationDefaultResources: seedOAuthResources ? [config.oauth.mcpResource] : [],
         enforcePerClientResources: true,
         // Our Valkey limiter fronts these endpoints (app.ts); the plugin's own limiter is off.
         rateLimit: {

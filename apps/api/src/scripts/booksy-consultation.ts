@@ -16,6 +16,7 @@ import { z } from "zod";
 import { createApp } from "../app";
 import { createAccount } from "../auth/accounts";
 import { createAuth } from "../auth/auth";
+import { verifyExistingOAuthSigningKey } from "../auth/signing-readiness";
 import { loadConfig } from "../config";
 import { restoreLegacyBooksyPaymentEvidence } from "../modules/booksy-transfer/operational-rehearsal";
 import { loadBooksySourceModel } from "../modules/booksy-transfer/source-store";
@@ -144,7 +145,7 @@ if (import.meta.main) {
         .limit(2);
       if (!credential?.hash || duplicate)
         throw new Error("The prepared desktop copy is missing a usable owner credential");
-      const auth = createAuth({ db: db.db, valkey, config });
+      const auth = createAuth({ db: db.db, valkey, config, seedOAuthResources: false });
       try {
         const { password } = await auth.$context;
         const valid = await password
@@ -154,6 +155,9 @@ if (import.meta.main) {
           })
           .catch(() => false);
         if (!valid) throw new Error("The local owner credentials do not match the prepared copy");
+        if (startup === "--check-prepared") {
+          await verifyExistingOAuthSigningKey(db.db, auth.api.signJWT, config);
+        }
       } finally {
         await auth.mailer.stop();
       }

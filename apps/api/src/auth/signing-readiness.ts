@@ -2,6 +2,8 @@ import { type Database, jwks, oauthResource } from "@sob/db";
 import type { Jwk } from "better-auth/plugins/jwt";
 import { and, eq, gt, inArray, isNull, or } from "drizzle-orm";
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify } from "jose";
+import type { AppConfig } from "../config";
+import { desktopResource } from "../oauth/desktop";
 import { type Auth, OAUTH_JWKS_GRACE_SECONDS } from "./auth";
 
 type SignJWT = Auth["api"]["signJWT"];
@@ -15,8 +17,9 @@ export class OAuthSigningKeyError extends Error {
 export async function verifyExistingOAuthSigningKey(
   db: Database,
   signJWT: SignJWT,
-  resourceIds: string[],
+  config: Pick<AppConfig, "auth" | "oauth">,
 ) {
+  const resourceIds = [config.oauth.mcpResource, desktopResource(config.auth.baseURL)];
   const now = Date.now();
   const graceCutoff = new Date(now - OAUTH_JWKS_GRACE_SECONDS * 1_000);
   const [keys, policies] = await Promise.all([
