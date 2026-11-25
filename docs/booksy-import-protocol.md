@@ -579,7 +579,7 @@ La repetición con la revisión `acd3792` aplicó 113 migraciones y verificó de
 
 La web y la API de la copia editable de pruebas escuchan en `127.0.0.1` y arrancan sin proveedores de cobro ni de envío. Tras aplicar `0075` y `0076`, las huellas de citas, servicios reservados, anotaciones y dispositivos coincidieron. Los datos del personal también coincidieron al excluir la nueva columna de retratos. [Agenda local del 20/11/2026](http://127.0.0.1:4275/admin/calendar?date=2026-11-20&view=day)
 
-Con los argumentos de la copia local, añade `--prepared` después de `--desktop-test` para arrancar sobre una copia ya preparada. El arranque comprueba el snapshot archivado, el registro exacto de migraciones, la credencial del propietario, las claves OAuth existentes, los ajustes y Valkey antes de abrir el puerto. Omite las migraciones, la reparación del archivo y la creación inicial del propietario y sus ajustes. Usa `--check-prepared` en ese mismo lugar para ejecutar las mismas comprobaciones sin abrir el servicio ni iniciar una sesión.
+Con los argumentos de la copia local, añade `--prepared` después de `--desktop-test` para arrancar sobre una copia ya preparada. El arranque comprueba el snapshot archivado, el registro exacto de migraciones, la credencial del propietario, las claves OAuth existentes, los ajustes y Valkey antes de abrir el puerto. Omite las migraciones, la reparación del archivo y la creación inicial del propietario y sus ajustes. Usa `--check-prepared` en ese mismo lugar para validar desde una conexión PostgreSQL de solo lectura, sin abrir el servicio ni iniciar una sesión.
 
 To reconcile an editable copy against its private archive, point the connection at the `sob_booksy_desktop_test_YYYYMMDD` database and run the prepared-copy report.
 

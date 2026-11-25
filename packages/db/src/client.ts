@@ -5,6 +5,12 @@ import * as schema from "./schema";
 /** Local compose credentials (see compose.yaml); real deployments set DATABASE_URL. */
 export const DEFAULT_DATABASE_URL = "postgres://sob:sob@localhost:5432/sob";
 
+export class ReadOnlyConnectionError extends Error {
+  constructor() {
+    super("The PostgreSQL connection did not start in read-only mode");
+  }
+}
+
 export interface DbOptions {
   /** Connections in the pool. */
   poolMax: number;
@@ -14,6 +20,8 @@ export interface DbOptions {
   lockTimeoutMs: number;
   /** Kills sessions that sit idle inside an open transaction; 0 disables. */
   idleInTransactionTimeoutMs: number;
+  /** Start each connection with PostgreSQL read-only transactions. */
+  readOnly?: boolean;
 }
 
 export const DEFAULT_DB_OPTIONS: DbOptions = {
@@ -72,6 +80,7 @@ export function createDb(
       statement_timeout: options.statementTimeoutMs,
       lock_timeout: options.lockTimeoutMs,
       idle_in_transaction_session_timeout: options.idleInTransactionTimeoutMs,
+      ...(options.readOnly && { default_transaction_read_only: "on" }),
     },
   });
   const db = drizzle({ client, schema, casing: "snake_case" });
@@ -97,11 +106,13 @@ export async function connectToNamedDatabase(url: string, options?: DbOptions) {
       throw new Error("The selected PostgreSQL endpoint differs from the connection URL");
     if (selected.database !== expected)
       throw new Error("The selected PostgreSQL database differs from the connection URL");
-    const [row] = await connection.client<{ name: string }[]>`
-      select pg_catalog.current_database() as name
+    const [row] = await connection.client<{ name: string; read_only: boolean }[]>`
+      select pg_catalog.current_database() as name,
+        pg_catalog.current_setting('transaction_read_only') = 'on' as read_only
     `;
     if (row?.name !== expected)
       throw new Error("The connected PostgreSQL database differs from the connection URL");
+    if (options?.readOnly && !row.read_only) throw new ReadOnlyConnectionError();
     return connection;
   } catch (error) {
     await connection.close();

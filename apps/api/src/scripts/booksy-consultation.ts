@@ -5,6 +5,7 @@ import {
   account,
   booksyDesktopTestDatabase,
   connectToNamedDatabase,
+  dbOptionsFromEnv,
   runMigrations,
   salonSettings,
   user,
@@ -91,7 +92,10 @@ if (import.meta.main) {
       !databasePattern.test(url.pathname.slice(1))
     )
       throw new Error("Consultation requires isolated loopback services");
-    const db = await connectToNamedDatabase(connection);
+    const db = await connectToNamedDatabase(
+      connection,
+      startup === "--check-prepared" ? { ...dbOptionsFromEnv(), readOnly: true } : undefined,
+    );
     closeDatabase = db.close;
     const snapshot = await loadBooksySourceModel(db.db, snapshotHash);
     if (prepared) {

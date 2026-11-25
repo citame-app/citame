@@ -9,7 +9,7 @@ const privateFailure = "private reconciliation details must never reach the cons
 const genericMessage =
   "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.";
 
-test("candidate report distinguishes incompatible migration history without leaking details", async () => {
+test("candidate report distinguishes connection and migration failures without leaking details", async () => {
   const directory = await mkdtemp(join(tmpdir(), "citame-test-report-"));
   const preload = join(directory, "preload.ts");
   try {
@@ -21,9 +21,13 @@ const db = await import(${dbModule});
 const failure = ${JSON.stringify(privateFailure)};
 mock.module(${dbModule}, () => ({
   ...db,
-  connectToNamedDatabase: async () => ({ db: {}, close: async () => {} }),
+  connectToNamedDatabase: async (_, options) => {
+    if (!options?.readOnly || process.env.TEST_FAILURE === "read_only")
+      throw new db.ReadOnlyConnectionError();
+    return { db: {}, close: async () => {} };
+  },
   verifyMigrationLedger: async (_, { allowNewer }) => {
-    if (!allowNewer || process.env.TEST_BEHIND === "1")
+    if (!allowNewer || process.env.TEST_FAILURE === "migration")
       throw new db.MigrationLedgerError(failure);
   },
 }));
@@ -34,12 +38,16 @@ mock.module(${JSON.stringify(new URL("../modules/booksy-transfer/operational-reh
   inspectNativeBooksy: async () => { throw new Error(failure); },
 }));`,
     );
-    for (const [behind, diagnostic] of [
+    for (const [failure, diagnostic] of [
       [
-        "1",
+        "read_only",
+        "Consultation requires a PostgreSQL connection in read-only mode. Check the isolated copy's connection settings.",
+      ],
+      [
+        "migration",
         "The isolated copy has a different migration ledger. Check its history against the candidate release before restoring or upgrading a separate copy.",
       ],
-      ["0", genericMessage],
+      ["other", genericMessage],
     ] as const) {
       const result = Bun.spawnSync({
         cmd: [
@@ -55,7 +63,7 @@ mock.module(${JSON.stringify(new URL("../modules/booksy-transfer/operational-reh
           ...process.env,
           BOOKSY_REHEARSAL_DATABASE_URL:
             "postgres://citame_import@127.0.0.1:5432/sob_booksy_candidate_20261125_1",
-          TEST_BEHIND: behind,
+          TEST_FAILURE: failure,
         },
       });
       expect(result.exitCode).toBe(1);

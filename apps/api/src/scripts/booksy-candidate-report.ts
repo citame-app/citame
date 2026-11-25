@@ -5,6 +5,7 @@ import {
   connectToNamedDatabase,
   MigrationLedgerError,
   NO_DB_TIMEOUTS,
+  ReadOnlyConnectionError,
   verifyMigrationLedger,
 } from "@sob/db";
 import { inspectNativeBooksy } from "../modules/booksy-transfer/operational-rehearsal";
@@ -76,7 +77,10 @@ if (import.meta.main) {
     const snapshot =
       priceScope && optionValue ? await readPrivateBooksySnapshot(optionValue) : null;
     if (snapshot && snapshot.hash !== hash) throw new Error("Price review snapshot differs");
-    const { db, close } = await connectToNamedDatabase(url.toString(), NO_DB_TIMEOUTS);
+    const { db, close } = await connectToNamedDatabase(url.toString(), {
+      ...NO_DB_TIMEOUTS,
+      readOnly: true,
+    });
     try {
       const { bookingLinks, priceHolds, billingReview, ...report } = await inspectNativeBooksy(
         db,
@@ -164,11 +168,13 @@ if (import.meta.main) {
     }
   } catch (error) {
     // Database and parser errors can include original notes, references or connection information.
-    console.error(
+    const message =
       error instanceof MigrationLedgerError
         ? "The isolated copy has a different migration ledger. Check its history against the candidate release before restoring or upgrading a separate copy."
-        : "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.",
-    );
+        : error instanceof ReadOnlyConnectionError
+          ? "Consultation requires a PostgreSQL connection in read-only mode. Check the isolated copy's connection settings."
+          : "Booksy reconciliation failed. Check the isolated copy, snapshot, date and any private option argument.";
+    console.error(message);
     process.exitCode = 1;
   }
 }
