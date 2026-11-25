@@ -64,9 +64,17 @@ pub enum Wake {
     Local,
     /// "Sync now" or a reconnect.
     Manual,
+    /// Restore unreadable server copies of appointments before the next ordered pull.
+    RepairCalendar,
     /// The server announced a change at `seq`.
     Nudge(i64),
     Stop,
+}
+
+enum CalendarRepairState {
+    Idle,
+    Requested,
+    Reading(sync::CalendarRepair),
 }
 
 /// The synchronous heart of the runner: one cycle, one status update, the next wait.
@@ -75,6 +83,7 @@ pub struct RunnerCore {
     transport: Arc<dyn Transport>,
     backoff: Backoff,
     rate_limited: bool,
+    calendar_repair: CalendarRepairState,
     jitter: Box<dyn FnMut() -> f64 + Send>,
     status: SharedStatus,
 }
@@ -86,6 +95,7 @@ impl RunnerCore {
             transport,
             backoff: Backoff::default(),
             rate_limited: false,
+            calendar_repair: CalendarRepairState::Idle,
             jitter: Box::new(|| {
                 let mut buf = [0u8; 8];
                 getrandom::fill(&mut buf).expect("system randomness");
@@ -115,10 +125,45 @@ impl RunnerCore {
         self
     }
 
+    fn request_calendar_repair(&mut self) {
+        if matches!(self.calendar_repair, CalendarRepairState::Idle) {
+            self.calendar_repair = CalendarRepairState::Requested;
+        }
+    }
+
+    fn resume_calendar_repair(
+        state: &mut CalendarRepairState,
+        store: &mut Store,
+        transport: &dyn Transport,
+    ) -> Result<(), SyncError> {
+        if matches!(state, CalendarRepairState::Requested) {
+            match sync::CalendarRepair::new(store) {
+                Ok(repair) => *state = CalendarRepairState::Reading(repair),
+                Err(error) => {
+                    if !error.is_transient() {
+                        *state = CalendarRepairState::Idle;
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let CalendarRepairState::Reading(repair) = state else {
+            return Ok(());
+        };
+        let result = repair.run(store, transport);
+        if !result.as_ref().is_err_and(SyncError::is_transient) {
+            *state = CalendarRepairState::Idle;
+        }
+        result
+    }
+
     /// Runs one sync cycle and returns how long to wait before the next one.
     pub fn run_cycle(&mut self) -> Duration {
         self.update(|s| s.syncing = true);
-        let result = sync::sync_cycle(&mut self.store, &*self.transport);
+        let result =
+            sync::sync_cycle_before_pull(&mut self.store, &*self.transport, |store, transport| {
+                Self::resume_calendar_repair(&mut self.calendar_repair, store, transport)
+            });
         self.rate_limited = false;
         self.refresh_counts();
         let wait = match result {
@@ -201,7 +246,11 @@ impl SyncRunner {
                 let mut deadline = Instant::now();
                 'outer: loop {
                     let timeout = deadline.saturating_duration_since(Instant::now());
-                    match rx.recv_timeout(timeout) {
+                    let received = rx.recv_timeout(timeout);
+                    if received == Ok(Wake::RepairCalendar) {
+                        core.request_calendar_repair();
+                    }
+                    match received {
                         Ok(Wake::Stop) | Err(RecvTimeoutError::Disconnected) => break,
                         // Edits remain in SQLite and the scheduled cycle pulls from its cursor.
                         Ok(_) if core.rate_limited && Instant::now() < deadline => continue,
@@ -212,6 +261,9 @@ impl SyncRunner {
                     while let Ok(w) = rx.try_recv() {
                         if w == Wake::Stop {
                             break 'outer;
+                        }
+                        if w == Wake::RepairCalendar {
+                            core.request_calendar_repair();
                         }
                     }
                     let wait = core.run_cycle();

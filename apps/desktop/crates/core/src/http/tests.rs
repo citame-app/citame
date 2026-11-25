@@ -1346,6 +1346,10 @@ fn classify_is_pure() {
         classify_status(401, None, "", true),
         TransportError::Unauthorized
     );
+    assert!(matches!(
+        classify_status(408, None, "", true),
+        TransportError::Offline(_)
+    ));
     assert_eq!(
         classify_status(429, Some("Wed, 21 Oct 2026 07:28:00 GMT"), "", true),
         TransportError::RateLimited(None)

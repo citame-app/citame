@@ -1,12 +1,15 @@
 //! Sync engine: push the outbox serially, pull with the cursor, per docs/sync-protocol.md.
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    time::Duration,
+};
 
 use thiserror::Error;
 
 use crate::error::CoreError;
 use crate::model::*;
-use crate::store::{INITIAL_GENERATION, Store};
+use crate::store::{CalendarCacheScope, INITIAL_GENERATION, Store, UnreadableAppointment};
 
 pub const PUSH_BATCH: usize = 100;
 // Leave headroom below the server's default one-MiB request limit.
@@ -148,6 +151,18 @@ fn classify(e: TransportError) -> SyncError {
     }
 }
 
+fn classify_repair_storage(error: CoreError) -> SyncError {
+    if let CoreError::Db(rusqlite::Error::SqliteFailure(code, _)) = &error
+        && matches!(
+            code.code,
+            rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+        )
+    {
+        return SyncError::Retry("The local calendar is busy".into());
+    }
+    error.into()
+}
+
 /// Sends the outbox head in batches of up to 100, one request at a time, in creation order.
 pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushReport, SyncError> {
     let mut report = PushReport::default();
@@ -228,6 +243,103 @@ pub fn push_outbox(store: &mut Store, transport: &dyn Transport) -> Result<PushR
                 .unwrap_or_default();
             return Err(SyncError::Retry(msg));
         }
+    }
+}
+
+/// Restore malformed appointment JSON from the server's current projection of known changes.
+/// Normal sync owns changes to the cursor, scope, versions and indexed scheduling fields.
+pub(crate) struct CalendarRepair {
+    scope: CalendarCacheScope,
+    cursor: i64,
+    since: i64,
+    unreadable: BTreeMap<String, UnreadableAppointment>,
+    repairs: Vec<(Appointment, UnreadableAppointment)>,
+}
+
+impl CalendarRepair {
+    pub(crate) fn new(store: &Store) -> Result<Self, SyncError> {
+        Ok(Self {
+            scope: store
+                .calendar_cache_scope()
+                .map_err(classify_repair_storage)?,
+            cursor: store.cursor().map_err(classify_repair_storage)?,
+            since: 0,
+            unreadable: store
+                .unreadable_appointments()
+                .map_err(classify_repair_storage)?,
+            repairs: Vec::new(),
+        })
+    }
+
+    pub(crate) fn run(
+        &mut self,
+        store: &mut Store,
+        transport: &dyn Transport,
+    ) -> Result<(), SyncError> {
+        if store
+            .calendar_cache_scope()
+            .map_err(classify_repair_storage)?
+            != self.scope
+            || store.cursor().map_err(classify_repair_storage)? != self.cursor
+        {
+            return Ok(());
+        }
+        while !self.unreadable.is_empty() && self.since < self.cursor {
+            let (page, _) = match transport.pull_with_catalogue(
+                self.since,
+                PULL_PAGE,
+                false,
+                CatalogueSnapshots {
+                    full_resource_pools: false,
+                    full_combinations: false,
+                    full_booking_combinations: false,
+                    full_peak_prices: false,
+                },
+            ) {
+                Ok(response) => response,
+                Err(TransportError::CursorAhead | TransportError::ReplicaGenerationChanged) => {
+                    return Ok(());
+                }
+                Err(error) => return Err(classify(error)),
+            };
+            if !self.scope.matches_pull(&page) || page.head_seq < self.cursor {
+                // Let normal sync handle visibility changes and restored backups.
+                return Ok(());
+            }
+            if page.next_cursor < self.since
+                || page.next_cursor > page.head_seq
+                || (page.has_more && page.next_cursor == self.since)
+            {
+                return Err(SyncError::Fatal("Invalid calendar repair cursor".into()));
+            }
+            for change in page.changes {
+                if change.entity != "appointment"
+                    || change.op != "upsert"
+                    || change.seq <= self.since
+                    || change.seq > self.cursor.min(page.next_cursor)
+                {
+                    continue;
+                }
+                if let Entry::Occupied(saved) = self.unreadable.entry(change.id)
+                    && let Some(data) = change.data
+                    && let Ok(appointment) = serde_json::from_value::<Appointment>(data)
+                    && &appointment.id == saved.key()
+                    && appointment.version == saved.get().version
+                {
+                    self.repairs.push((appointment, saved.remove()));
+                }
+            }
+            self.since = page.next_cursor;
+            if !page.has_more {
+                break;
+            }
+        }
+        if !self.repairs.is_empty() {
+            store
+                .repair_appointment_json(&self.scope, &self.repairs)
+                .map_err(classify_repair_storage)?;
+        }
+        Ok(())
     }
 }
 
@@ -408,6 +520,14 @@ fn backfill_projection(
 /// Push edits in the current history, then pull. A recovery fence stops the push before any
 /// stale edit is applied. Pull then switches histories and preserves the edits as conflicts.
 pub fn sync_cycle(store: &mut Store, transport: &dyn Transport) -> Result<CycleReport, SyncError> {
+    sync_cycle_before_pull(store, transport, |_, _| Ok(()))
+}
+
+pub(crate) fn sync_cycle_before_pull(
+    store: &mut Store,
+    transport: &dyn Transport,
+    before_pull: impl FnOnce(&mut Store, &dyn Transport) -> Result<(), SyncError>,
+) -> Result<CycleReport, SyncError> {
     let push = match push_outbox(store, transport) {
         Ok(push) => push,
         Err(SyncError::ReplicaGenerationChanged) => {
@@ -424,6 +544,7 @@ pub fn sync_cycle(store: &mut Store, transport: &dyn Transport) -> Result<CycleR
         }
         Err(error) => return Err(error),
     };
+    before_pull(store, transport)?;
     let pull = pull_all(store, transport)?;
     Ok(CycleReport { push, pull })
 }

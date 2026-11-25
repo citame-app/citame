@@ -2590,7 +2590,7 @@ impl Root {
                     self.t(Key::CalendarReadRetry),
                     Kind::Primary,
                     cx.listener(|this, _, _, cx| {
-                        this.svc.wake(Wake::Manual);
+                        this.svc.wake(Wake::RepairCalendar);
                         this.reload(cx);
                     }),
                 )

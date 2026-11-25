@@ -36,7 +36,7 @@ use sob_core::model::*;
 use sob_core::ops::{self, NewAppointment, Resolution};
 use sob_core::reports::ReportQuery;
 use sob_core::reviews::{EmailStatus, ModerationCommand, ReviewStatus};
-use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner};
+use sob_core::runner::{Connectivity, RunnerCore, SharedStatus, SyncRunner, Wake};
 use sob_core::store::{AssignmentWork, SalonConfigurationWork, ServiceAssignment, Store};
 use sob_core::sync::{self, Transport, TransportError};
 use sob_core::waitlist::{
@@ -6435,6 +6435,48 @@ fn resending_a_mutation_is_idempotent_and_deletes_arrive_as_tombstones() {
     b.sync();
     assert!(!window(&b).iter().any(|t| t.id == off), "tombstone applied");
     assert!(b.store.cursor().unwrap() >= a.store.cursor().unwrap().min(b.store.cursor().unwrap()));
+}
+
+#[test]
+#[ignore = "needs the real API, Postgres and Valkey (see README)"]
+fn manual_calendar_reload_recovers_imported_badges_without_creating_notices() {
+    let mut device = Device::sign_in();
+    let saved = imported_eur_booking(&mut device, 5000);
+    assert!(saved.service_badges[0].internal_note);
+    assert!(saved.service_badges[0].customer_comment);
+    let cursor = device.store.cursor().unwrap();
+    let notice_head = device.store.booking_notice_head().unwrap();
+    rusqlite::Connection::open(&device.path)
+        .unwrap()
+        .execute(
+            "UPDATE appointment SET json = json_set(json, '$.serviceBadges[0].internalNote', 42)
+             WHERE id = ?1",
+            [&saved.id],
+        )
+        .unwrap();
+    assert!(device.store.appointment(&saved.id).is_err());
+
+    let runner = SyncRunner::spawn(RunnerCore::new(
+        Store::open(&device.path).unwrap(),
+        device.transport.clone(),
+        Default::default(),
+    ));
+    wait(Duration::from_secs(10), "the initial sync", || {
+        let status = runner.status();
+        status.connectivity == Connectivity::Online && !status.syncing
+    });
+    assert!(device.store.appointment(&saved.id).is_err());
+    runner.wake(Wake::RepairCalendar);
+    wait(Duration::from_secs(10), "repairing the appointment", || {
+        device
+            .store
+            .appointment(&saved.id)
+            .is_ok_and(|row| row.is_some())
+    });
+    runner.stop();
+    assert_eq!(device.store.appointment(&saved.id).unwrap(), Some(saved));
+    assert_eq!(device.store.cursor().unwrap(), cursor);
+    assert_eq!(device.store.booking_notice_head().unwrap(), notice_head);
 }
 
 #[test]

@@ -105,6 +105,136 @@ fn empty_pull(since: i64, _limit: u32) -> Result<PullResponse, TransportError> {
 }
 
 #[test]
+fn repairs_an_unreadable_appointment_without_replaying_changes_or_local_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("replica.sqlite");
+    let mut store = Store::open(&path).unwrap();
+    let mut appointment = RawChange {
+        seq: 2,
+        entity: "appointment".into(),
+        id: "visit".into(),
+        op: "upsert".into(),
+        data: Some(json!({
+            "id": "visit", "staffId": "staff", "clientId": "client",
+            "startsAt": "2026-03-10T13:00:00.000Z", "endsAt": "2026-03-10T14:00:00.000Z",
+            "status": "booked", "notes": "server note", "version": 2, "services": [],
+            "createdAt": "2026-03-09T13:00:00.000Z", "updatedAt": "2026-03-09T13:00:00.000Z"
+        })),
+    };
+    store.apply_page(&[appointment.clone()], 5).unwrap();
+    let rejected = enqueue_clients(&mut store, 1).remove(0);
+    let sent = store.outbox(1).unwrap();
+    store
+        .apply_push_results(
+            &sent,
+            &[MutationResult::Rejected {
+                mutation_id: rejected.clone(),
+                reason: "version_conflict".into(),
+                message: "Synthetic local conflict".into(),
+                replayed: false,
+            }],
+        )
+        .unwrap();
+    let conflict = store.conflict(&rejected).unwrap().unwrap();
+    let queued = enqueue_clients(&mut store, 1);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE appointment SET json = json_set(json, '$.notes', 42)",
+            [],
+        )
+        .unwrap();
+
+    let offline = Fake::new(
+        Box::new(|_| panic!("a calendar repair must be read-only")),
+        Box::new(|_, _| Err(TransportError::Offline("disconnected".into()))),
+    );
+    assert!(matches!(
+        CalendarRepair::new(&store)
+            .unwrap()
+            .run(&mut store, &offline),
+        Err(SyncError::Offline(_))
+    ));
+    assert!(store.appointment("visit").is_err());
+
+    for (server_version, server_generation, server_scope) in [
+        (2, Some("another-history"), None),
+        (2, None, Some("own")),
+        (1, None, None),
+    ] {
+        appointment.data.as_mut().unwrap()["version"] = json!(server_version);
+        let candidate = appointment.clone();
+        let peer = Fake::new(
+            Box::new(|_| panic!("a calendar repair must be read-only")),
+            Box::new(move |since, limit| {
+                assert_eq!(since, 0);
+                let mut page = empty_pull(since, limit)?;
+                page.generation = server_generation.map(str::to_owned);
+                page.calendar_scope = server_scope.map(str::to_owned);
+                page.next_cursor = 5;
+                page.head_seq = 5;
+                page.changes.push(candidate.clone());
+                Ok(page)
+            }),
+        );
+        CalendarRepair::new(&store)
+            .unwrap()
+            .run(&mut store, &peer)
+            .unwrap();
+        assert!(store.appointment("visit").is_err());
+    }
+
+    appointment.data.as_mut().unwrap()["version"] = json!(2);
+    let attempts = AtomicUsize::new(0);
+    let peer = Fake::new(
+        Box::new(|_| panic!("a calendar repair must be read-only")),
+        Box::new(move |since, limit| {
+            let mut page = empty_pull(since, limit)?;
+            page.head_seq = 5;
+            match (since, attempts.fetch_add(1, Ordering::SeqCst)) {
+                (0, 0) => {
+                    page.next_cursor = 1;
+                    page.has_more = true;
+                }
+                (1, 1) => return Err(TransportError::RateLimited(Some(Duration::from_secs(2)))),
+                (1, 2) => {
+                    page.next_cursor = 5;
+                    page.changes.push(appointment.clone());
+                }
+                unexpected => panic!("unexpected repair page: {unexpected:?}"),
+            }
+            Ok(page)
+        }),
+    );
+    let mut repair = CalendarRepair::new(&store).unwrap();
+    assert!(matches!(
+        repair.run(&mut store, &peer),
+        Err(SyncError::RateLimited(_))
+    ));
+    assert!(store.appointment("visit").is_err());
+    repair.run(&mut store, &peer).unwrap();
+    assert_eq!(peer.log(), ["pull:0", "pull:1", "pull:1"]);
+    assert_eq!(store.cursor().unwrap(), 5);
+    assert_eq!(store.outbox(1).unwrap()[0].mutation_id, queued[0]);
+    assert_eq!(store.conflict(&rejected).unwrap(), Some(conflict));
+    let repaired = store.appointment("visit").unwrap().unwrap();
+    assert_eq!(repaired.notes.as_deref(), Some("server note"));
+}
+
+#[test]
+fn queued_work_pushes_before_a_rate_limited_calendar_repair() {
+    let mut store = Store::open_in_memory().unwrap();
+    enqueue_clients(&mut store, 1);
+    let peer = Fake::new(Box::new(applied_all), Box::new(empty_pull));
+    let result = sync_cycle_before_pull(&mut store, &peer, |_, _| {
+        assert_eq!(peer.log(), ["push:1"]);
+        Err(SyncError::RateLimited(Some(Duration::from_secs(2))))
+    });
+    assert!(matches!(result, Err(SyncError::RateLimited(_))));
+    assert_eq!(store.outbox_len().unwrap(), 0);
+}
+
+#[test]
 fn fresh_replica_repairs_name_only_allocations_after_its_api_is_upgraded() {
     let mut store = Store::open_in_memory().unwrap();
     assert_eq!(store.booked_resources_cursor().unwrap(), None);

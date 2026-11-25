@@ -4,7 +4,7 @@
 //! are layered on top at read time (see `calendar`), so a pull can never clobber a pending edit
 //! and a rejection never leaves a phantom row behind.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use chrono::{SecondsFormat, Utc};
@@ -41,6 +41,10 @@ const GENERATION_KEY: &str = "sync_generation";
 const REBUILD_KEY: &str = "sync_rebuilding";
 const CALENDAR_VISIBILITY_EPOCH: &str = "waitlist_visibility_epoch";
 
+fn directory_scope(allowed: bool) -> &'static str {
+    if allowed { "allowed" } else { "denied" }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CalendarCacheScope {
     generation: String,
@@ -50,6 +54,12 @@ pub struct CalendarCacheScope {
 }
 
 impl CalendarCacheScope {
+    pub(crate) fn matches_pull(&self, page: &PullResponse) -> bool {
+        page.generation.as_deref().unwrap_or(INITIAL_GENERATION) == self.generation
+            && page.calendar_scope == self.calendar
+            && page.client_directory.map(directory_scope) == self.directory.as_deref()
+    }
+
     fn read(db: &Connection) -> Result<Self> {
         Ok(db.query_row(
             "SELECT coalesce((SELECT value FROM meta WHERE key=?1),?2),
@@ -75,6 +85,11 @@ impl CalendarCacheScope {
     pub fn permits_read(&self) -> bool {
         self.calendar.as_deref() != Some("none") && self.directory.as_deref() != Some("denied")
     }
+}
+
+pub(crate) struct UnreadableAppointment {
+    pub version: i64,
+    pub json: String,
 }
 
 const SALON_CONFIGURATION_CACHE: &str = "salon_configuration_cache";
@@ -1608,7 +1623,7 @@ impl Store {
             .conn
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::ensure_generation(&tx, Some(generation))?;
-        let directory = directory.map(|allowed| if allowed { "allowed" } else { "denied" });
+        let directory = directory.map(directory_scope);
         let mut changes = Vec::new();
         for (key, scope) in [
             ("client_directory", directory),
@@ -2047,6 +2062,63 @@ impl Store {
             )
             .optional()?;
         j.map(|j| Ok(serde_json::from_str(&j)?)).transpose()
+    }
+
+    pub(crate) fn unreadable_appointments(
+        &self,
+    ) -> Result<BTreeMap<String, UnreadableAppointment>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, version, json FROM appointment")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                UnreadableAppointment {
+                    version: row.get(1)?,
+                    json: row.get(2)?,
+                },
+            ))
+        })?;
+        let mut unreadable = BTreeMap::new();
+        for row in rows {
+            let (id, record) = row?;
+            if serde_json::from_str::<Appointment>(&record.json).is_err() {
+                unreadable.insert(id, record);
+            }
+        }
+        Ok(unreadable)
+    }
+
+    pub(crate) fn repair_appointment_json(
+        &mut self,
+        scope: &CalendarCacheScope,
+        repairs: &[(Appointment, UnreadableAppointment)],
+    ) -> Result<()> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if &CalendarCacheScope::read(&tx)? != scope {
+            return Ok(());
+        }
+        for (appointment, saved) in repairs {
+            tx.execute(
+                "UPDATE appointment SET json = ?1
+                 WHERE id = ?2 AND json = ?3 AND version = ?4 AND staff_id = ?5
+                   AND starts_at_ms = ?6 AND ends_at_ms = ?7 AND status = ?8",
+                params![
+                    serde_json::to_string(appointment)?,
+                    appointment.id,
+                    saved.json,
+                    appointment.version,
+                    appointment.staff_id,
+                    appointment.starts_at.timestamp_millis(),
+                    appointment.ends_at.timestamp_millis(),
+                    appointment.status.as_str(),
+                ],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
     }
 
     /// Mirror appointments overlapping `[from_ms, to_ms)` (server state, no local edits).

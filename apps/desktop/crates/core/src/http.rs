@@ -2526,6 +2526,7 @@ pub fn classify_status(
     match status {
         401 => TransportError::Unauthorized,
         403 => TransportError::Forbidden(error_message(body)),
+        408 if is_pull => TransportError::Offline("Timed out waiting for Cloud".into()),
         409 if serde_json::from_str::<serde_json::Value>(body).is_ok_and(|value| {
             value
                 .pointer("/error/code")

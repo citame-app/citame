@@ -25,6 +25,8 @@ Guarantee: if you have seen `seq = n`, you have seen every change that will ever
 
 Order of work when coming online: push first, then pull (pull then shows the effect of your own mutations and of everyone else's).
 
+After the push, an explicit calendar repair may read older change pages to retrieve the current Cloud projection for unreadable local appointment details. The repair only replaces malformed JSON when the saved version, scheduling fields, replica generation and visibility still match. It keeps its own page cursor across transient errors and leaves the normal pull cursor, local edits, conflicts and notices to the regular sync algorithm.
+
 Every pull page returns `generation`. Send the generation of the local mirror with every push. Normal upgrades keep the generation stable. Activating a restored database changes the generation across all API replicas. The server rejects a mismatched push with `409 sync_generation_changed` before executing any member of the batch. A missing generation identifies the original `initial` history for older clients.
 
 When a pull reports a different generation, the desktop atomically moves queued mutations to local Conflicts, resets the mirror and cursor, and stores the new generation. It rebuilds from zero even if the old cursor is still below the new head. The rebuild state survives restart and the client waits for the final page before accepting edits. Previously open conflicts also require manual review. Upgrade older desktops before reconnecting them. The pull endpoint stays available, but older apps with pending changes may stop before reaching it when their push is rejected.
