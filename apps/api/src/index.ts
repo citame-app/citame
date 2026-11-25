@@ -1,6 +1,7 @@
 import { assertNotBooksyReviewDatabase, createDb } from "@sob/db";
 import { RedisClient } from "bun";
 import { createApp } from "./app";
+import { OAuthSigningKeyError } from "./auth/signing-readiness";
 import { loadConfig } from "./config";
 import { startMaintenance } from "./maintenance";
 import { startBookingExpiry } from "./modules/booking-protection/runtime";
@@ -27,7 +28,14 @@ await ensureOAuthSeeds(db, config);
 // Account emails (verification, reset, invitation) use the same provider settings as reminders.
 const emailProvider = createProviders(config.notifications).email;
 const app = createApp({ db, valkey, config, emailProvider });
-await app.ready();
+try {
+  await app.ready();
+} catch (error) {
+  rootLogger.error("api startup checks failed", {
+    reason: error instanceof OAuthSigningKeyError ? error.message : "Unable to initialize the API",
+  });
+  process.exit(1);
+}
 const inventoryExpiry = startInventoryExpiry(db);
 const bookingExpiry = startBookingExpiry(db);
 const rewardsExpiry = startRewardsExpiry(db);

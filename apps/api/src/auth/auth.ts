@@ -53,6 +53,7 @@ export interface AuthDeps {
 export const VERIFY_LINK_SECONDS = 60 * 60;
 export const RESET_LINK_SECONDS = 60 * 60;
 export const INVITE_LINK_SECONDS = 72 * 60 * 60;
+export const OAUTH_JWKS_GRACE_SECONDS = 30 * 24 * 60 * 60;
 
 const tokenDigest = (token: string) =>
   new Bun.CryptoHasher("sha256").update(token).digest("hex").slice(0, 24);
@@ -180,7 +181,7 @@ export function createAuth({ db, valkey, config, emailProvider = null, logger }:
     plugins: [
       desktopBrowserSession,
       // Signs the JWT access tokens (ES256). Keys live in the `jwks` table, private half encrypted.
-      jwt({ jwks: { keyPairConfig: { alg: "ES256" } } }),
+      jwt({ jwks: { keyPairConfig: { alg: "ES256" }, gracePeriod: OAUTH_JWKS_GRACE_SECONDS } }),
       oauthProvider({
         loginPage: "/sign-in",
         consentPage: "/consent",

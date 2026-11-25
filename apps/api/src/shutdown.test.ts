@@ -74,9 +74,10 @@ test("startup refuses an incompatible restored signing key before opening its li
     ]);
     const result = await Promise.race([restored.exited, Bun.sleep(15_000).then(() => "timeout")]);
     expect(result).toBe(1);
-    const [stdout, stderr] = await logs;
+    const [stdout] = await logs;
     expect(stdout).not.toContain('"msg":"api listening"');
-    expect(stderr).toContain("Cannot use the OAuth signing key.");
+    expect(stdout).toContain('"msg":"api startup checks failed"');
+    expect(stdout).toContain("Cannot use the OAuth signing key.");
     await expect(fetch(`${base}/health`)).rejects.toThrow();
     expect(await db.db.select({ id: jwks.id }).from(jwks)).toEqual(keys);
   } finally {

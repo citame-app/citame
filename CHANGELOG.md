@@ -4,7 +4,7 @@ All notable changes are recorded here. The format follows [Keep a Changelog](htt
 
 ## [Unreleased]
 
-The API checks its OAuth signing key before serving traffic so a restored database paired with a different auth secret fails at startup.
+The API checks OAuth signatures against the restored public keys before serving traffic. Startup validates keys assigned to MCP and Desktop without creating replacements and logs a structured error if the check fails.
 
 Prepared Booksy billing reports include owner-reviewed payment corrections when the audit trail connects the archived flags to the current appointment service.
 

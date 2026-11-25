@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { createDb } from "@sob/db";
+import { createDb, jwks, oauthResource } from "@sob/db";
 import { RedisClient } from "bun";
+import { eq } from "drizzle-orm";
 import {
   type ApiTest,
   actor,
@@ -59,6 +60,72 @@ describe("liveness and readiness", () => {
       );
       expect(await (await get("/api/auth/jwks")).json()).toEqual(expected);
     } finally {
+      await restarted.shutdown();
+    }
+  });
+
+  test("startup verifies the restored public key without creating a signing key", async () => {
+    expect((await get("/api/auth/jwks")).status).toBe(200);
+    const [key] = await t.db.select().from(jwks);
+    if (!key) throw new Error("The test signing key was not created");
+    const restarted = createApp({ db: t.db, valkey: t.valkey.client, config: t.config });
+    try {
+      await expect(restarted.ready()).resolves.toBeUndefined();
+      const malformedPublicKey = "{}";
+      await t.db.update(jwks).set({ publicKey: malformedPublicKey }).where(eq(jwks.id, key.id));
+      await expect(restarted.ready()).rejects.toThrow("Cannot use the OAuth signing key.");
+      expect(await t.db.select().from(jwks)).toEqual([{ ...key, publicKey: malformedPublicKey }]);
+    } finally {
+      await t.db.update(jwks).set({ publicKey: key.publicKey }).where(eq(jwks.id, key.id));
+      await restarted.shutdown();
+    }
+  });
+
+  test("startup refuses a missing resource signing key even with a healthy default key", async () => {
+    expect((await get("/api/auth/jwks")).status).toBe(200);
+    const keys = await t.db.select().from(jwks);
+    const [key] = keys;
+    if (!key) throw new Error("The test signing key was not created");
+    const resource = eq(oauthResource.identifier, t.config.oauth.mcpResource);
+    const restarted = createApp({ db: t.db, valkey: t.valkey.client, config: t.config });
+    try {
+      await t.db.update(oauthResource).set({ signingKeyId: "" }).where(resource);
+      await expect(restarted.ready()).resolves.toBeUndefined();
+      await t.db.update(oauthResource).set({ signingKeyId: key.id }).where(resource);
+      await expect(restarted.ready()).resolves.toBeUndefined();
+      await t.db
+        .update(oauthResource)
+        .set({ signingKeyId: "missing-restored-key" })
+        .where(resource);
+      await expect(restarted.ready()).rejects.toThrow("Cannot use the OAuth signing key.");
+      expect(await t.db.select().from(jwks)).toEqual(keys);
+    } finally {
+      await t.db.update(oauthResource).set({ signingKeyId: null }).where(resource);
+      await restarted.shutdown();
+    }
+  });
+
+  test("startup checks the public JSON of rotated keys that are still published", async () => {
+    expect((await get("/api/auth/jwks")).status).toBe(200);
+    const [key] = await t.db.select().from(jwks);
+    if (!key) throw new Error("The test signing key was not created");
+    const rotated = {
+      ...key,
+      id: Bun.randomUUIDv7(),
+      publicKey: "{",
+      expiresAt: new Date(Date.now() - 60_000),
+    };
+    const restarted = createApp({ db: t.db, valkey: t.valkey.client, config: t.config });
+    try {
+      await t.db.insert(jwks).values(rotated);
+      await expect(restarted.ready()).rejects.toThrow("Cannot use the OAuth signing key.");
+      await t.db
+        .update(jwks)
+        .set({ expiresAt: new Date(Date.now() - 31 * 86_400_000) })
+        .where(eq(jwks.id, rotated.id));
+      await expect(restarted.ready()).resolves.toBeUndefined();
+    } finally {
+      await t.db.delete(jwks).where(eq(jwks.id, rotated.id));
       await restarted.shutdown();
     }
   });
