@@ -361,6 +361,9 @@ impl Root {
     }
 
     fn confirm_booking_intake(&mut self, cx: &mut Context<Self>) {
+        if self.calendar_read_failed {
+            return;
+        }
         let Some(transport) = self
             .svc
             .transport()
@@ -890,8 +893,7 @@ impl Root {
                 )
                 .child(body)
                 .when_some(
-                    form.error
-                        .or((!can_edit).then_some(Key::BookingIntakeAccessChanged)),
+                    self.booking_form_error(form.error, can_edit),
                     |panel, error| {
                         panel.child(
                             div()

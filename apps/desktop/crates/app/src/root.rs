@@ -431,6 +431,7 @@ pub struct Root {
     calendar_scope: Option<String>,
     calendar_edits_allowed: bool,
     calendar_read_failed: bool,
+    calendar_access_unreadable: bool,
     replica_generation: Option<String>,
     theme_override: Option<bool>,
     pending_local_today: bool,
@@ -529,6 +530,7 @@ impl Root {
             calendar_scope: None,
             calendar_edits_allowed: false,
             calendar_read_failed: false,
+            calendar_access_unreadable: false,
             replica_generation: None,
             theme_override,
             pending_local_today,
@@ -899,9 +901,27 @@ impl Root {
         // Capture the version before reading the view. A sync commit during the reads must
         // still trigger a refresh on the next tick.
         self.data_version = self.svc.store.data_version().ok();
-        let generation = self.svc.store.refresh_reviewed_generation().ok();
-        let scope = self.svc.store.get_meta("calendar_scope").ok().flatten();
-        if (self.calendar_scope.is_some() && self.calendar_scope != scope)
+        let Ok(access) = self.svc.store.refresh_reviewed_calendar_access() else {
+            self.calendar_access_unreadable = true;
+            self.calendar_read_failed = true;
+            self.calendar_edits_allowed = false;
+            self.view = None;
+            self.period_views.clear();
+            self.status = self.svc.status();
+            self.clients.clear();
+            self.client_search_names.clear();
+            self.reload_directory();
+            self.refresh_open_waitlist_scope();
+            self.reload_marketing_invitation_contacts();
+            // Retry on the next readable tick, even if the database version has not changed.
+            self.data_version = None;
+            cx.notify();
+            return;
+        };
+        self.calendar_access_unreadable = false;
+        let generation = Some(access.generation);
+        let scope = access.scope;
+        if self.calendar_scope.as_deref().unwrap_or("all") != scope.as_deref().unwrap_or("all")
             || self.replica_generation != generation
         {
             self.calendar_resource = None;
@@ -939,21 +959,17 @@ impl Root {
         self.refresh_notices();
         let store = &self.svc.store;
         let previous_time_off_scope = std::mem::take(&mut self.time_off_scope);
-        self.time_off_scope = store
-            .get_meta("time_off_scope")
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| {
-                if self
-                    .svc
-                    .current_session()
-                    .is_some_and(|s| s.role == "owner")
-                {
-                    "all".into()
-                } else {
-                    "none".into()
-                }
-            });
+        self.time_off_scope = access.time_off_scope.unwrap_or_else(|| {
+            if self
+                .svc
+                .current_session()
+                .is_some_and(|s| s.role == "owner")
+            {
+                "all".into()
+            } else {
+                "none".into()
+            }
+        });
         self.tz = calendar::salon_tz(store).unwrap_or(Tz::UTC);
         if self.pending_local_today && store.salon_settings().ok().flatten().is_some() {
             self.date = Utc::now().with_timezone(&self.tz).date_naive();
@@ -979,7 +995,7 @@ impl Root {
         self.view = view.unwrap_or_default();
         self.calendar_edits_allowed = !self.calendar_read_failed
             && ops::calendar_scope_permits_edit(self.calendar_scope.as_deref(), None)
-            && store.calendar_edits_allowed().unwrap_or(false);
+            && access.may_edit;
 
         if !self.view.as_ref().is_some_and(|view| {
             view.columns
@@ -1300,12 +1316,7 @@ impl Root {
 
     fn book_reviewed(&mut self, peak_review: Option<&str>, cx: &mut Context<Self>) {
         if !self.calendar_edits_allowed {
-            if self.calendar_read_failed {
-                if let Overlay::New(form) = &mut self.overlay {
-                    form.error = Some(Key::CalendarReadFailed);
-                    cx.notify();
-                }
-            } else {
+            if !self.calendar_read_failed {
                 self.show_new_booking_error(CoreError::AppointmentScopeDenied, cx);
             }
             return;
@@ -2563,9 +2574,14 @@ impl Root {
             .into_any_element()
     }
 
-    fn render_calendar_read_error(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_calendar_read_error(
+        &self,
+        selector: &'static str,
+        retry: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         div()
-            .debug_selector(|| "calendar-read-error".into())
+            .debug_selector(move || selector.into())
             .flex_1()
             .flex()
             .flex_col()
@@ -2586,7 +2602,7 @@ impl Root {
             )
             .child(
                 self.button(
-                    "retry-calendar-read",
+                    retry,
                     self.t(Key::CalendarReadRetry),
                     Kind::Primary,
                     cx.listener(|this, _, _, cx| {
@@ -2594,7 +2610,7 @@ impl Root {
                         this.reload(cx);
                     }),
                 )
-                .debug_selector(|| "retry-calendar-read".into())
+                .debug_selector(move || retry.into())
                 .tab_index(0)
                 .focus(|style| style.border_color(theme::text())),
             )
@@ -3676,8 +3692,7 @@ impl Root {
                         ),
                 )
                 .when_some(
-                    f.error
-                        .or((!can_book).then_some(Key::BookingIntakeAccessChanged)),
+                    self.booking_form_error(f.error, can_book),
                     |panel, error| {
                         panel.child(
                             div()
@@ -3693,6 +3708,13 @@ impl Root {
             (viewport.height - px(24.)).clamp(px(0.), px(720.)),
             None,
         )
+    }
+
+    fn booking_form_error(&self, error: Option<Key>, can_edit: bool) -> Option<Key> {
+        self.calendar_read_failed
+            .then_some(Key::CalendarReadFailed)
+            .or(error)
+            .or((!can_edit).then_some(Key::BookingIntakeAccessChanged))
     }
 
     fn new_service_row(
@@ -3805,6 +3827,18 @@ impl Root {
         viewport_height: gpui::Pixels,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        if self.calendar_access_unreadable {
+            return self.modal_with_height(
+                self.render_calendar_read_error(
+                    "appointment-calendar-read-error",
+                    "retry-appointment-calendar",
+                    cx,
+                ),
+                px(560.),
+                (viewport_height - px(24.)).clamp(px(0.), px(340.)),
+                None,
+            );
+        }
         if let Some(review) = &d.price_review {
             return self.render_price_review(review, cx);
         }
@@ -5144,7 +5178,11 @@ impl Render for Root {
                         .flex_col()
                         .child(self.render_header(cx))
                         .when(self.calendar_read_failed, |frame| {
-                            frame.child(self.render_calendar_read_error(cx))
+                            frame.child(self.render_calendar_read_error(
+                                "calendar-read-error",
+                                "retry-calendar-read",
+                                cx,
+                            ))
                         })
                         .when(!self.calendar_read_failed, |frame| {
                             frame
@@ -5188,9 +5226,10 @@ impl Render for Root {
                                     },
                                 )
                         })
-                        .when(!self.notices.is_empty(), |d| {
-                            d.child(self.render_notices(cx))
-                        })
+                        .when(
+                            !self.calendar_access_unreadable && !self.notices.is_empty(),
+                            |d| d.child(self.render_notices(cx)),
+                        )
                         .children(self.render_slot_tooltip(viewport, title_height))
                         .children(overlay)
                 }
@@ -5360,6 +5399,173 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn unreadable_calendar_access_preserves_an_open_booking_until_the_next_read(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let session = FileTokenStore::new(config.session_path())
+            .load()
+            .unwrap()
+            .unwrap();
+        let connection = rusqlite::Connection::open(config.db_path(&session)).unwrap();
+        let win = cx.add_window(|window, cx| Root::new(config, window, cx));
+        win.update(cx, |root, window, cx| {
+            root.svc.stop_sync();
+            let access_keys = [
+                ("calendar_scope", "all"),
+                ("time_off_scope", "all"),
+                ("viewer_edit_calendar", "1"),
+                ("sync_generation", "initial"),
+            ];
+            for (key, value) in access_keys {
+                root.svc.store.set_meta(key, value).unwrap();
+            }
+            root.reload(cx);
+            root.open_new(window, cx);
+            let Overlay::New(form) = &root.overlay else {
+                panic!("expected the booking form");
+            };
+            form.notes
+                .update(cx, |field, cx| field.set_text("Synthetic draft", cx));
+
+            for (key, value) in access_keys {
+                connection
+                    .execute("UPDATE meta SET value = x'ff' WHERE key = ?1", [key])
+                    .unwrap();
+                root.reload(cx);
+                assert!(matches!(root.overlay, Overlay::New(_)));
+                assert!(
+                    root.calendar_read_failed && !root.calendar_edits_allowed,
+                    "{key}"
+                );
+                assert_eq!(root.calendar_scope.as_deref(), Some("all"));
+                root.book(cx);
+                assert!(outbox_kinds(root).is_empty());
+
+                let data_version = root.svc.store.data_version().unwrap();
+                root.svc.store.set_meta(key, value).unwrap();
+                assert_eq!(root.svc.store.data_version().unwrap(), data_version);
+                root.tick(cx);
+                assert!(
+                    !root.calendar_read_failed && root.calendar_edits_allowed,
+                    "{key}"
+                );
+                assert!(matches!(&root.overlay, Overlay::New(form)
+                    if form.notes.read(cx).text() == "Synthetic draft"));
+            }
+
+            connection
+                .execute(
+                    "INSERT INTO meta (key, value) VALUES ('client_directory', x'ff')",
+                    [],
+                )
+                .unwrap();
+            root.tick(cx);
+            assert!(!root.calendar_read_failed && root.calendar_edits_allowed);
+
+            connection
+                .execute(
+                    "UPDATE meta SET value = 'none' WHERE key = 'calendar_scope'",
+                    [],
+                )
+                .unwrap();
+            root.tick(cx);
+            assert!(!root.calendar_edits_allowed);
+            assert!(matches!(root.overlay, Overlay::None));
+
+            connection
+                .execute("DELETE FROM meta WHERE key = 'calendar_scope'", [])
+                .unwrap();
+            root.tick(cx);
+            root.open_new(window, cx);
+            assert!(matches!(root.overlay, Overlay::New(_)));
+            connection
+                .execute(
+                    "INSERT INTO meta (key, value) VALUES ('calendar_scope', 'none')",
+                    [],
+                )
+                .unwrap();
+            root.tick(cx);
+            assert!(matches!(root.overlay, Overlay::None));
+
+            root.svc
+                .store
+                .set_meta("client_directory", "allowed")
+                .unwrap();
+            root.open_directory(cx);
+            assert!(matches!(root.overlay, Overlay::Directory(_)));
+            connection
+                .execute(
+                    "UPDATE meta SET value = x'ff' WHERE key = 'viewer_edit_calendar'",
+                    [],
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE meta SET value = 'denied' WHERE key = 'client_directory'",
+                    [],
+                )
+                .unwrap();
+            root.reload(cx);
+            assert!(root.calendar_read_failed);
+            assert!(matches!(root.overlay, Overlay::None));
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    async fn appointment_details_are_hidden_while_calendar_access_is_unreadable(
+        cx: &mut TestAppContext,
+    ) {
+        let (_dir, config) = desk();
+        let session = FileTokenStore::new(config.session_path())
+            .load()
+            .unwrap()
+            .unwrap();
+        let connection = rusqlite::Connection::open(config.db_path(&session)).unwrap();
+        let (root, cx) = cx.add_window_view(|window, cx| Root::new(config, window, cx));
+        cx.simulate_resize(gpui::size(px(1100.), px(740.)));
+        root.update(cx, |root, cx| {
+            root.svc.stop_sync();
+            root.svc
+                .store
+                .set_meta("viewer_edit_calendar", "1")
+                .unwrap();
+            root.open_details(EXISTING, cx);
+            root.notices.push((
+                CalendarNoticeKind::New,
+                root.svc.store.appointment(EXISTING).unwrap().unwrap(),
+                Instant::now() + Duration::from_secs(60),
+            ));
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("appointment-details-services").is_some());
+        assert!(cx.debug_bounds("calendar-notices").is_some());
+
+        connection
+            .execute(
+                "UPDATE meta SET value = x'ff' WHERE key = 'viewer_edit_calendar'",
+                [],
+            )
+            .unwrap();
+        root.update(cx, |root, cx| root.reload(cx));
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("appointment-calendar-read-error").is_some());
+        assert!(cx.debug_bounds("appointment-details-services").is_none());
+        assert!(cx.debug_bounds("calendar-notices").is_none());
+
+        root.update(cx, |root, cx| {
+            root.svc
+                .store
+                .set_meta("viewer_edit_calendar", "1")
+                .unwrap();
+            root.tick(cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.debug_bounds("appointment-details-services").is_some());
+    }
+
+    #[gpui::test]
     async fn an_unreadable_calendar_blocks_new_appointments_until_it_recovers(
         cx: &mut TestAppContext,
     ) {
@@ -5390,7 +5596,7 @@ mod tests {
                 assert!(!root.calendar_edits_allowed);
                 root.book(cx);
                 assert!(matches!(&root.overlay, Overlay::New(form)
-                    if form.error == Some(Key::CalendarReadFailed)));
+                    if root.booking_form_error(form.error, false) == Some(Key::CalendarReadFailed)));
                 assert_eq!(outbox_kinds(root), ["time_off.create"]);
                 root.overlay = Overlay::None;
                 root.open_new(window, cx);

@@ -401,6 +401,9 @@ impl Root {
     }
 
     fn confirm_grouped_visit(&mut self, cx: &mut Context<Self>) {
+        if self.calendar_read_failed {
+            return;
+        }
         let Some(transport) = self
             .svc
             .transport()
@@ -763,8 +766,7 @@ impl Root {
                 )
                 .child(body)
                 .when_some(
-                    desk.error
-                        .or((!can_edit).then_some(Key::BookingIntakeAccessChanged)),
+                    self.booking_form_error(desk.error, can_edit),
                     |panel, error| {
                         panel.child(
                             div()

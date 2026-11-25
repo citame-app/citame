@@ -99,6 +99,7 @@ impl Root {
 
     pub(super) fn render_notices(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
+            .debug_selector(|| "calendar-notices".into())
             .absolute()
             .top(px(72.))
             .right(px(16.))

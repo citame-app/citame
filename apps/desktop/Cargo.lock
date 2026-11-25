@@ -5181,6 +5181,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "gpui",
+ "rusqlite",
  "serde_json",
  "sob-core",
  "tempfile",

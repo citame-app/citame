@@ -557,10 +557,8 @@ pub fn calendar_scope_permits_edit(scope: Option<&str>, staff_id: Option<&str>) 
 }
 
 pub(crate) fn require_calendar_write(store: &Store, staff_id: &str) -> Result<()> {
-    let scope = store.get_meta("calendar_scope")?;
-    if !store.calendar_edits_allowed()?
-        || !calendar_scope_permits_edit(scope.as_deref(), Some(staff_id))
-    {
+    let access = store.calendar_access_snapshot()?;
+    if !access.may_edit || !calendar_scope_permits_edit(access.scope.as_deref(), Some(staff_id)) {
         return Err(CoreError::AppointmentScopeDenied);
     }
     Ok(())

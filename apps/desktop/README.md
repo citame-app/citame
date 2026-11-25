@@ -84,6 +84,8 @@ Using it: Day view shows one column per staff member; Week view shows Monday to 
 
 If Desktop says the calendar could not load, choose **Reload calendar**. Desktop can restore unreadable local appointment details from Cloud when the saved appointment version and schedule still match. Pending edits and conflicts stay in the regular sync flow. The repair resumes after a connection interruption. Regular sync handles newer appointment versions and deletions.
 
+When Desktop temporarily cannot read the local calendar access settings, it keeps open forms and waits for a successful read before accepting calendar edits. A confirmed change to the visible calendars or the replica generation still closes appointment forms from the previous calendar.
+
 The calendar replica keeps the last synced deposit state and deadlines, so appointment details can show them offline. Desktop also loads the current deposit state from Cloud alongside the private appointment context. The panel shows applicable payment and free cancellation deadlines. Accounts with commerce access also see the deposit, fee retained and refund due, and can open the existing receipt from the same panel. Open details can refresh the panel, and an already loaded state can remain visible if the connection drops. Reopening an appointment offline does not fetch its payment context.
 
 For a grouped visit, **Review visit payment** shows the appointments and payable receipts in

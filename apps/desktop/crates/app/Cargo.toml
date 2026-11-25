@@ -22,3 +22,4 @@ x11rb = "=0.13.2"
 
 [dev-dependencies]
 gpui = { version = "=0.2.2", features = ["test-support"] }
+rusqlite = { version = "=0.42.0", features = ["bundled"] }

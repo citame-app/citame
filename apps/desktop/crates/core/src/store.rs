@@ -45,6 +45,13 @@ fn directory_scope(allowed: bool) -> &'static str {
     if allowed { "allowed" } else { "denied" }
 }
 
+pub struct CalendarAccessSnapshot {
+    pub generation: String,
+    pub scope: Option<String>,
+    pub time_off_scope: Option<String>,
+    pub may_edit: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CalendarCacheScope {
     generation: String,
@@ -548,13 +555,34 @@ impl Store {
     }
 
     pub fn calendar_edits_allowed(&self) -> Result<bool> {
-        if let Some(value) = self.get_meta("viewer_edit_calendar")? {
-            return Ok(value == "1");
-        }
+        Ok(self.calendar_access_snapshot()?.may_edit)
+    }
+
+    pub(crate) fn calendar_access_snapshot(&self) -> Result<CalendarAccessSnapshot> {
+        let (generation, scope, time_off_scope, permission): (
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = self.conn.query_row(
+            "SELECT coalesce((SELECT value FROM meta WHERE key=?1),?2),
+                    (SELECT value FROM meta WHERE key='calendar_scope'),
+                    (SELECT value FROM meta WHERE key='time_off_scope'),
+                    (SELECT value FROM meta WHERE key='viewer_edit_calendar')",
+            params![GENERATION_KEY, INITIAL_GENERATION],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
         // Older pulls identify restricted personal calendars through their time-off scope.
-        let calendar_scope = self.get_meta("calendar_scope")?;
-        Ok(calendar_scope.as_deref() == Some("all")
-            || self.get_meta("time_off_scope")?.as_deref() != Some("none"))
+        let may_edit = permission.as_deref().map_or_else(
+            || scope.as_deref() == Some("all") || time_off_scope.as_deref() != Some("none"),
+            |value| value == "1",
+        );
+        Ok(CalendarAccessSnapshot {
+            generation,
+            scope,
+            time_off_scope,
+            may_edit,
+        })
     }
 
     pub fn get_meta(&self, key: &str) -> Result<Option<String>> {
@@ -581,6 +609,13 @@ impl Store {
     pub fn refresh_reviewed_generation(&mut self) -> Result<String> {
         self.reviewed_generation = self.replica_generation()?;
         Ok(self.reviewed_generation.clone())
+    }
+
+    /// Review the replica generation and the calendar permissions in one snapshot.
+    pub fn refresh_reviewed_calendar_access(&mut self) -> Result<CalendarAccessSnapshot> {
+        let access = self.calendar_access_snapshot()?;
+        self.reviewed_generation.clone_from(&access.generation);
+        Ok(access)
     }
 
     pub fn verified_reviewed_generation(&self) -> Result<String> {
